@@ -1,0 +1,6 @@
+[global]
+flavor = "gfm"
+respect-gitignore = true
+disable = [
+  "MD033", # inline HTML: README.md is built out of banner and badge tags
+]
