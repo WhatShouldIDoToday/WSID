@@ -34,6 +34,9 @@
     formatDurationMinutes,
     validateDeadlines,
     formatDeadlineDisplay,
+    validateUsername,
+    parseCommentMentions,
+    tokenizeCommentBody,
   } from "../lib/ipc";
 
   interface DraftCommentAttachment {
@@ -48,6 +51,7 @@
   interface Props {
     taskId: string;
     activeUser: string;
+    knownUsers?: string[];
     knownTags?: string[];
     onClose: () => void;
     onSelectTask: (id: string) => void;
@@ -58,6 +62,7 @@
   let {
     taskId,
     activeUser,
+    knownUsers = [],
     knownTags = [],
     onClose,
     onSelectTask,
@@ -111,6 +116,10 @@
   let commentSpawnSubtasks = $state<boolean>(true);
   let pendingCommentAttachments = $state<DraftCommentAttachment[]>([]);
   let pendingCommentDesc = $state<string>("");
+
+  let commentMentionTokens = $derived.by(() =>
+    parseCommentMentions(commentBody, knownUsers),
+  );
 
   let drawerElement = $state<HTMLElement | null>(null);
 
@@ -405,6 +414,19 @@
       errorMsg = editDurationError;
       if (errorMsg) announce(errorMsg);
       return;
+    }
+
+    for (const [label, val] of [
+      ["Assignee", editAssignee],
+      ["Evaluator", editEvaluator],
+      ["Reporter", editReporter],
+    ] as const) {
+      const check = validateUsername(val);
+      if (check.error) {
+        errorMsg = `${label}: ${check.error}`;
+        announce(errorMsg);
+        return;
+      }
     }
 
     const parsedDur = parseDurationInput(editEstimateInput);
@@ -1278,8 +1300,39 @@
                     Delete Note
                   </button>
                 </div>
-                <div style="white-space: pre-wrap; margin-bottom: 0.5rem;">
-                  {note.body}
+                <div class="comment-note-body">
+                  {#each tokenizeCommentBody(note.body, knownUsers) as seg}
+                    {#if seg.type === "mention" && seg.mention}
+                      <span
+                        class={`comment-inline-mention mention-${seg.mention.kind} ${seg.mention.exists ? "mention-exists" : "mention-missing"}`}
+                        data-tooltip={seg.mention.tooltip}
+                        title={seg.mention.tooltip}
+                        aria-label={seg.mention.tooltip}
+                      >
+                        {seg.text}
+                        <span class="mention-status-dot" aria-hidden="true">
+                          {seg.mention.kind === "invalid"
+                            ? "✕"
+                            : seg.mention.exists
+                              ? "✓"
+                              : "+"}
+                        </span>
+                      </span>
+                    {:else if seg.type === "task_ref" && seg.taskId}
+                      <button
+                        type="button"
+                        class="comment-inline-task-ref"
+                        onclick={() => {
+                          if (seg.taskId) onSelectTask(seg.taskId);
+                        }}
+                        title={`Open task ${seg.taskId}`}
+                      >
+                        {seg.text}
+                      </button>
+                    {:else}
+                      {seg.text}
+                    {/if}
+                  {/each}
                 </div>
                 {#if note.attachments.length > 0}
                   <AttachmentGallery
@@ -1325,6 +1378,41 @@
               onpaste={handleCommentPaste}
               placeholder="Write a comment... Use @user for blocking subtasks, @takenote:user for non-blocking heads-up, or #AB1234 to link tasks. Paste images directly with Cmd/Ctrl+V."
             ></textarea>
+
+            {#if commentMentionTokens.length > 0}
+              <div
+                class="comment-mention-preview"
+                role="status"
+                aria-live="polite"
+                aria-label="Detected user mentions in comment"
+              >
+                <span class="comment-mention-preview-label">Mentions:</span>
+                {#each commentMentionTokens as token (token.rawToken)}
+                  <span
+                    class={`comment-mention-pill mention-${token.kind} ${token.exists ? "mention-exists" : "mention-missing"}`}
+                    data-tooltip={token.tooltip}
+                    title={token.tooltip}
+                  >
+                    <strong>{token.rawToken}</strong>
+                    {#if token.kind === "invalid"}
+                      <span class="comment-mention-pill-meta">
+                        Invalid username (ignored)
+                      </span>
+                    {:else if token.exists}
+                      <span class="comment-mention-pill-meta">
+                        ✓ Existing user · {token.kind === "takenote"
+                          ? "Take-note"
+                          : "Blocking subtask"}
+                      </span>
+                    {:else}
+                      <span class="comment-mention-pill-meta">
+                        + Does not exist yet (will create @{token.username})
+                      </span>
+                    {/if}
+                  </span>
+                {/each}
+              </div>
+            {/if}
           </div>
 
           {#if pendingCommentAttachments.length > 0}

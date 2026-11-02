@@ -5,6 +5,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
     rowid INTEGER PRIMARY KEY,
     id TEXT UNIQUE NOT NULL,

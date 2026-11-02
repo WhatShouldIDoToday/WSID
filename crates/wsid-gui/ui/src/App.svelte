@@ -423,6 +423,9 @@
           aboutModalOpen = true;
           announce("Opened About and Third-Party Licenses dialog.");
         }}
+        onUserDeleted={refreshAllData}
+        onSelectTask={openTaskDetail}
+        {announce}
       />
     {/if}
   </main>
@@ -449,6 +452,7 @@
     taskId={selectedTaskId}
     activeUser={session.active_user}
     knownTags={session.known_tags}
+    knownUsers={session.known_users}
     onClose={closeTaskDetail}
     onSelectTask={openTaskDetail}
     onDataChanged={refreshAllData}

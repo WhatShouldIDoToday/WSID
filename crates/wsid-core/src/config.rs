@@ -16,6 +16,8 @@ pub const WSID_DB_ENV_VAR: &str = "WSID_DB";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(default = "default_os_user")]
+    pub primary_user: String,
     #[serde(alias = "default_persona")]
     pub default_user: String,
     pub focus_preset: FocusPreset,
@@ -25,15 +27,20 @@ pub struct AppConfig {
     pub recent_workspaces: Vec<PathBuf>,
 }
 
+pub fn default_os_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .ok()
+        .and_then(|u| normalize_user(&u).ok())
+        .unwrap_or_else(|| "human".to_string())
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
-        let default_user = std::env::var("USER")
-            .or_else(|_| std::env::var("USERNAME"))
-            .ok()
-            .and_then(|u| normalize_user(&u).ok())
-            .unwrap_or_else(|| "human".to_string());
+        let default_user = default_os_user();
 
         Self {
+            primary_user: default_user.clone(),
             default_user,
             focus_preset: FocusPreset::Balanced,
             custom_weights: None,
@@ -199,6 +206,7 @@ mod tests {
         let cfg_path = temp_dir.join("config.toml");
 
         let mut cfg = AppConfig {
+            primary_user: "david".to_string(),
             default_user: "david".to_string(),
             focus_preset: FocusPreset::UnblockOthers,
             custom_weights: Some(FocusWeights::for_preset(FocusPreset::QuickWins)),

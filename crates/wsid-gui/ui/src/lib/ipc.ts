@@ -142,12 +142,38 @@ export interface AppSessionSnapshot {
   db_path: string;
   global_db_path: string;
   is_global_db: boolean;
+  primary_user: string;
   active_user: string;
   active_preset: FocusPreset;
   focus_limit: number;
   recent_workspaces: string[];
   known_users: string[];
   known_tags: string[];
+}
+
+export interface UserAffectedTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  is_reporter: boolean;
+  is_assignee: boolean;
+  is_evaluator: boolean;
+}
+
+export interface UserDeletionPreview {
+  username: string;
+  fallback_user: string;
+  affected_tasks: UserAffectedTask[];
+  authored_task_count: number;
+  assigned_task_count: number;
+  evaluator_task_count: number;
+}
+
+export interface UserDeletionOutcome {
+  deleted_user: string;
+  fallback_user: string;
+  reassigned_task_count: number;
+  deleted_task_count: number;
 }
 
 export interface TaskFullDetail {
@@ -515,12 +541,206 @@ export function formatDeadlineDisplay(raw: string | null | undefined): string {
   return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
 }
 
+export const USERNAME_REGEX = /^[a-z0-9_-]+$/;
+
+export function validateUsername(raw: string): {
+  normalized: string | null;
+  error: string | null;
+} {
+  const trimmed = raw.trim().replace(/^@+/, "").trim().toLowerCase();
+  if (!trimmed) {
+    return { normalized: null, error: "Username cannot be empty." };
+  }
+  if (!USERNAME_REGEX.test(trimmed)) {
+    return {
+      normalized: null,
+      error: `Invalid username "${raw.trim()}" — usernames may only contain letters, numbers, underscores (_), or dashes (-).`,
+    };
+  }
+  return { normalized: trimmed, error: null };
+}
+
+export interface ParsedCommentMention {
+  rawToken: string;
+  kind: "blocking" | "takenote" | "invalid";
+  username: string;
+  exists: boolean;
+  tooltip: string;
+}
+
+export interface CommentBodySegment {
+  type: "text" | "mention" | "task_ref";
+  text: string;
+  mention?: ParsedCommentMention;
+  taskId?: string;
+}
+
+function stripTrailingPunctuation(token: string): {
+  core: string;
+  trailing: string;
+} {
+  let end = token.length;
+  while (end > 0 && /[.,;:!?)\]}"']/.test(token[end - 1])) {
+    end -= 1;
+  }
+  return {
+    core: token.slice(0, end),
+    trailing: token.slice(end),
+  };
+}
+
+export function tokenizeCommentBody(
+  body: string,
+  knownUsers: string[],
+): CommentBodySegment[] {
+  if (!body) return [];
+  const knownSet = new Set(knownUsers.map((u) => u.toLowerCase()));
+  const segments: CommentBodySegment[] = [];
+  const tokenRegex = /(^|[^a-zA-Z0-9_-])(@\S+|#[A-Za-z]{2}\d{4}\b)/g;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = tokenRegex.exec(body)) !== null) {
+    const prefix = match[1] ?? "";
+    const fullToken = match[2] ?? "";
+    const tokenStart = match.index + prefix.length;
+
+    if (tokenStart > lastIndex) {
+      segments.push({
+        type: "text",
+        text: body.slice(lastIndex, tokenStart),
+      });
+    }
+
+    if (fullToken.startsWith("#")) {
+      const taskId = fullToken.slice(1).toUpperCase();
+      segments.push({
+        type: "task_ref",
+        text: `#${taskId}`,
+        taskId,
+      });
+      lastIndex = tokenStart + fullToken.length;
+      continue;
+    }
+
+    const { core, trailing } = stripTrailingPunctuation(fullToken);
+    const afterAt = core.slice(1);
+    if (!afterAt) {
+      segments.push({ type: "text", text: fullToken });
+      lastIndex = tokenStart + fullToken.length;
+      continue;
+    }
+
+    let kind: "blocking" | "takenote" | "invalid" = "blocking";
+    let candidate = afterAt;
+    if (afterAt.toLowerCase().startsWith("takenote:")) {
+      kind = "takenote";
+      candidate = afterAt.slice("takenote:".length);
+    }
+
+    const lowerCandidate = candidate.toLowerCase();
+    const isValid = USERNAME_REGEX.test(lowerCandidate);
+    if (!isValid) {
+      const mention: ParsedCommentMention = {
+        rawToken: core,
+        kind: "invalid",
+        username: candidate,
+        exists: false,
+        tooltip: `Invalid username "${core}": usernames may only contain letters, numbers, underscores (_), or dashes (-). Will not spawn a task.`,
+      };
+      segments.push({
+        type: "mention",
+        text: core,
+        mention,
+      });
+    } else {
+      const exists = knownSet.has(lowerCandidate);
+      const actionDesc =
+        kind === "takenote"
+          ? "spawns a non-blocking related task"
+          : "spawns an urgent blocking subtask";
+      const tooltip = exists
+        ? `Existing user @${lowerCandidate} in database — ${actionDesc}.`
+        : `User @${lowerCandidate} does not exist in this database yet — posting will create @${lowerCandidate} and ${
+            kind === "takenote"
+              ? "spawn a non-blocking related task"
+              : "spawn an urgent blocking subtask"
+          }.`;
+      const mention: ParsedCommentMention = {
+        rawToken:
+          kind === "takenote"
+            ? `@takenote:${lowerCandidate}`
+            : `@${lowerCandidate}`,
+        kind,
+        username: lowerCandidate,
+        exists,
+        tooltip,
+      };
+      segments.push({
+        type: "mention",
+        text: core,
+        mention,
+      });
+    }
+
+    if (trailing) {
+      segments.push({ type: "text", text: trailing });
+    }
+    lastIndex = tokenStart + fullToken.length;
+  }
+
+  if (lastIndex < body.length) {
+    segments.push({
+      type: "text",
+      text: body.slice(lastIndex),
+    });
+  }
+
+  return segments;
+}
+
+export function parseCommentMentions(
+  body: string,
+  knownUsers: string[],
+): ParsedCommentMention[] {
+  const segments = tokenizeCommentBody(body, knownUsers);
+  const seen = new Set<string>();
+  const out: ParsedCommentMention[] = [];
+  for (const seg of segments) {
+    if (seg.type === "mention" && seg.mention) {
+      const key = `${seg.mention.kind}:${seg.mention.username.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(seg.mention);
+      }
+    }
+  }
+  return out;
+}
+
 export async function getSessionState(): Promise<AppSessionSnapshot> {
   return invoke<AppSessionSnapshot>("get_session_state");
 }
 
 export async function setActiveUser(user: string): Promise<AppSessionSnapshot> {
   return invoke<AppSessionSnapshot>("set_active_user", { user });
+}
+
+export async function previewDeleteUser(
+  targetUser: string,
+): Promise<UserDeletionPreview> {
+  return invoke<UserDeletionPreview>("preview_delete_user", { targetUser });
+}
+
+export async function deleteUser(
+  targetUser: string,
+  deleteAuthoredTasks: boolean,
+): Promise<UserDeletionOutcome> {
+  return invoke<UserDeletionOutcome>("delete_user", {
+    targetUser,
+    deleteAuthoredTasks,
+  });
 }
 
 export async function setFocusPreset(

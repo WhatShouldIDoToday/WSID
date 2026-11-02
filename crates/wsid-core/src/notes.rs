@@ -12,7 +12,7 @@ use crate::models::{
     AddTaskNoteOutcome, CreateTaskInput, OriginKind, RelationInputKind, StatusTransitionOutcome, Task, TaskNote, TaskStatus,
 };
 use crate::relations::{ensure_task_exists, link_tasks_in_tx};
-use crate::tasks::{create_task_in_tx, format_utc, get_task, get_task_conn, normalize_user, parse_utc};
+use crate::tasks::{create_task_in_tx, format_utc, get_task, get_task_conn, normalize_user, parse_utc, register_user_conn};
 
 /// Parsed tokens extracted from a task note body.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -46,31 +46,35 @@ pub fn parse_note_tokens(body: &str) -> ParsedNoteTokens {
 
         if b == b'@' && !prev_is_ident {
             let start = i + 1;
-            let mut end = start;
-            while end < len && is_ident_char(bytes[end]) {
-                end += 1;
+            let mut token_end = start;
+            while token_end < len && !bytes[token_end].is_ascii_whitespace() {
+                token_end += 1;
             }
-            let first_part = &body[start..end];
-            if first_part.eq_ignore_ascii_case("takenote") && end < len && bytes[end] == b':' {
-                let p_start = end + 1;
-                let mut p_end = p_start;
-                while p_end < len && is_ident_char(bytes[p_end]) {
-                    p_end += 1;
+            let mut clean_end = token_end;
+            while clean_end > start && is_trailing_punct(bytes[clean_end - 1]) {
+                clean_end -= 1;
+            }
+            let raw_mention = &body[start..clean_end];
+            if let Some(rest) = raw_mention
+                .strip_prefix("takenote:")
+                .or_else(|| raw_mention.strip_prefix("TAKENOTE:"))
+                .or_else(|| {
+                    if raw_mention.len() > 9 && raw_mention[..9].eq_ignore_ascii_case("takenote:") { Some(&raw_mention[9..]) } else { None }
+                })
+            {
+                if let Ok(user) = normalize_user(rest)
+                    && takenote_set.insert(user.clone())
+                {
+                    takenote_mentions.push(user);
                 }
-                if p_end > p_start {
-                    let user = body[p_start..p_end].to_ascii_lowercase();
-                    if takenote_set.insert(user.clone()) {
-                        takenote_mentions.push(user);
-                    }
-                    i = p_end;
-                    continue;
-                }
-            } else if !first_part.is_empty() {
-                let user = first_part.to_ascii_lowercase();
-                if blocking_set.insert(user.clone()) {
-                    blocking_mentions.push(user);
-                }
-                i = end;
+            } else if !raw_mention.is_empty()
+                && let Ok(user) = normalize_user(raw_mention)
+                && blocking_set.insert(user.clone())
+            {
+                blocking_mentions.push(user);
+            }
+            if token_end > start {
+                i = token_end;
                 continue;
             }
         } else if b == b'#' && !prev_is_ident {
@@ -102,6 +106,10 @@ const fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
 
+const fn is_trailing_punct(b: u8) -> bool {
+    matches!(b, b'.' | b',' | b';' | b':' | b'!' | b'?' | b')' | b']' | b'}' | b'"')
+}
+
 /// Appends a note to `raw_task_id` and optionally spawns `@user` blocking subtasks,
 /// `@takenote:<user>` non-blocking related tasks, and `#<task_id>` cross-links.
 pub fn add_task_note(
@@ -128,6 +136,7 @@ pub fn add_task_note(
         "INSERT INTO task_notes (task_id, author, body, created_at) VALUES (?1, ?2, ?3, ?4)",
         params![commented_task.id, author, body, now_str],
     )?;
+    let _ = register_user_conn(&tx, &author);
     let note_id = tx.last_insert_rowid();
 
     let note = TaskNote {
@@ -676,6 +685,11 @@ mod tests {
         let dismissed = unblock_or_dismiss_subtask(&mut db, &bob_subtask.id, true).unwrap();
         assert_eq!(dismissed.status, TaskStatus::Completed);
         assert!(get_direct_blockers(&db, &parent.id).unwrap().is_empty());
+
+        // Verify invalid @mentions like `@invalid'hehe` or `@#coolboy` are ignored by `parse_note_tokens`
+        let parsed_invalid = parse_note_tokens("Testing @invalid'hehe and @#coolboy vs @valid_user-1.");
+        assert_eq!(parsed_invalid.blocking_mentions, vec!["valid_user-1".to_string()]);
+        assert!(parsed_invalid.takenote_mentions.is_empty());
     }
 
     #[test]

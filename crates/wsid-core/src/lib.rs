@@ -31,7 +31,8 @@ pub use error::{Result, WsidError};
 pub use id::{SHORT_ID_LETTERS, ShortId, ShortIdGenerator, is_valid_task_id, normalize_task_id};
 pub use models::{
     AddTaskNoteOutcome, AttachmentInput, CreateTaskInput, FocusPreset, OriginKind, RelationInputKind, RelationType,
-    StatusTransitionOutcome, Task, TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput,
+    StatusTransitionOutcome, Task, TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, UserAffectedTask,
+    UserDeletionOutcome, UserDeletionPreview,
 };
 pub use notes::{
     ParsedNoteTokens, add_task_note, delete_task_note, delete_task_note_with_attachments_dir, list_task_notes, parse_note_tokens,
@@ -50,7 +51,8 @@ pub use scoring::{
 };
 pub use search::{SearchHit, SearchQuery, query_fts_trigram_ids, search_tasks};
 pub use tasks::{
-    create_task, delete_task, delete_task_with_attachments_dir, format_duration_minutes, get_task, list_tasks, normalize_tag,
-    normalize_tags, normalize_user, parse_deadline_datetime, parse_deadline_naive_date, parse_duration_minutes, update_task,
-    validate_dates, validate_difficulty, validate_importance, validate_manual_priority, validate_time_estimate,
+    create_task, delete_task, delete_task_with_attachments_dir, delete_user_from_db, format_duration_minutes, get_task, list_known_users,
+    list_tasks, normalize_tag, normalize_tags, normalize_user, parse_deadline_datetime, parse_deadline_naive_date, parse_duration_minutes,
+    preview_user_deletion, register_user, update_task, validate_dates, validate_difficulty, validate_importance, validate_manual_priority,
+    validate_time_estimate,
 };

@@ -18,6 +18,7 @@
     fileToBase64,
     parseDurationInput,
     validateDeadlines,
+    validateUsername,
   } from "../lib/ipc";
 
   interface DraftAttachmentItem {
@@ -428,6 +429,19 @@
     if (!durOk) {
       announce(durationError!);
       return;
+    }
+
+    for (const [label, raw] of [
+      ["Assignee", assignee.trim() || activeUser],
+      ["Evaluator", evaluator.trim() || activeUser],
+      ["Reporter", reporter.trim() || activeUser],
+    ] as const) {
+      const check = validateUsername(raw);
+      if (check.error) {
+        formError = `${label}: ${check.error}`;
+        announce(formError);
+        return;
+      }
     }
 
     const parsedDur = parseDurationInput(estimateInput);

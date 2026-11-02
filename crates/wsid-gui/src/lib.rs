@@ -11,11 +11,12 @@ use tauri::{AppHandle, Emitter, State};
 use wsid_core::{
     AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, CreateTaskInput, Database, DbChangeDetector,
     EisenhowerClassification, FocusPreset, FocusQueueResponse, RelationInputKind, SearchHit, SearchQuery, StatusTransitionOutcome, Task,
-    TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, add_task_note, attach_existing_file, compute_focus_queue,
-    create_task, default_config_path, default_global_db_path, delete_task, delete_task_note, get_about_metadata, get_attachment,
-    get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
-    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_task_notes, list_tasks, normalize_user, open_file_in_os,
-    parse_deadline_datetime, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status,
+    TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, UserDeletionOutcome, UserDeletionPreview, add_task_note,
+    attach_existing_file, compute_focus_queue, create_task, default_config_path, default_global_db_path, delete_task, delete_task_note,
+    delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
+    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
+    list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os, parse_deadline_datetime, preview_user_deletion,
+    register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status,
     unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
 };
 
@@ -53,6 +54,7 @@ pub struct AppSessionSnapshot {
     pub db_path: String,
     pub global_db_path: String,
     pub is_global_db: bool,
+    pub primary_user: String,
     pub active_user: String,
     pub active_preset: String,
     pub focus_limit: usize,
@@ -119,18 +121,17 @@ pub struct GuiUpdateTaskPayload {
 }
 
 fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, String> {
-    let db = state.open_db()?;
+    let mut db = state.open_db()?;
+    let _ = register_user(&mut db, &state.config.primary_user);
+    let _ = register_user(&mut db, &state.active_user);
     let tasks = list_tasks(&db).map_err(|e| e.to_string())?;
 
-    let mut users = std::collections::BTreeSet::new();
-    users.insert(state.active_user.clone());
-    users.insert(state.config.default_user.clone());
-    let mut tags = std::collections::BTreeSet::new();
+    let known_users =
+        list_known_users(&db, &[state.config.primary_user.as_str(), state.active_user.as_str(), state.config.default_user.as_str()])
+            .map_err(|e| e.to_string())?;
 
+    let mut tags = std::collections::BTreeSet::new();
     for t in &tasks {
-        users.insert(t.assignee.clone());
-        users.insert(t.reporter.clone());
-        users.insert(t.evaluator.clone());
         for tg in &t.tags {
             tags.insert(tg.clone());
         }
@@ -143,6 +144,7 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
         db_path: state.db_path.to_string_lossy().to_string(),
         global_db_path: global_path.to_string_lossy().to_string(),
         is_global_db: is_global,
+        primary_user: state.config.primary_user.clone(),
         active_user: state.active_user.clone(),
         active_preset: state.active_preset.as_str().to_string(),
         focus_limit: state.config.focus_limit,
@@ -152,7 +154,7 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
             .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect(),
-        known_users: users.into_iter().collect(),
+        known_users,
         known_tags: tags.into_iter().collect(),
     })
 }
@@ -302,10 +304,42 @@ fn set_active_user(state: State<'_, SharedGuiState>, user: String) -> Result<App
     let mut guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
+    let mut db = guard.open_db()?;
+    register_user(&mut db, &norm).map_err(|e| e.to_string())?;
     guard.active_user = norm.clone();
     guard.config.default_user = norm;
     guard.save_config();
     build_session_snapshot(&guard)
+}
+
+#[tauri::command]
+fn preview_delete_user(state: State<'_, SharedGuiState>, target_user: String) -> Result<UserDeletionPreview, String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    if !guard
+        .active_user
+        .eq_ignore_ascii_case(&guard.config.primary_user)
+    {
+        return Err(format!("only the main user '@{}' can manage and delete users", guard.config.primary_user));
+    }
+    let db = guard.open_db()?;
+    preview_user_deletion(&db, &target_user, &guard.config.primary_user).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_user(state: State<'_, SharedGuiState>, target_user: String, delete_authored_tasks: bool) -> Result<UserDeletionOutcome, String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    if !guard
+        .active_user
+        .eq_ignore_ascii_case(&guard.config.primary_user)
+    {
+        return Err(format!("only the main user '@{}' can manage and delete users", guard.config.primary_user));
+    }
+    let mut db = guard.open_db()?;
+    delete_user_from_db(&mut db, &target_user, &guard.config.primary_user, delete_authored_tasks, None).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -990,6 +1024,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_session_state,
             set_active_user,
+            preview_delete_user,
+            delete_user,
             set_focus_preset,
             set_focus_limit,
             switch_database,

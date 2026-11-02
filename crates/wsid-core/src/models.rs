@@ -398,3 +398,31 @@ pub struct UpdateTaskInput {
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserAffectedTask {
+    pub id: String,
+    pub title: String,
+    pub status: TaskStatus,
+    pub is_reporter: bool,
+    pub is_assignee: bool,
+    pub is_evaluator: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserDeletionPreview {
+    pub username: String,
+    pub fallback_user: String,
+    pub affected_tasks: Vec<UserAffectedTask>,
+    pub authored_task_count: usize,
+    pub assigned_task_count: usize,
+    pub evaluator_task_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserDeletionOutcome {
+    pub deleted_user: String,
+    pub fallback_user: String,
+    pub reassigned_task_count: usize,
+    pub deleted_task_count: usize,
+}

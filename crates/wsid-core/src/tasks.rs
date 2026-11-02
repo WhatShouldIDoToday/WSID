@@ -9,7 +9,9 @@ use crate::attachments::{cleanup_managed_files_after_delete, load_all_attachment
 use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::{ShortIdGenerator, normalize_task_id};
-use crate::models::{CreateTaskInput, OriginKind, Task, TaskStatus, UpdateTaskInput};
+use crate::models::{
+    CreateTaskInput, OriginKind, Task, TaskStatus, UpdateTaskInput, UserAffectedTask, UserDeletionOutcome, UserDeletionPreview,
+};
 
 /// Normalizes a single tag into a lowercase token matching `^[a-z0-9_-]+$`.
 pub fn normalize_tag(raw: &str) -> Result<String> {
@@ -41,14 +43,192 @@ pub fn normalize_tags(raw_tags: &[String]) -> Result<Vec<String>> {
     Ok(normalized.into_iter().collect())
 }
 
-/// Normalizes a user identifier (stripping an optional leading `@` and trimming whitespace).
+/// Normalizes a user identifier into a lowercase token matching `^[a-z0-9_-]+$`
+/// (stripping an optional leading `@` and trimming whitespace).
 pub fn normalize_user(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
-    let stripped = trimmed.strip_prefix('@').unwrap_or(trimmed).trim();
+    let stripped = trimmed
+        .strip_prefix('@')
+        .unwrap_or(trimmed)
+        .trim()
+        .to_ascii_lowercase();
     if stripped.is_empty() {
         return Err(WsidError::Validation("user name cannot be empty".to_string()));
     }
-    Ok(stripped.to_string())
+    if !stripped
+        .bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+    {
+        return Err(WsidError::Validation(format!("invalid user name '{raw}': user names may only contain letters, numbers, '_', or '-'")));
+    }
+    Ok(stripped)
+}
+
+pub(crate) fn register_user_conn(conn: &Connection, raw_user: &str) -> Result<String> {
+    let norm = normalize_user(raw_user)?;
+    let now_str = format_utc(Utc::now());
+    conn.execute("INSERT OR IGNORE INTO users (username, created_at) VALUES (?1, ?2)", params![norm, now_str])?;
+    Ok(norm)
+}
+
+/// Validates and permanently registers a user in the database's `users` table.
+pub fn register_user(db: &mut Database, raw_user: &str) -> Result<String> {
+    register_user_conn(&db.conn, raw_user)
+}
+
+/// Lists all known users in the database (`users`, `tasks`, `task_notes`, plus any `extra_users`).
+pub fn list_known_users(db: &Database, extra_users: &[&str]) -> Result<Vec<String>> {
+    let mut set = BTreeSet::new();
+    for raw in extra_users {
+        if let Ok(norm) = normalize_user(raw) {
+            set.insert(norm);
+        }
+    }
+
+    let mut stmt = db.conn.prepare(
+        "SELECT username FROM users
+         UNION
+         SELECT reporter FROM tasks
+         UNION
+         SELECT assignee FROM tasks
+         UNION
+         SELECT evaluator FROM tasks
+         UNION
+         SELECT author FROM task_notes",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        if let Ok(raw) = row
+            && let Ok(norm) = normalize_user(&raw)
+        {
+            set.insert(norm);
+        }
+    }
+    Ok(set.into_iter().collect())
+}
+
+/// Previews all tasks that will be affected (reassigned or deleted) if `target_user` is deleted.
+pub fn preview_user_deletion(db: &Database, target_user: &str, fallback_user: &str) -> Result<UserDeletionPreview> {
+    let target = normalize_user(target_user)?;
+    let fallback = normalize_user(fallback_user)?;
+    if target == fallback {
+        return Err(WsidError::Validation(format!("cannot delete the primary user '@{fallback}'")));
+    }
+
+    let mut stmt = db.conn.prepare(
+        "SELECT id, title, status, reporter, assignee, evaluator
+         FROM tasks
+         WHERE LOWER(reporter) = ?1 OR LOWER(assignee) = ?1 OR LOWER(evaluator) = ?1
+         ORDER BY created_at ASC, rowid ASC",
+    )?;
+
+    let rows = stmt.query_map([&target], |row| {
+        let id: String = row.get(0)?;
+        let title: String = row.get(1)?;
+        let status_str: String = row.get(2)?;
+        let reporter: String = row.get(3)?;
+        let assignee: String = row.get(4)?;
+        let evaluator: String = row.get(5)?;
+        let status = TaskStatus::from_str(&status_str).unwrap_or(TaskStatus::Todo);
+        Ok((id, title, status, reporter, assignee, evaluator))
+    })?;
+
+    let mut affected_tasks = Vec::new();
+    let mut authored_task_count = 0;
+    let mut assigned_task_count = 0;
+    let mut evaluator_task_count = 0;
+
+    for row in rows {
+        let (id, title, status, reporter, assignee, evaluator) = row?;
+        let is_reporter = reporter.eq_ignore_ascii_case(&target);
+        let is_assignee = assignee.eq_ignore_ascii_case(&target);
+        let is_evaluator = evaluator.eq_ignore_ascii_case(&target);
+        if is_reporter {
+            authored_task_count += 1;
+        }
+        if is_assignee {
+            assigned_task_count += 1;
+        }
+        if is_evaluator {
+            evaluator_task_count += 1;
+        }
+        affected_tasks.push(UserAffectedTask { id, title, status, is_reporter, is_assignee, is_evaluator });
+    }
+
+    Ok(UserDeletionPreview {
+        username: target,
+        fallback_user: fallback,
+        affected_tasks,
+        authored_task_count,
+        assigned_task_count,
+        evaluator_task_count,
+    })
+}
+
+/// Deletes `target_user` from the database, optionally deleting tasks authored (`reporter`) by `target_user`,
+/// and reassigning any remaining tasks where `target_user` is `reporter`, `assignee`, or `evaluator` to `fallback_user`.
+pub fn delete_user_from_db(
+    db: &mut Database,
+    target_user: &str,
+    fallback_user: &str,
+    delete_authored_tasks: bool,
+    managed_dir_override: Option<&Path>,
+) -> Result<UserDeletionOutcome> {
+    let target = normalize_user(target_user)?;
+    let fallback = normalize_user(fallback_user)?;
+    if target == fallback {
+        return Err(WsidError::Validation(format!("cannot delete the primary user '@{fallback}'")));
+    }
+
+    let mut deleted_task_count = 0;
+    if delete_authored_tasks {
+        let authored_ids: Vec<String> = {
+            let mut stmt = db
+                .conn
+                .prepare("SELECT id FROM tasks WHERE LOWER(reporter) = ?1")?;
+            let rows = stmt.query_map([&target], |row| row.get::<_, String>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            ids
+        };
+
+        for id in authored_ids {
+            delete_task_with_attachments_dir(db, &id, managed_dir_override)?;
+            deleted_task_count += 1;
+        }
+    }
+
+    let now_str = format_utc(Utc::now());
+    let tx = db.conn.transaction()?;
+
+    let reassigned_task_count: usize = {
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM tasks
+             WHERE LOWER(reporter) = ?1 OR LOWER(assignee) = ?1 OR LOWER(evaluator) = ?1",
+            [&target],
+            |row| row.get(0),
+        )?;
+        usize::try_from(count).unwrap_or(0)
+    };
+
+    tx.execute(
+        "UPDATE tasks SET
+            reporter = CASE WHEN LOWER(reporter) = ?1 THEN ?2 ELSE reporter END,
+            assignee = CASE WHEN LOWER(assignee) = ?1 THEN ?2 ELSE assignee END,
+            evaluator = CASE WHEN LOWER(evaluator) = ?1 THEN ?2 ELSE evaluator END,
+            updated_at = ?3
+         WHERE LOWER(reporter) = ?1 OR LOWER(assignee) = ?1 OR LOWER(evaluator) = ?1",
+        params![target, fallback, now_str],
+    )?;
+
+    tx.execute("DELETE FROM users WHERE LOWER(username) = ?1", [&target])?;
+    register_user_conn(&tx, &fallback)?;
+
+    tx.commit()?;
+
+    Ok(UserDeletionOutcome { deleted_user: target, fallback_user: fallback, reassigned_task_count, deleted_task_count })
 }
 
 /// Parses and validates a deadline string (`YYYY-MM-DD` or ISO-8601 date-time),
@@ -381,6 +561,9 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     )?;
 
     sync_task_tags(conn, &id, &tags)?;
+    let _ = register_user_conn(conn, &reporter);
+    let _ = register_user_conn(conn, &assignee);
+    let _ = register_user_conn(conn, &evaluator);
     Ok(id)
 }
 
@@ -549,6 +732,10 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
     if let Some(tags) = normalized_tags {
         sync_task_tags(&tx, &current.id, &tags)?;
     }
+
+    let _ = register_user_conn(&tx, &reporter);
+    let _ = register_user_conn(&tx, &assignee);
+    let _ = register_user_conn(&tx, &evaluator);
 
     tx.commit()?;
     get_task(db, &current.id)
@@ -838,5 +1025,78 @@ mod tests {
         assert_eq!(format_duration_minutes(10080 + 2880 + 180 + 20), "1w 2d 3h 20m");
         assert_eq!(format_duration_minutes(140), "2h 20m");
         assert_eq!(format_duration_minutes(45), "45m");
+    }
+
+    #[test]
+    fn enforces_strict_usernames_and_manages_user_deletion_reassignment_and_cleanup() {
+        let mut db = open_in_memory_db().unwrap();
+
+        // Invalid usernames with quotes, hashes, or spaces are rejected
+        assert!(normalize_user("@invalid'hehe").is_err());
+        assert!(normalize_user("@#coolboy").is_err());
+        assert!(normalize_user("two words").is_err());
+        assert_eq!(normalize_user("@Cool_User-1").unwrap(), "cool_user-1");
+
+        // Registering a user persists even without any tasks
+        register_user(&mut db, "davidb").unwrap();
+        register_user(&mut db, "temp_user").unwrap();
+        let known = list_known_users(&db, &[]).unwrap();
+        assert!(known.contains(&"davidb".to_string()));
+        assert!(known.contains(&"temp_user".to_string()));
+
+        // Create tasks involving `foobar` as reporter, assignee, and evaluator
+        let t_authored = create_task(
+            &mut db,
+            CreateTaskInput {
+                title: "Task authored by foobar".to_string(),
+                reporter: Some("foobar".to_string()),
+                assignee: Some("davidb".to_string()),
+                evaluator: Some("davidb".to_string()),
+                ..Default::default()
+            },
+            "davidb",
+        )
+        .unwrap();
+
+        let t_assigned = create_task(
+            &mut db,
+            CreateTaskInput {
+                title: "Task assigned to foobar".to_string(),
+                reporter: Some("davidb".to_string()),
+                assignee: Some("foobar".to_string()),
+                evaluator: Some("foobar".to_string()),
+                ..Default::default()
+            },
+            "davidb",
+        )
+        .unwrap();
+
+        let preview = preview_user_deletion(&db, "foobar", "davidb").unwrap();
+        assert_eq!(preview.username, "foobar");
+        assert_eq!(preview.fallback_user, "davidb");
+        assert_eq!(preview.affected_tasks.len(), 2);
+        assert_eq!(preview.authored_task_count, 1);
+        assert_eq!(preview.assigned_task_count, 1);
+        assert_eq!(preview.evaluator_task_count, 1);
+
+        // Cannot delete primary user
+        assert!(preview_user_deletion(&db, "davidb", "davidb").is_err());
+
+        // Delete `foobar` with `delete_authored_tasks = true`:
+        // `t_authored` is deleted, `t_assigned` is reassigned to `davidb`
+        let outcome = delete_user_from_db(&mut db, "foobar", "davidb", true, None).unwrap();
+        assert_eq!(outcome.deleted_user, "foobar");
+        assert_eq!(outcome.deleted_task_count, 1);
+        assert_eq!(outcome.reassigned_task_count, 1);
+
+        assert!(get_task(&db, &t_authored.id).is_err());
+        let reassigned = get_task(&db, &t_assigned.id).unwrap();
+        assert_eq!(reassigned.assignee, "davidb");
+        assert_eq!(reassigned.evaluator, "davidb");
+        assert!(
+            !list_known_users(&db, &[])
+                .unwrap()
+                .contains(&"foobar".to_string())
+        );
     }
 }
