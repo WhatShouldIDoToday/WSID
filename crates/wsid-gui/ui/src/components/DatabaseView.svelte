@@ -7,6 +7,7 @@
     STATUS_ORDER,
     searchTasksData,
     formatDurationMinutes,
+    formatDeadlineDisplay,
   } from "../lib/ipc";
 
   interface Props {
@@ -291,10 +292,12 @@
               <td>{formatDurationMinutes(hit.task.time_estimate_minutes)}</td>
               <td>
                 {#if hit.task.sgdb_date}
-                  SGDB: {hit.task.sgdb_date}
+                  SGDB: {formatDeadlineDisplay(hit.task.sgdb_date)}
                 {/if}
                 {#if hit.task.due_date}
-                  {hit.task.sgdb_date ? " · " : ""}Due: {hit.task.due_date}
+                  {hit.task.sgdb_date ? " · " : ""}Due: {formatDeadlineDisplay(
+                    hit.task.due_date,
+                  )}
                 {/if}
                 {#if !hit.task.sgdb_date && !hit.task.due_date}
                   —

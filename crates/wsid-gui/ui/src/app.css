@@ -748,39 +748,111 @@ table.db-table th {
   background: rgba(56, 189, 248, 0.12);
 }
 
-/* Date Picker (bits-ui) */
+/* Date Picker & Time Field (bits-ui) */
+.date-picker-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.tz-badge {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 0.08rem 0.45rem;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
 .date-picker-row {
   display: flex;
   align-items: center;
   gap: 0.35rem;
+  flex-wrap: nowrap;
 }
 
-.date-picker-input {
+.date-picker-input,
+.time-field-input {
   display: inline-flex;
   align-items: center;
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: 0.375rem;
   padding: 0.38rem 0.55rem;
-  flex: 1;
   min-height: 2.35rem;
+  color: var(--text-primary);
 }
 
-.date-picker-segment {
+.date-picker-input {
+  flex: 1 1 auto;
+  min-width: 7.5rem;
+}
+
+.time-field-input {
+  flex: 0 1 auto;
+  min-width: 5.75rem;
+}
+
+.date-picker-input:focus-within,
+.time-field-input:focus-within {
+  border-color: var(--accent-primary);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.date-picker-segment,
+.time-field-segment {
   padding: 0.05rem 0.18rem;
   border-radius: 0.2rem;
   font-variant-numeric: tabular-nums;
+  user-select: none;
 }
 
-.date-picker-segment[data-segment="literal"] {
+.date-picker-segment[data-segment="literal"],
+.time-field-segment[data-segment="literal"] {
   color: var(--text-muted);
-  padding: 0 0.08rem;
+  padding: 0 0.06rem;
 }
 
-.date-picker-segment:focus {
+.date-picker-segment[aria-valuetext="Empty"],
+.time-field-segment[aria-valuetext="Empty"] {
+  color: var(--text-muted);
+}
+
+.date-picker-segment:focus,
+.time-field-segment:focus {
   background: var(--accent-primary);
   color: var(--accent-text-dark);
   outline: none;
+}
+
+.date-icon-btn,
+.date-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  padding: 0;
+  flex-shrink: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.date-icon-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.date-clear-btn:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--bg-elevated);
 }
 
 .date-picker-popover {
@@ -820,6 +892,11 @@ table.db-table th {
   text-align: center;
 }
 
+.date-picker-cell {
+  padding: 0.08rem;
+  text-align: center;
+}
+
 .date-picker-day {
   width: 2rem;
   height: 2rem;
@@ -835,6 +912,10 @@ table.db-table th {
   background: var(--bg-elevated);
 }
 
+.date-picker-day[data-today] {
+  border: 1px solid var(--accent-primary);
+}
+
 .date-picker-day[data-selected] {
   background: var(--accent-primary);
   color: var(--accent-text-dark);
@@ -846,17 +927,113 @@ table.db-table th {
   opacity: 0.45;
 }
 
-/* Tag Chips Input */
-.tag-chips-container {
+/* Discrete Rating Slider (bits-ui) */
+.slider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.slider-value-badge {
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-primary);
+  border-radius: 0.35rem;
+  padding: 0.05rem 0.45rem;
+  min-width: 1.75rem;
+  text-align: center;
+}
+
+.slider-root {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  touch-action: none;
+  user-select: none;
+  padding: 0.55rem 0 1.45rem 0;
+  cursor: pointer;
+}
+
+.slider-track {
+  position: relative;
+  flex-grow: 1;
+  height: 0.45rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+}
+
+.slider-range {
+  position: absolute;
+  height: 100%;
+  background: var(--accent-primary);
+}
+
+.slider-thumb {
+  display: block;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  background: var(--text-primary);
+  border: 2px solid var(--accent-primary);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  cursor: grab;
+}
+
+.slider-thumb:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.slider-tick {
+  width: 2px;
+  height: 0.45rem;
+  background: var(--border-strong);
+  pointer-events: none;
+}
+
+.slider-tick[data-bounded] {
+  background: var(--accent-text-dark);
+}
+
+.slider-tick-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.35rem;
+  user-select: none;
+}
+
+.slider-tick-label[data-selected] {
+  color: var(--accent-primary);
+  font-weight: 700;
+}
+
+/* Tag Chips Input (compact input on top, chips row below) */
+.tag-field-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+input[type="text"].tag-compact-input {
+  width: min(16rem, 100%);
+  padding: 0.38rem 0.6rem;
+  font-size: 0.88rem;
+}
+
+.tag-chips-below {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border-subtle);
-  border-radius: 0.375rem;
-  padding: 0.35rem 0.5rem;
-  min-height: 2.4rem;
 }
 
 .tag-chip {
@@ -884,15 +1061,6 @@ table.db-table th {
 .tag-chip-remove:hover:not(:disabled) {
   color: var(--danger);
   background: transparent;
-}
-
-.tag-chip-input {
-  border: none !important;
-  background: transparent !important;
-  padding: 0.15rem 0.25rem !important;
-  flex: 1;
-  min-width: 8rem;
-  outline: none !important;
 }
 
 .staged-relations-list {

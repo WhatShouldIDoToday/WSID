@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::widgets::{ListState, TableState};
 use wsid_core::{
     AppConfig, CreateTaskInput, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FocusPreset, FocusQueueResponse,
     RelationInputKind, SearchHit, SearchQuery, Task, TaskNote, TaskStatus, UpdateTaskInput, add_task_note, attach_existing_file,
@@ -115,32 +116,36 @@ pub enum DetailPromptKind {
 
 #[derive(Debug, Clone)]
 pub struct DataEntryForm {
-    pub fields: [String; 15],
+    pub fields: [String; 16],
     pub active_index: usize,
+    pub state: ListState,
 }
 
 impl DataEntryForm {
-    pub const SUBMIT_INDEX: usize = 15;
+    pub const SUBMIT_INDEX: usize = 16;
 
-    pub const LABELS: [&'static str; 15] = [
+    pub const LABELS: [&'static str; 16] = [
         "1. Title *",
         "2. Description",
-        "3. Due Date (YYYY-MM-DD)",
-        "4. SGDB Date (YYYY-MM-DD, <= Due)",
+        "3. Due Date (YYYY-MM-DD or ISO)",
+        "4. SGDB Date (YYYY-MM-DD or ISO, <= Due)",
         "5. Time Estimate (15m, 2h, 3d, 1w)",
         "6. Difficulty (1-5)",
         "7. Importance (1-5)",
-        "8. Urgent Override (true/false)",
-        "9. Tags (single words)",
-        "10. Relations (e.g. blocks:AB1234)",
-        "11. Attach File Path",
-        "12. Attach Alt Description",
-        "13. Reporter",
-        "14. Assignee",
-        "15. Evaluator",
+        "8. Manual Priority (1-5)",
+        "9. Urgent Override (true/false)",
+        "10. Tags (single words)",
+        "11. Relations (e.g. blocks:AB1234)",
+        "12. Attach File Path",
+        "13. Attach Alt Description",
+        "14. Reporter",
+        "15. Assignee",
+        "16. Evaluator",
     ];
 
     pub fn new(default_user: &str) -> Self {
+        let mut state = ListState::default();
+        state.select(Some(0));
         Self {
             fields: [
                 String::new(),
@@ -148,6 +153,7 @@ impl DataEntryForm {
                 String::new(),
                 String::new(),
                 String::new(),
+                "3".to_string(),
                 "3".to_string(),
                 "3".to_string(),
                 "false".to_string(),
@@ -160,7 +166,13 @@ impl DataEntryForm {
                 default_user.to_string(),
             ],
             active_index: 0,
+            state,
         }
+    }
+
+    pub fn set_active_index(&mut self, index: usize) {
+        self.active_index = index;
+        self.state.select(Some(index));
     }
 }
 
@@ -180,17 +192,20 @@ pub struct TuiApp {
     // Focus View state
     pub focus_queue: FocusQueueResponse,
     pub focus_selected: usize,
+    pub focus_state: ListState,
     pub show_blocked_banner: bool,
 
     // Kanban View state
     pub all_tasks: Vec<Task>,
     pub kanban_col: usize,
     pub kanban_row: usize,
+    pub kanban_states: [ListState; 6],
 
     // Eisenhower View state
     pub eisenhower_items: Vec<EisenhowerClassification>,
     pub eisenhower_quadrant: usize,
     pub eisenhower_row: usize,
+    pub eisenhower_states: [ListState; 4],
 
     // Database Search View state
     pub search_query: String,
@@ -201,6 +216,8 @@ pub struct TuiApp {
     pub search_sort_asc: bool,
     pub search_hits: Vec<SearchHit>,
     pub search_selected: usize,
+    pub search_table_state: TableState,
+    pub search_list_state: ListState,
 
     // Data Entry View state
     pub entry_form: DataEntryForm,
@@ -240,13 +257,16 @@ impl TuiApp {
             change_detector,
             focus_queue,
             focus_selected: 0,
+            focus_state: ListState::default(),
             show_blocked_banner: true,
             all_tasks,
             kanban_col: 1, // Todo column by default
             kanban_row: 0,
+            kanban_states: std::array::from_fn(|_| ListState::default()),
             eisenhower_items,
             eisenhower_quadrant: 0,
             eisenhower_row: 0,
+            eisenhower_states: std::array::from_fn(|_| ListState::default()),
             search_query: String::new(),
             search_editing: false,
             search_status_filter: None,
@@ -255,6 +275,8 @@ impl TuiApp {
             search_sort_asc: true,
             search_hits,
             search_selected: 0,
+            search_table_state: TableState::default(),
+            search_list_state: ListState::default(),
             entry_form,
             detail_modal: None,
             detail_prompt_kind: DetailPromptKind::None,
@@ -289,8 +311,14 @@ impl TuiApp {
             today,
             self.config.scoring,
         )?;
-        if self.focus_selected >= self.focus_queue.actionable_tasks.len() && !self.focus_queue.actionable_tasks.is_empty() {
-            self.focus_selected = self.focus_queue.actionable_tasks.len() - 1;
+        if self.focus_queue.actionable_tasks.is_empty() {
+            self.focus_selected = 0;
+            self.focus_state.select(None);
+        } else {
+            if self.focus_selected >= self.focus_queue.actionable_tasks.len() {
+                self.focus_selected = self.focus_queue.actionable_tasks.len() - 1;
+            }
+            self.focus_state.select(Some(self.focus_selected));
         }
 
         self.all_tasks = list_tasks(&self.db)?;
@@ -351,8 +379,16 @@ impl TuiApp {
         });
 
         self.search_hits = hits;
-        if self.search_selected >= self.search_hits.len() && !self.search_hits.is_empty() {
-            self.search_selected = self.search_hits.len() - 1;
+        if self.search_hits.is_empty() {
+            self.search_selected = 0;
+            self.search_table_state.select(None);
+            self.search_list_state.select(None);
+        } else {
+            if self.search_selected >= self.search_hits.len() {
+                self.search_selected = self.search_hits.len() - 1;
+            }
+            self.search_table_state.select(Some(self.search_selected));
+            self.search_list_state.select(Some(self.search_selected));
         }
         Ok(())
     }
@@ -436,27 +472,27 @@ impl TuiApp {
             }
             KeyCode::Char('1') => {
                 self.active_tab = ActiveTab::Focus;
-                self.status_message = "View 1: Focus Queue".to_string();
+                self.status_message.clear();
                 return;
             }
             KeyCode::Char('2') => {
                 self.active_tab = ActiveTab::Kanban;
-                self.status_message = "View 2: Kanban Board".to_string();
+                self.status_message.clear();
                 return;
             }
             KeyCode::Char('3') => {
                 self.active_tab = ActiveTab::Eisenhower;
-                self.status_message = "View 3: Eisenhower Matrix".to_string();
+                self.status_message.clear();
                 return;
             }
             KeyCode::Char('4') => {
                 self.active_tab = ActiveTab::Database;
-                self.status_message = "View 4: Full Database Search (/ to search, f:status, m:mine, o:sort)".to_string();
+                self.status_message.clear();
                 return;
             }
             KeyCode::Char('5') | KeyCode::Char('n') => {
                 self.active_tab = ActiveTab::DataEntry;
-                self.status_message = "View 5: Add New Task (Tab/Shift+Tab to move fields, Ctrl+S to submit, Esc to cancel)".to_string();
+                self.status_message.clear();
                 return;
             }
             KeyCode::Char('r') => {
@@ -491,11 +527,25 @@ impl TuiApp {
             KeyCode::Down | KeyCode::Char('j') => {
                 if len > 0 {
                     self.focus_selected = (self.focus_selected + 1) % len;
+                    self.focus_state.select(Some(self.focus_selected));
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if len > 0 {
                     self.focus_selected = self.focus_selected.checked_sub(1).unwrap_or(len - 1);
+                    self.focus_state.select(Some(self.focus_selected));
+                }
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                if len > 0 {
+                    self.focus_selected = 0;
+                    self.focus_state.select(Some(0));
+                }
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                if len > 0 {
+                    self.focus_selected = len - 1;
+                    self.focus_state.select(Some(self.focus_selected));
                 }
             }
             KeyCode::Char('b') => {
@@ -548,12 +598,28 @@ impl TuiApp {
             .collect()
     }
 
-    fn clamp_kanban_selection(&mut self) {
+    pub(crate) fn clamp_kanban_selection(&mut self) {
+        for col_idx in 0..TaskStatus::ALL.len() {
+            let col_len = self.kanban_tasks_in_col(col_idx).len();
+            let current = self.kanban_states[col_idx].selected().unwrap_or(0);
+            if col_len == 0 {
+                self.kanban_states[col_idx].select(None);
+            } else if current >= col_len {
+                self.kanban_states[col_idx].select(Some(col_len - 1));
+            } else {
+                self.kanban_states[col_idx].select(Some(current));
+            }
+        }
         let col_tasks = self.kanban_tasks_in_col(self.kanban_col);
         if col_tasks.is_empty() {
             self.kanban_row = 0;
-        } else if self.kanban_row >= col_tasks.len() {
-            self.kanban_row = col_tasks.len() - 1;
+        } else {
+            let row = self.kanban_states[self.kanban_col]
+                .selected()
+                .unwrap_or(self.kanban_row)
+                .min(col_tasks.len() - 1);
+            self.kanban_row = row;
+            self.kanban_states[self.kanban_col].select(Some(row));
         }
     }
 
@@ -564,22 +630,26 @@ impl TuiApp {
                     .kanban_col
                     .checked_sub(1)
                     .unwrap_or(TaskStatus::ALL.len() - 1);
+                self.kanban_row = self.kanban_states[self.kanban_col].selected().unwrap_or(0);
                 self.clamp_kanban_selection();
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 self.kanban_col = (self.kanban_col + 1) % TaskStatus::ALL.len();
+                self.kanban_row = self.kanban_states[self.kanban_col].selected().unwrap_or(0);
                 self.clamp_kanban_selection();
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 let len = self.kanban_tasks_in_col(self.kanban_col).len();
                 if len > 0 {
                     self.kanban_row = (self.kanban_row + 1) % len;
+                    self.kanban_states[self.kanban_col].select(Some(self.kanban_row));
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 let len = self.kanban_tasks_in_col(self.kanban_col).len();
                 if len > 0 {
                     self.kanban_row = self.kanban_row.checked_sub(1).unwrap_or(len - 1);
+                    self.kanban_states[self.kanban_col].select(Some(self.kanban_row));
                 }
             }
             KeyCode::Char('<') | KeyCode::Char('H') => {
@@ -632,12 +702,28 @@ impl TuiApp {
             .collect()
     }
 
-    fn clamp_eisenhower_selection(&mut self) {
+    pub(crate) fn clamp_eisenhower_selection(&mut self) {
+        for q_idx in 0..4 {
+            let q_len = self.eisenhower_tasks_in_quadrant(q_idx).len();
+            let current = self.eisenhower_states[q_idx].selected().unwrap_or(0);
+            if q_len == 0 {
+                self.eisenhower_states[q_idx].select(None);
+            } else if current >= q_len {
+                self.eisenhower_states[q_idx].select(Some(q_len - 1));
+            } else {
+                self.eisenhower_states[q_idx].select(Some(current));
+            }
+        }
         let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
         if items.is_empty() {
             self.eisenhower_row = 0;
-        } else if self.eisenhower_row >= items.len() {
-            self.eisenhower_row = items.len() - 1;
+        } else {
+            let row = self.eisenhower_states[self.eisenhower_quadrant]
+                .selected()
+                .unwrap_or(self.eisenhower_row)
+                .min(items.len() - 1);
+            self.eisenhower_row = row;
+            self.eisenhower_states[self.eisenhower_quadrant].select(Some(row));
         }
     }
 
@@ -645,10 +731,16 @@ impl TuiApp {
         match key.code {
             KeyCode::Left | KeyCode::Char('h') => {
                 self.eisenhower_quadrant = self.eisenhower_quadrant.checked_sub(1).unwrap_or(3);
+                self.eisenhower_row = self.eisenhower_states[self.eisenhower_quadrant]
+                    .selected()
+                    .unwrap_or(0);
                 self.clamp_eisenhower_selection();
             }
             KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => {
                 self.eisenhower_quadrant = (self.eisenhower_quadrant + 1) % 4;
+                self.eisenhower_row = self.eisenhower_states[self.eisenhower_quadrant]
+                    .selected()
+                    .unwrap_or(0);
                 self.clamp_eisenhower_selection();
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -657,6 +749,7 @@ impl TuiApp {
                     .len();
                 if len > 0 {
                     self.eisenhower_row = (self.eisenhower_row + 1) % len;
+                    self.eisenhower_states[self.eisenhower_quadrant].select(Some(self.eisenhower_row));
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -665,6 +758,7 @@ impl TuiApp {
                     .len();
                 if len > 0 {
                     self.eisenhower_row = self.eisenhower_row.checked_sub(1).unwrap_or(len - 1);
+                    self.eisenhower_states[self.eisenhower_quadrant].select(Some(self.eisenhower_row));
                 }
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
@@ -743,11 +837,29 @@ impl TuiApp {
             KeyCode::Down | KeyCode::Char('j') => {
                 if len > 0 {
                     self.search_selected = (self.search_selected + 1) % len;
+                    self.search_table_state.select(Some(self.search_selected));
+                    self.search_list_state.select(Some(self.search_selected));
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if len > 0 {
                     self.search_selected = self.search_selected.checked_sub(1).unwrap_or(len - 1);
+                    self.search_table_state.select(Some(self.search_selected));
+                    self.search_list_state.select(Some(self.search_selected));
+                }
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                if len > 0 {
+                    self.search_selected = 0;
+                    self.search_table_state.select(Some(0));
+                    self.search_list_state.select(Some(0));
+                }
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                if len > 0 {
+                    self.search_selected = len - 1;
+                    self.search_table_state.select(Some(self.search_selected));
+                    self.search_list_state.select(Some(self.search_selected));
                 }
             }
             KeyCode::Char('f') => {
@@ -810,20 +922,23 @@ impl TuiApp {
 
         match key.code {
             KeyCode::Tab | KeyCode::Down => {
-                self.entry_form.active_index = (self.entry_form.active_index + 1) % (DataEntryForm::SUBMIT_INDEX + 1);
+                let next = (self.entry_form.active_index + 1) % (DataEntryForm::SUBMIT_INDEX + 1);
+                self.entry_form.set_active_index(next);
             }
             KeyCode::BackTab | KeyCode::Up => {
-                self.entry_form.active_index = self
+                let prev = self
                     .entry_form
                     .active_index
                     .checked_sub(1)
                     .unwrap_or(DataEntryForm::SUBMIT_INDEX);
+                self.entry_form.set_active_index(prev);
             }
             KeyCode::Enter => {
                 if self.entry_form.active_index == DataEntryForm::SUBMIT_INDEX {
                     self.submit_data_entry_form();
                 } else {
-                    self.entry_form.active_index = (self.entry_form.active_index + 1) % (DataEntryForm::SUBMIT_INDEX + 1);
+                    let next = (self.entry_form.active_index + 1) % (DataEntryForm::SUBMIT_INDEX + 1);
+                    self.entry_form.set_active_index(next);
                 }
             }
             KeyCode::Backspace => {
@@ -890,9 +1005,16 @@ impl TuiApp {
                 return;
             }
         };
-        let urgent_override = Some(matches!(f[7].trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "y"));
+        let manual_priority = match f[7].trim().parse::<i8>() {
+            Ok(v) if (1..=5).contains(&v) => Some(v),
+            _ => {
+                self.status_message = "Validation error: Manual Priority must be an integer 1..=5".to_string();
+                return;
+            }
+        };
+        let urgent_override = Some(matches!(f[8].trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "y"));
 
-        let tags: Vec<String> = f[8]
+        let tags: Vec<String> = f[9]
             .split(|c: char| c == ',' || c.is_whitespace())
             .filter(|s| !s.trim().is_empty())
             .map(ToString::to_string)
@@ -900,7 +1022,7 @@ impl TuiApp {
 
         // Parse relation entries like `blocks:AB1234, sub_task_of:CD5678` or plain `AB1234` (defaults to `related`)
         let mut parsed_relations: Vec<(RelationInputKind, String)> = Vec::new();
-        for tok in f[9]
+        for tok in f[10]
             .split(|c: char| c == ',' || c.is_whitespace())
             .filter(|s| !s.trim().is_empty())
         {
@@ -917,12 +1039,12 @@ impl TuiApp {
             }
         }
 
-        let attach_path_str = f[10].trim().to_string();
-        let attach_desc_opt = if f[11].trim().is_empty() { None } else { Some(f[11].trim().to_string()) };
+        let attach_path_str = f[11].trim().to_string();
+        let attach_desc_opt = if f[12].trim().is_empty() { None } else { Some(f[12].trim().to_string()) };
 
-        let reporter = if f[12].trim().is_empty() { None } else { Some(f[12].trim().to_string()) };
-        let assignee = if f[13].trim().is_empty() { None } else { Some(f[13].trim().to_string()) };
-        let evaluator = if f[14].trim().is_empty() { None } else { Some(f[14].trim().to_string()) };
+        let reporter = if f[13].trim().is_empty() { None } else { Some(f[13].trim().to_string()) };
+        let assignee = if f[14].trim().is_empty() { None } else { Some(f[14].trim().to_string()) };
+        let evaluator = if f[15].trim().is_empty() { None } else { Some(f[15].trim().to_string()) };
 
         match create_task(
             &mut self.db,
@@ -934,6 +1056,7 @@ impl TuiApp {
                 time_estimate_minutes,
                 difficulty,
                 importance,
+                manual_priority,
                 urgent_override,
                 tags,
                 reporter,

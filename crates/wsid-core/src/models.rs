@@ -326,8 +326,8 @@ pub struct Task {
     pub status: TaskStatus,
     pub origin_kind: OriginKind,
     pub origin_note_id: Option<i64>,
-    pub due_date: Option<NaiveDate>,
-    pub sgdb_date: Option<NaiveDate>,
+    pub due_date: Option<String>,
+    pub sgdb_date: Option<String>,
     pub time_estimate_minutes: Option<i64>,
     pub difficulty: u8,
     pub importance: u8,
@@ -344,6 +344,20 @@ pub struct Task {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
+impl Task {
+    pub fn due_naive_date(&self) -> Option<NaiveDate> {
+        self.due_date
+            .as_deref()
+            .and_then(crate::tasks::parse_deadline_naive_date)
+    }
+
+    pub fn sgdb_naive_date(&self) -> Option<NaiveDate> {
+        self.sgdb_date
+            .as_deref()
+            .and_then(crate::tasks::parse_deadline_naive_date)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CreateTaskInput {
     pub title: String,
@@ -351,8 +365,8 @@ pub struct CreateTaskInput {
     pub status: Option<TaskStatus>,
     pub origin_kind: Option<OriginKind>,
     pub origin_note_id: Option<i64>,
-    pub due_date: Option<NaiveDate>,
-    pub sgdb_date: Option<NaiveDate>,
+    pub due_date: Option<String>,
+    pub sgdb_date: Option<String>,
     pub time_estimate_minutes: Option<i64>,
     pub difficulty: Option<u8>,
     pub importance: Option<u8>,
@@ -369,10 +383,10 @@ pub struct UpdateTaskInput {
     pub title: Option<String>,
     pub description: Option<String>,
     pub status: Option<TaskStatus>,
-    /// `Some(Some(d))` sets date, `Some(None)` clears date, `None` leaves unchanged.
-    pub due_date: Option<Option<NaiveDate>>,
-    /// `Some(Some(d))` sets date, `Some(None)` clears date, `None` leaves unchanged.
-    pub sgdb_date: Option<Option<NaiveDate>>,
+    /// `Some(Some(d))` sets date/datetime, `Some(None)` clears date, `None` leaves unchanged.
+    pub due_date: Option<Option<String>>,
+    /// `Some(Some(d))` sets date/datetime, `Some(None)` clears date, `None` leaves unchanged.
+    pub sgdb_date: Option<Option<String>>,
     /// `Some(Some(m))` sets estimate, `Some(None)` clears estimate, `None` leaves unchanged.
     pub time_estimate_minutes: Option<Option<i64>>,
     pub difficulty: Option<u8>,

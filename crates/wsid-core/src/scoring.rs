@@ -203,7 +203,7 @@ pub fn resolve_effective_deadline(
     parents_by_child: &HashMap<String, Vec<String>>,
 ) -> Option<NaiveDate> {
     let task = tasks_by_id.get(task_id)?;
-    if let Some(d) = task.sgdb_date.or(task.due_date) {
+    if let Some(d) = task.sgdb_naive_date().or_else(|| task.due_naive_date()) {
         return Some(d);
     }
 
@@ -217,7 +217,7 @@ pub fn resolve_effective_deadline(
             continue;
         }
         if let Some(parent) = tasks_by_id.get(&parent_id) {
-            if let Some(d) = parent.sgdb_date.or(parent.due_date) {
+            if let Some(d) = parent.sgdb_naive_date().or_else(|| parent.due_naive_date()) {
                 earliest = Some(match earliest {
                     Some(prev) => prev.min(d),
                     None => d,
@@ -377,7 +377,7 @@ pub fn compute_focus_queue(
             1.0 - (0.5 * difficulty_ease + 0.5 * duration_ease)
         };
 
-        let manual_norm = f64::from(task.manual_priority) / 5.0;
+        let manual_norm = (f64::from(task.manual_priority) - 3.0) / 2.0;
         let has_in_progress_parallel_peer = graph.has_in_progress_parallel_peer(&task.id, &tasks_by_id);
 
         let urgency_component = weights.urgency * urgency_norm;
@@ -713,20 +713,19 @@ mod tests {
 
         // 3. Task with due_date 5 days away (Nov 6) but large time estimate (4 workdays = 1920m)
         // pulls effective slack to 5 - 4 = 1.0 day <= 2.0 urgent horizon -> Q1 (Urgent & Important)
-        let due_nov6 = NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
         let t_slack = create_task(
             &mut db,
             CreateTaskInput {
                 title: "Big task due in 5 days".to_string(),
                 importance: Some(5),
-                due_date: Some(due_nov6),
+                due_date: Some("2026-11-06".to_string()),
                 time_estimate_minutes: Some(1920),
                 ..Default::default()
             },
             "alice",
         )
         .unwrap();
-        let c_slack = classify_task_eisenhower(&t_slack, t_slack.due_date, today, config);
+        let c_slack = classify_task_eisenhower(&t_slack, t_slack.due_naive_date(), today, config);
         assert_eq!(c_slack.slack_days, Some(1.0));
         assert_eq!(c_slack.quadrant, EisenhowerQuadrant::Q1DoFirst);
 
@@ -772,7 +771,7 @@ mod tests {
             &mut db,
             CreateTaskInput {
                 title: "Overdue task".to_string(),
-                due_date: Some(NaiveDate::from_ymd_opt(2026, 10, 30).unwrap()),
+                due_date: Some("2026-10-30".to_string()),
                 importance: Some(3),
                 difficulty: Some(3),
                 time_estimate_minutes: Some(60),
@@ -787,7 +786,7 @@ mod tests {
             &mut db,
             CreateTaskInput {
                 title: "Due tomorrow".to_string(),
-                due_date: Some(NaiveDate::from_ymd_opt(2026, 11, 2).unwrap()),
+                due_date: Some("2026-11-02".to_string()),
                 importance: Some(3),
                 difficulty: Some(3),
                 time_estimate_minutes: Some(60),

@@ -1,15 +1,11 @@
 pub mod app;
 pub mod ui;
 
-use std::io;
 use std::path::Path;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEventKind};
-use crossterm::execute;
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 use wsid_core::AppConfig;
 
 use crate::tui::app::TuiApp;
@@ -17,17 +13,9 @@ use crate::tui::app::TuiApp;
 pub fn run_tui(db_path: &Path, config: AppConfig, user: String, accessible_mode: bool) -> wsid_core::Result<()> {
     let mut app = TuiApp::new(db_path, config, user, accessible_mode)?;
 
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
+    let mut terminal = ratatui::init();
     let res = run_event_loop(&mut terminal, &mut app);
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    ratatui::restore();
 
     res
 }

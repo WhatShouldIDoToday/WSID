@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{NaiveDate, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tauri::menu::{HELP_SUBMENU_ID, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, State};
@@ -15,8 +15,8 @@ use wsid_core::{
     create_task, default_config_path, default_global_db_path, delete_task, delete_task_note, get_about_metadata, get_attachment,
     get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
     get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_task_notes, list_tasks, normalize_user, open_file_in_os,
-    remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
-    unlink_tasks, update_attachment_description, update_task,
+    parse_deadline_datetime, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status,
+    unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
 };
 
 pub struct GuiAppState {
@@ -157,11 +157,12 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
     })
 }
 
-fn parse_optional_date(raw: Option<&str>, field_name: &str) -> Result<Option<NaiveDate>, String> {
+fn parse_optional_date(raw: Option<&str>, field_name: &str) -> Result<Option<String>, String> {
     match raw.map(str::trim) {
-        Some(s) if !s.is_empty() => NaiveDate::parse_from_str(s, "%Y-%m-%d")
-            .map(Some)
-            .map_err(|_| format!("invalid {field_name} '{s}': expected YYYY-MM-DD")),
+        Some(s) if !s.is_empty() => {
+            parse_deadline_datetime(field_name, s).map_err(|e| e.to_string())?;
+            Ok(Some(s.to_string()))
+        }
         _ => Ok(None),
     }
 }

@@ -12,7 +12,7 @@
     knownTags = [],
     id = "tags-chip-input",
     label = "Tags",
-    placeholder = "Type a tag and press Enter or comma...",
+    placeholder = "Add tag...",
   }: Props = $props();
 
   let inputText = $state("");
@@ -34,13 +34,19 @@
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === "Enter" || e.key === "," || e.key === " ") {
+    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
       if (inputText.trim().length > 0) {
-        e.preventDefault();
         commitToken(inputText);
         inputText = "";
-      } else if (e.key === "," || e.key === " ") {
-        e.preventDefault();
+      }
+      return;
+    }
+    if (e.key === "," || e.key === " ") {
+      e.preventDefault();
+      if (inputText.trim().length > 0) {
+        commitToken(inputText);
+        inputText = "";
       }
     } else if (
       e.key === "Backspace" &&
@@ -77,35 +83,37 @@
   );
 </script>
 
-<div class="form-field">
+<div class="form-field tag-field-stack">
   <label for={id} class="field-label">{label}</label>
-  <div class="tag-chips-box">
-    {#each tags as tag (tag)}
-      <span class="tag-chip">
-        <span>{tag}</span>
-        <button
-          type="button"
-          class="tag-chip-remove"
-          onclick={() => removeTag(tag)}
-          aria-label={`Remove tag ${tag}`}
-          title={`Remove tag ${tag}`}
-        >
-          ×
-        </button>
-      </span>
-    {/each}
-    <input
-      {id}
-      type="text"
-      class="tag-chips-input"
-      bind:value={inputText}
-      onkeydown={handleKeyDown}
-      oninput={handleInput}
-      onblur={handleBlur}
-      list={`${id}-datalist`}
-      placeholder={tags.length === 0 ? placeholder : "Add tag..."}
-    />
-  </div>
+  <input
+    {id}
+    type="text"
+    class="tag-compact-input"
+    bind:value={inputText}
+    onkeydown={handleKeyDown}
+    oninput={handleInput}
+    onblur={handleBlur}
+    list={`${id}-datalist`}
+    {placeholder}
+  />
+  {#if tags.length > 0}
+    <div class="tag-chips-below" role="list" aria-label="Selected tags">
+      {#each tags as tag (tag)}
+        <span class="tag-chip" role="listitem">
+          <span>{tag}</span>
+          <button
+            type="button"
+            class="tag-chip-remove"
+            onclick={() => removeTag(tag)}
+            aria-label={`Remove tag ${tag}`}
+            title={`Remove tag ${tag}`}
+          >
+            ×
+          </button>
+        </span>
+      {/each}
+    </div>
+  {/if}
   <datalist id={`${id}-datalist`}>
     {#each availableSuggestions as tag}
       <option value={tag}></option>

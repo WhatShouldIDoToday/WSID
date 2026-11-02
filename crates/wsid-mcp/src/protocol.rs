@@ -217,7 +217,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "create_task".to_string(),
-            description: "Creates a new task with optional SGDB/due dates (YYYY-MM-DD), time estimate in minutes, difficulty (1..=5), importance (1..=5), single-word tags, roles, and initial relations.".to_string(),
+            description: "Creates a new task with optional SGDB/due dates (YYYY-MM-DD or ISO 8601 datetime), time estimate in minutes, difficulty (1..=5), importance (1..=5), manual_priority (1..=5, 3 = normal), single-word tags, roles, and initial relations.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -227,13 +227,13 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                         "type": "string",
                         "enum": ["backlog", "todo", "in_progress", "in_review", "stuck", "completed"]
                     },
-                    "due_date": { "type": "string", "description": "Optional hard deadline in YYYY-MM-DD format." },
-                    "sgdb_date": { "type": "string", "description": "Optional 'Should Get Done By' date in YYYY-MM-DD format (must be <= due_date if both are set)." },
+                    "due_date": { "type": "string", "description": "Optional hard deadline in YYYY-MM-DD or ISO 8601 datetime format." },
+                    "sgdb_date": { "type": "string", "description": "Optional 'Should Get Done By' date in YYYY-MM-DD or ISO 8601 datetime format (must be <= due_date if both are set)." },
                     "time_estimate_minutes": { "type": "integer", "minimum": 0 },
                     "difficulty": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "importance": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "urgent_override": { "type": "boolean" },
-                    "manual_priority": { "type": "integer", "minimum": -5, "maximum": 5 },
+                    "manual_priority": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "tags": {
                         "type": "array",
                         "items": { "type": "string" }
@@ -280,13 +280,13 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                     "id": { "type": "string" },
                     "title": { "type": "string" },
                     "description": { "type": "string" },
-                    "due_date": { "type": ["string", "null"], "description": "YYYY-MM-DD date string or null to clear." },
-                    "sgdb_date": { "type": ["string", "null"], "description": "YYYY-MM-DD date string or null to clear." },
+                    "due_date": { "type": ["string", "null"], "description": "YYYY-MM-DD or ISO 8601 datetime string, or null to clear." },
+                    "sgdb_date": { "type": ["string", "null"], "description": "YYYY-MM-DD or ISO 8601 datetime string, or null to clear." },
                     "time_estimate_minutes": { "type": ["integer", "null"], "minimum": 0 },
                     "difficulty": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "importance": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "urgent_override": { "type": "boolean" },
-                    "manual_priority": { "type": "integer", "minimum": -5, "maximum": 5 },
+                    "manual_priority": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "tags": {
                         "type": "array",
                         "items": { "type": "string" }

@@ -25,15 +25,15 @@ CREATE TABLE IF NOT EXISTS tasks (
         CHECK (importance BETWEEN 1 AND 5),
     urgent_override INTEGER NOT NULL DEFAULT 0
         CHECK (urgent_override IN (0, 1)),
-    manual_priority INTEGER NOT NULL DEFAULT 0
-        CHECK (manual_priority BETWEEN -5 AND 5),
+    manual_priority INTEGER NOT NULL DEFAULT 3
+        CHECK (manual_priority BETWEEN 1 AND 5),
     reporter TEXT NOT NULL,
     assignee TEXT NOT NULL,
     evaluator TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     completed_at TEXT,
-    CHECK (sgdb_date IS NULL OR due_date IS NULL OR sgdb_date <= due_date)
+    CHECK (sgdb_date IS NULL OR due_date IS NULL OR substr(sgdb_date, 1, 10) <= substr(due_date, 1, 10))
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);

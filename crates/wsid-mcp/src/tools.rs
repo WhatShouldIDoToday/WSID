@@ -7,8 +7,9 @@ use wsid_core::{
     AppConfig, AttachmentInput, CreateTaskInput, Database, FocusPreset, RelationInputKind, SearchQuery, Task, TaskNote, TaskRelation,
     TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, compute_focus_queue, create_task, delete_task,
     delete_task_note, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks,
-    get_parallel_peers, get_related_tasks, get_task, link_tasks, list_task_notes, list_task_relations, remove_attachment, search_tasks,
-    transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
+    get_parallel_peers, get_related_tasks, get_task, link_tasks, list_task_notes, list_task_relations, parse_deadline_datetime,
+    remove_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description,
+    update_task,
 };
 
 use crate::protocol::CallToolResult;
@@ -292,11 +293,12 @@ fn parse_args<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|e| format!("invalid tool arguments: {e}"))
 }
 
-fn parse_date_field(field_name: &str, raw: Option<&str>) -> Result<Option<NaiveDate>, WsidError> {
-    match raw {
-        Some(s) if !s.trim().is_empty() => NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
-            .map(Some)
-            .map_err(|_| WsidError::Validation(format!("invalid {field_name} '{s}': expected YYYY-MM-DD"))),
+fn parse_date_field(field_name: &str, raw: Option<&str>) -> Result<Option<String>, WsidError> {
+    match raw.map(str::trim) {
+        Some(s) if !s.is_empty() => {
+            parse_deadline_datetime(field_name, s)?;
+            Ok(Some(s.to_string()))
+        }
         _ => Ok(None),
     }
 }
@@ -407,17 +409,17 @@ fn parse_optional_string(obj: &Map<String, Value>, key: &str) -> Result<Option<S
     }
 }
 
-fn parse_nullable_date(obj: &Map<String, Value>, key: &str) -> Result<Option<Option<NaiveDate>>, WsidError> {
+fn parse_nullable_date(obj: &Map<String, Value>, key: &str) -> Result<Option<Option<String>>, WsidError> {
     match obj.get(key) {
         None => Ok(None),
         Some(Value::Null) => Ok(Some(None)),
         Some(Value::String(s)) if s.trim().is_empty() => Ok(Some(None)),
         Some(Value::String(s)) => {
-            let parsed = NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
-                .map_err(|_| WsidError::Validation(format!("invalid {key} '{s}': expected YYYY-MM-DD or null")))?;
-            Ok(Some(Some(parsed)))
+            let trimmed = s.trim();
+            parse_deadline_datetime(key, trimmed)?;
+            Ok(Some(Some(trimmed.to_string())))
         }
-        Some(_) => Err(WsidError::Validation(format!("field '{key}' must be a YYYY-MM-DD string or null"))),
+        Some(_) => Err(WsidError::Validation(format!("field '{key}' must be a YYYY-MM-DD or ISO 8601 datetime string or null"))),
     }
 }
 

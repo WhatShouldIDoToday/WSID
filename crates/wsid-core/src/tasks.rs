@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::str::FromStr;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::attachments::{cleanup_managed_files_after_delete, load_all_attachments_for_task, load_task_description_attachments};
@@ -51,11 +51,70 @@ pub fn normalize_user(raw: &str) -> Result<String> {
     Ok(stripped.to_string())
 }
 
-pub fn validate_dates(sgdb_date: Option<NaiveDate>, due_date: Option<NaiveDate>) -> Result<()> {
-    if let (Some(sgdb), Some(due)) = (sgdb_date, due_date)
-        && sgdb > due
+/// Parses and validates a deadline string (`YYYY-MM-DD` or ISO-8601 date-time),
+/// returning the normalized string and its comparable local `NaiveDateTime`.
+/// When only a date (`YYYY-MM-DD`) is provided, the time defaults to `20:00:00` (8:00 PM).
+pub fn parse_deadline_datetime(field_name: &str, raw: &str) -> Result<(String, NaiveDateTime)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(WsidError::Validation(format!("{field_name} cannot be empty")));
+    }
+
+    // Strip optional bracketed IANA timezone suffix (e.g. `2026-11-05T20:00:00-08:00[America/Los_Angeles]`)
+    let without_bracket = match trimmed.find('[') {
+        Some(idx) if trimmed.ends_with(']') => &trimmed[..idx],
+        _ => trimmed,
+    };
+
+    if let Ok(d) = NaiveDate::parse_from_str(without_bracket, "%Y-%m-%d") {
+        let default_time = NaiveTime::from_hms_opt(20, 0, 0).expect("valid 20:00:00 time");
+        return Ok((without_bracket.to_string(), NaiveDateTime::new(d, default_time)));
+    }
+
+    if let Ok(dt) = DateTime::parse_from_rfc3339(without_bracket) {
+        let local_naive = dt.with_timezone(&Local).naive_local();
+        return Ok((trimmed.to_string(), local_naive));
+    }
+
+    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(without_bracket, fmt) {
+            let iso = ndt.format("%Y-%m-%dT%H:%M").to_string();
+            return Ok((iso, ndt));
+        }
+    }
+
+    Err(WsidError::Validation(format!(
+        "invalid {field_name} '{trimmed}': expected YYYY-MM-DD or ISO-8601 date-time (e.g. 2026-11-05T20:00)"
+    )))
+}
+
+/// Extracts the calendar `NaiveDate` from a stored deadline string (`YYYY-MM-DD` or ISO-8601 date-time).
+pub fn parse_deadline_naive_date(raw: &str) -> Option<NaiveDate> {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 10
+        && let Ok(d) = NaiveDate::parse_from_str(&trimmed[..10], "%Y-%m-%d")
     {
-        return Err(WsidError::Validation(format!("sgdb_date ({sgdb}) must be on or before due_date ({due})")));
+        return Some(d);
+    }
+    parse_deadline_datetime("deadline", trimmed)
+        .ok()
+        .map(|(_, dt)| dt.date())
+}
+
+pub fn validate_dates(sgdb_date: Option<&str>, due_date: Option<&str>) -> Result<()> {
+    let sgdb_parsed = match sgdb_date {
+        Some(s) => Some(parse_deadline_datetime("sgdb_date", s)?),
+        None => None,
+    };
+    let due_parsed = match due_date {
+        Some(d) => Some(parse_deadline_datetime("due_date", d)?),
+        None => None,
+    };
+
+    if let (Some((sgdb_str, sgdb_dt)), Some((due_str, due_dt))) = (sgdb_parsed, due_parsed)
+        && sgdb_dt > due_dt
+    {
+        return Err(WsidError::Validation(format!("sgdb_date ({sgdb_str}) must be on or before due_date ({due_str})")));
     }
     Ok(())
 }
@@ -75,8 +134,8 @@ pub fn validate_importance(importance: u8) -> Result<()> {
 }
 
 pub fn validate_manual_priority(manual_priority: i8) -> Result<()> {
-    if !(-5..=5).contains(&manual_priority) {
-        return Err(WsidError::Validation(format!("manual_priority must be between -5 and 5 (got {manual_priority})")));
+    if !(1..=5).contains(&manual_priority) {
+        return Err(WsidError::Validation(format!("manual_priority must be between 1 and 5 (got {manual_priority})")));
     }
     Ok(())
 }
@@ -110,9 +169,18 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     let difficulty = input.difficulty.unwrap_or(3);
     let importance = input.importance.unwrap_or(3);
     let urgent_override = input.urgent_override.unwrap_or(false);
-    let manual_priority = input.manual_priority.unwrap_or(0);
+    let manual_priority = input.manual_priority.unwrap_or(3);
 
-    validate_dates(input.sgdb_date, input.due_date)?;
+    let due_str = match input.due_date.as_deref() {
+        Some(s) if !s.trim().is_empty() => Some(parse_deadline_datetime("due_date", s)?.0),
+        _ => None,
+    };
+    let sgdb_str = match input.sgdb_date.as_deref() {
+        Some(s) if !s.trim().is_empty() => Some(parse_deadline_datetime("sgdb_date", s)?.0),
+        _ => None,
+    };
+
+    validate_dates(sgdb_str.as_deref(), due_str.as_deref())?;
     validate_difficulty(difficulty)?;
     validate_importance(importance)?;
     validate_manual_priority(manual_priority)?;
@@ -137,8 +205,6 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     let now_dt = Utc::now();
     let now_str = format_utc(now_dt);
     let completed_at_str = if status.is_completed() { Some(now_str.clone()) } else { None };
-    let due_str = input.due_date.map(|d| d.format("%Y-%m-%d").to_string());
-    let sgdb_str = input.sgdb_date.map(|d| d.format("%Y-%m-%d").to_string());
 
     let id = ShortIdGenerator::generate_unique_conn(conn)?;
 
@@ -250,8 +316,16 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
 
     let description = input.description.unwrap_or(current.description);
     let status = input.status.unwrap_or(current.status);
-    let due_date = input.due_date.unwrap_or(current.due_date);
-    let sgdb_date = input.sgdb_date.unwrap_or(current.sgdb_date);
+    let due_str = match input.due_date {
+        Some(Some(ref s)) if !s.trim().is_empty() => Some(parse_deadline_datetime("due_date", s)?.0),
+        Some(_) => None,
+        None => current.due_date,
+    };
+    let sgdb_str = match input.sgdb_date {
+        Some(Some(ref s)) if !s.trim().is_empty() => Some(parse_deadline_datetime("sgdb_date", s)?.0),
+        Some(_) => None,
+        None => current.sgdb_date,
+    };
     let time_estimate_minutes = input
         .time_estimate_minutes
         .unwrap_or(current.time_estimate_minutes);
@@ -273,7 +347,7 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
         None => current.evaluator,
     };
 
-    validate_dates(sgdb_date, due_date)?;
+    validate_dates(sgdb_str.as_deref(), due_str.as_deref())?;
     validate_difficulty(difficulty)?;
     validate_importance(importance)?;
     validate_manual_priority(manual_priority)?;
@@ -291,8 +365,6 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
         None
     };
 
-    let due_str = due_date.map(|d| d.format("%Y-%m-%d").to_string());
-    let sgdb_str = sgdb_date.map(|d| d.format("%Y-%m-%d").to_string());
     let normalized_tags = match input.tags {
         Some(ref raw_tags) => Some(normalize_tags(raw_tags)?),
         None => None,
@@ -401,12 +473,14 @@ pub(crate) fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
 
     let status = TaskStatus::from_str(&status_str).unwrap_or(TaskStatus::Todo);
     let origin_kind = OriginKind::from_str(&origin_str).unwrap_or(OriginKind::Manual);
-    let due_date = due_str
-        .as_deref()
-        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    let sgdb_date = sgdb_str
-        .as_deref()
-        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let due_date = due_str.and_then(|s| {
+        let trimmed = s.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    });
+    let sgdb_date = sgdb_str.and_then(|s| {
+        let trimmed = s.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    });
 
     Ok(Task {
         id: row.get(0)?,
@@ -421,7 +495,7 @@ pub(crate) fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         difficulty: u8::try_from(difficulty_i64).unwrap_or(3),
         importance: u8::try_from(importance_i64).unwrap_or(3),
         urgent_override: urgent_i64 != 0,
-        manual_priority: i8::try_from(manual_priority_i64).unwrap_or(0),
+        manual_priority: i8::try_from(manual_priority_i64).unwrap_or(3).clamp(1, 5),
         tags: Vec::new(),
         attachments: Vec::new(),
         reporter: row.get(13)?,
@@ -445,51 +519,55 @@ pub(crate) fn parse_utc(raw: &str) -> DateTime<Utc> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
-
     use super::*;
     use crate::db::open_in_memory_db;
 
     #[test]
     fn enforces_sgdb_and_due_date_combinations() {
         let mut db = open_in_memory_db().unwrap();
-        let d_early = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
-        let d_late = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+        let d_early = "2026-11-05".to_string();
+        let d_late = "2026-11-10".to_string();
 
         // Both None is allowed
         let t_none = create_task(&mut db, CreateTaskInput { title: "No dates".to_string(), ..Default::default() }, "david").unwrap();
         assert_eq!(t_none.due_date, None);
         assert_eq!(t_none.sgdb_date, None);
+        assert_eq!(t_none.manual_priority, 3);
 
         // SGDB without due_date is allowed
         let t_sgdb_only = create_task(
             &mut db,
-            CreateTaskInput { title: "SGDB only".to_string(), sgdb_date: Some(d_early), ..Default::default() },
+            CreateTaskInput { title: "SGDB only".to_string(), sgdb_date: Some(d_early.clone()), ..Default::default() },
             "david",
         )
         .unwrap();
-        assert_eq!(t_sgdb_only.sgdb_date, Some(d_early));
+        assert_eq!(t_sgdb_only.sgdb_date, Some(d_early.clone()));
         assert_eq!(t_sgdb_only.due_date, None);
 
-        // SGDB <= due_date is allowed
+        // SGDB <= due_date is allowed (including ISO date-time strings)
         let t_both = create_task(
             &mut db,
             CreateTaskInput {
                 title: "SGDB before due".to_string(),
-                sgdb_date: Some(d_early),
-                due_date: Some(d_late),
+                sgdb_date: Some("2026-11-05T14:30".to_string()),
+                due_date: Some("2026-11-05T20:00".to_string()),
                 ..Default::default()
             },
             "david",
         )
         .unwrap();
-        assert_eq!(t_both.sgdb_date, Some(d_early));
-        assert_eq!(t_both.due_date, Some(d_late));
+        assert_eq!(t_both.sgdb_date.as_deref(), Some("2026-11-05T14:30"));
+        assert_eq!(t_both.due_date.as_deref(), Some("2026-11-05T20:00"));
 
-        // SGDB > due_date is rejected on create
+        // SGDB > due_date is rejected on create (including same-day 21:00 > default 20:00)
         let err = create_task(
             &mut db,
-            CreateTaskInput { title: "Invalid SGDB".to_string(), sgdb_date: Some(d_late), due_date: Some(d_early), ..Default::default() },
+            CreateTaskInput {
+                title: "Invalid SGDB".to_string(),
+                sgdb_date: Some("2026-11-05T21:00".to_string()),
+                due_date: Some("2026-11-05".to_string()),
+                ..Default::default()
+            },
             "david",
         )
         .unwrap_err();

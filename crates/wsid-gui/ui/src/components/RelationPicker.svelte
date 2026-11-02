@@ -116,7 +116,7 @@
   }
 
   function handleSelectKeyDown(e: KeyboardEvent) {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       void submitRelation();
     }
@@ -134,7 +134,7 @@
     >
       <div class="relation-input-group">
         <Combobox.Input
-          class="relation-search-input"
+          class="relation-combobox-input"
           placeholder="Search task by title or ID (e.g. AB1234)..."
           aria-label="Search target task by title or ID"
           oninput={handleSearchInput}
@@ -152,22 +152,20 @@
       </div>
 
       <Combobox.Portal>
-        <Combobox.Content class="combobox-popover" sideOffset={4}>
-          <Combobox.Viewport class="combobox-viewport">
+        <Combobox.Content class="relation-combobox-content" sideOffset={4}>
+          <Combobox.Viewport>
             {#if results.length === 0}
-              <div class="combobox-empty">No matching tasks found</div>
+              <div class="relation-combobox-empty">No matching tasks found</div>
             {:else}
               {#each results as hit (hit.task.id)}
                 <Combobox.Item
                   value={hit.task.id}
                   label={`${hit.task.id} — ${hit.task.title}`}
-                  class="combobox-item"
+                  class="relation-combobox-item"
                 >
-                  <div class="combobox-item-main">
-                    <span class="task-id">{hit.task.id}</span>
-                    <span class="combobox-item-title">{hit.task.title}</span>
-                  </div>
-                  <span class="combobox-item-meta">
+                  <span class="task-id">{hit.task.id}</span>
+                  <span class="relation-item-title">{hit.task.title}</span>
+                  <span class="relation-item-meta">
                     @{hit.task.assignee} · {STATUS_LABELS[hit.task.status]}
                   </span>
                 </Combobox.Item>

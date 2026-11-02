@@ -1,5 +1,6 @@
 <script lang="ts">
   import DateFieldPicker from "./DateFieldPicker.svelte";
+  import RatingSlider from "./RatingSlider.svelte";
   import TagChipsInput from "./TagChipsInput.svelte";
   import RelationPicker, {
     type SelectedRelationEntry,
@@ -15,6 +16,7 @@
     saveClipboardBytesForDraft,
     fileToBase64,
     parseDurationInput,
+    validateDeadlineOrder,
   } from "../lib/ipc";
 
   interface DraftAttachmentItem {
@@ -37,6 +39,8 @@
   let { activeUser, knownUsers, knownTags, onCreated, announce }: Props =
     $props();
 
+  let formElement = $state<HTMLFormElement | null>(null);
+
   let title = $state<string>("");
   let description = $state<string>("");
   let status = $state<TaskStatus>("todo");
@@ -45,7 +49,7 @@
   let estimateInput = $state<string>("");
   let importance = $state<number>(3);
   let difficulty = $state<number>(3);
-  let manualPriority = $state<number>(0);
+  let manualPriority = $state<number>(3);
   let urgentOverride = $state<boolean>(false);
   let tags = $state<string[]>([]);
   let reporter = $state<string>("");
@@ -57,16 +61,106 @@
   let nextAttachmentDesc = $state<string>("");
   let isDragging = $state<boolean>(false);
 
+  let titleTouched = $state<boolean>(false);
   let titleError = $state<string | null>(null);
   let dateError = $state<string | null>(null);
   let durationError = $state<string | null>(null);
   let formError = $state<string | null>(null);
+
+  let durationTimer: ReturnType<typeof setTimeout> | null = null;
+  let dateTimer: ReturnType<typeof setTimeout> | null = null;
 
   $effect(() => {
     if (!reporter) reporter = activeUser;
     if (!assignee) assignee = activeUser;
     if (!evaluator) evaluator = activeUser;
   });
+
+  // Clear title error immediately when user types a valid title
+  $effect(() => {
+    if (title.trim() && titleError) {
+      titleError = null;
+    }
+  });
+
+  // Debounced validation on Time Estimate (400ms idle) + immediate clear when valid
+  $effect(() => {
+    const current = estimateInput;
+    if (durationTimer) clearTimeout(durationTimer);
+    if (!current.trim()) {
+      durationError = null;
+      return;
+    }
+    const check = parseDurationInput(current);
+    if (!check.error && durationError) {
+      durationError = null;
+      return;
+    }
+    durationTimer = setTimeout(() => {
+      const res = parseDurationInput(current);
+      durationError = res.error;
+    }, 400);
+    return () => {
+      if (durationTimer) clearTimeout(durationTimer);
+    };
+  });
+
+  // Debounced validation on SGDB vs Hard Due Date (400ms idle)
+  $effect(() => {
+    const s = sgdbDate;
+    const d = dueDate;
+    if (dateTimer) clearTimeout(dateTimer);
+    const immediateErr = validateDeadlineOrder(s, d);
+    if (!immediateErr && dateError) {
+      dateError = null;
+      return;
+    }
+    dateTimer = setTimeout(() => {
+      dateError = validateDeadlineOrder(s, d);
+    }, 400);
+    return () => {
+      if (dateTimer) clearTimeout(dateTimer);
+    };
+  });
+
+  function validateTitleNow(): boolean {
+    if (!title.trim()) {
+      titleError = "Task title is required.";
+      return false;
+    }
+    titleError = null;
+    return true;
+  }
+
+  function validateDurationNow(): boolean {
+    if (durationTimer) clearTimeout(durationTimer);
+    const parsed = parseDurationInput(estimateInput);
+    durationError = parsed.error;
+    return !parsed.error;
+  }
+
+  function validateDatesNow(): boolean {
+    if (dateTimer) clearTimeout(dateTimer);
+    dateError = validateDeadlineOrder(sgdbDate, dueDate);
+    return !dateError;
+  }
+
+  function isFormDirty(): boolean {
+    return (
+      title.trim().length > 0 ||
+      description.trim().length > 0 ||
+      sgdbDate.trim().length > 0 ||
+      dueDate.trim().length > 0 ||
+      estimateInput.trim().length > 0 ||
+      importance !== 3 ||
+      difficulty !== 3 ||
+      manualPriority !== 3 ||
+      urgentOverride ||
+      tags.length > 0 ||
+      stagedRelations.length > 0 ||
+      pendingAttachments.length > 0
+    );
+  }
 
   function basenameOfPath(rawPath: string): string {
     const parts = rawPath.split(/[/\\]/);
@@ -163,7 +257,7 @@
     estimateInput = "";
     importance = 3;
     difficulty = 3;
-    manualPriority = 0;
+    manualPriority = 3;
     urgentOverride = false;
     tags = [];
     reporter = activeUser;
@@ -172,38 +266,97 @@
     stagedRelations = [];
     pendingAttachments = [];
     nextAttachmentDesc = "";
+    titleTouched = false;
     titleError = null;
     dateError = null;
     durationError = null;
     formError = null;
   }
 
-  async function handleSubmit(e: SubmitEvent) {
-    e.preventDefault();
-    titleError = null;
-    dateError = null;
-    durationError = null;
-    formError = null;
+  function handleCancelOrReset() {
+    if (isFormDirty()) {
+      const ok = window.confirm("Discard unsaved changes?");
+      if (!ok) return;
+    }
+    resetForm();
+    announce("Form reset");
+  }
 
-    if (!title.trim()) {
-      titleError = "Task title is required.";
-      announce(titleError);
+  function focusNextField(current: HTMLElement) {
+    if (!formElement) return;
+    const focusables = Array.from(
+      formElement.querySelectorAll<HTMLElement>(
+        'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [role="slider"]:not([disabled]), button:not([disabled])',
+      ),
+    ).filter((el) => el.tabIndex >= 0 && el.offsetParent !== null);
+    const idx = focusables.indexOf(current);
+    if (idx >= 0 && idx + 1 < focusables.length) {
+      focusables[idx + 1].focus();
+    }
+  }
+
+  function handleFormKeydown(e: KeyboardEvent) {
+    // Explicit global submit via Cmd+Enter (macOS) or Ctrl+Enter (Win/Linux)
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      void submitTask();
       return;
     }
 
-    if (sgdbDate.trim() && dueDate.trim() && sgdbDate.trim() > dueDate.trim()) {
-      dateError =
-        "Should Get Done By (SGDB) date must be on or before the Hard Due Date.";
-      announce(dateError);
+    // Esc resets editable state (with confirmation if dirty)
+    if (e.key === "Escape") {
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "[data-combobox-input], [data-date-field-input], [data-time-field-input]",
+        )
+      ) {
+        return;
+      }
+      e.preventDefault();
+      handleCancelOrReset();
+      return;
+    }
+
+    // Prevent bare Enter inside single-line <input> from submitting the form;
+    // advance focus to the next field instead.
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        target.tagName === "INPUT" &&
+        (target as HTMLInputElement).type !== "submit" &&
+        (target as HTMLInputElement).type !== "button" &&
+        (target as HTMLInputElement).type !== "checkbox"
+      ) {
+        e.preventDefault();
+        focusNextField(target);
+      }
+    }
+  }
+
+  async function submitTask() {
+    titleTouched = true;
+    formError = null;
+
+    const titleOk = validateTitleNow();
+    const datesOk = validateDatesNow();
+    const durOk = validateDurationNow();
+
+    if (!titleOk) {
+      announce(titleError!);
+      return;
+    }
+    if (!datesOk) {
+      announce(dateError!);
+      return;
+    }
+    if (!durOk) {
+      announce(durationError!);
       return;
     }
 
     const parsedDur = parseDurationInput(estimateInput);
-    if (parsedDur.error) {
-      durationError = parsedDur.error;
-      announce(durationError);
-      return;
-    }
 
     try {
       const attachmentsToSubmit: AttachmentInput[] = [];
@@ -255,6 +408,11 @@
       announce(`Error creating task: ${String(err)}`);
     }
   }
+
+  async function handleSubmit(e: SubmitEvent) {
+    e.preventDefault();
+    await submitTask();
+  }
 </script>
 
 <section aria-labelledby="data-entry-heading">
@@ -273,8 +431,11 @@
     </div>
   {/if}
 
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <form
+    bind:this={formElement}
     onsubmit={handleSubmit}
+    onkeydown={handleFormKeydown}
     class="card"
     style="display: flex; flex-direction: column; gap: 1.25rem;"
     novalidate
@@ -286,11 +447,15 @@
         type="text"
         bind:value={title}
         required
+        onblur={() => {
+          titleTouched = true;
+          validateTitleNow();
+        }}
         aria-invalid={titleError ? "true" : "false"}
         aria-describedby={titleError ? "entry-title-err" : undefined}
         placeholder="Concise summary of what needs to be done"
       />
-      {#if titleError}
+      {#if titleError && titleTouched}
         <span id="entry-title-err" class="field-error" role="alert">
           {titleError}
         </span>
@@ -329,6 +494,9 @@
           bind:value={sgdbDate}
           invalid={Boolean(dateError)}
           describedBy={dateError ? "entry-date-err" : undefined}
+          onBlur={() => {
+            validateDatesNow();
+          }}
         />
         {#if dateError}
           <span id="entry-date-err" class="field-error" role="alert">
@@ -343,6 +511,9 @@
           label="Hard Due Date"
           bind:value={dueDate}
           invalid={Boolean(dateError)}
+          onBlur={() => {
+            validateDatesNow();
+          }}
         />
       </div>
 
@@ -352,6 +523,9 @@
           id="entry-estimate"
           type="text"
           bind:value={estimateInput}
+          onblur={() => {
+            validateDurationNow();
+          }}
           placeholder="e.g. 30m, 2h, 1h30m, 3d"
           aria-invalid={durationError ? "true" : "false"}
           aria-describedby={durationError ? "entry-dur-err" : undefined}
@@ -363,38 +537,32 @@
         {/if}
       </div>
 
-      <div class="form-field">
-        <label for="entry-importance">Importance (1–5)</label>
-        <input
-          id="entry-importance"
-          type="number"
-          min="1"
-          max="5"
-          bind:value={importance}
-        />
-      </div>
+      <RatingSlider
+        id="entry-importance"
+        label="Importance (1–5)"
+        bind:value={importance}
+        min={1}
+        max={5}
+        step={1}
+      />
 
-      <div class="form-field">
-        <label for="entry-difficulty">Difficulty (1–5)</label>
-        <input
-          id="entry-difficulty"
-          type="number"
-          min="1"
-          max="5"
-          bind:value={difficulty}
-        />
-      </div>
+      <RatingSlider
+        id="entry-difficulty"
+        label="Difficulty (1–5)"
+        bind:value={difficulty}
+        min={1}
+        max={5}
+        step={1}
+      />
 
-      <div class="form-field">
-        <label for="entry-manual-prio">Manual Priority (-5 to +5)</label>
-        <input
-          id="entry-manual-prio"
-          type="number"
-          min="-5"
-          max="5"
-          bind:value={manualPriority}
-        />
-      </div>
+      <RatingSlider
+        id="entry-manual-prio"
+        label="Manual Priority (1–5)"
+        bind:value={manualPriority}
+        min={1}
+        max={5}
+        step={1}
+      />
 
       <div class="form-field" style="justify-content: center;">
         <div class="control-inline" style="margin-top: 1.4rem;">
@@ -565,8 +733,17 @@
     </div>
 
     <div class="actions-row">
-      <button type="submit" class="btn-primary">Create Task</button>
-      <button type="button" onclick={resetForm}>Reset Form</button>
+      <button
+        type="submit"
+        class="btn-primary"
+        title="Create Task (Cmd/Ctrl+Enter)"
+      >
+        Create Task
+      </button>
+      <button type="button" onclick={handleCancelOrReset}>Reset Form</button>
+      <span class="field-hint" style="margin-left: auto;">
+        Tip: Press Cmd/Ctrl+Enter to submit from any field
+      </span>
     </div>
   </form>
 </section>

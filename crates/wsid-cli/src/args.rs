@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand};
-use wsid_core::{FocusPreset, RelationInputKind, Result, TaskStatus, WsidError};
+use wsid_core::{FocusPreset, RelationInputKind, Result, TaskStatus, WsidError, parse_deadline_datetime};
 
 #[derive(Debug, Parser)]
 #[command(name = "wsid", version, about = "WSID (What Should I Do?) — Offline-first, accessible task manager & MCP server")]
@@ -182,11 +181,11 @@ pub struct AddArgs {
     #[arg(long)]
     pub status: Option<String>,
 
-    /// Hard due date (`YYYY-MM-DD`)
+    /// Hard due date (`YYYY-MM-DD` or ISO 8601 datetime)
     #[arg(long)]
     pub due: Option<String>,
 
-    /// "Should Get Done By" target date (`YYYY-MM-DD`, must be `<= due` when both are set)
+    /// "Should Get Done By" target date (`YYYY-MM-DD` or ISO 8601 datetime, must be `<= due` when both are set)
     #[arg(long)]
     pub sgdb: Option<String>,
 
@@ -206,7 +205,7 @@ pub struct AddArgs {
     #[arg(long, short = 'U')]
     pub urgent: bool,
 
-    /// Manual priority tie-breaker (`-5..=5`)
+    /// Manual priority rating (`1..=5`, `3` = normal)
     #[arg(long)]
     pub priority: Option<i8>,
 
@@ -416,7 +415,7 @@ pub fn format_duration_estimate(minutes: Option<i64>) -> String {
     }
 }
 
-pub fn parse_date_arg(field: &str, raw: Option<&str>) -> Result<Option<NaiveDate>> {
+pub fn parse_date_arg(field: &str, raw: Option<&str>) -> Result<Option<String>> {
     let Some(s) = raw else {
         return Ok(None);
     };
@@ -424,9 +423,8 @@ pub fn parse_date_arg(field: &str, raw: Option<&str>) -> Result<Option<NaiveDate
     if trimmed.is_empty() {
         return Ok(None);
     }
-    let date = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
-        .map_err(|_| WsidError::Validation(format!("invalid {field} '{trimmed}': expected YYYY-MM-DD")))?;
-    Ok(Some(date))
+    parse_deadline_datetime(field, trimmed)?;
+    Ok(Some(trimmed.to_string()))
 }
 
 pub fn parse_status_arg(raw: &str) -> Result<TaskStatus> {

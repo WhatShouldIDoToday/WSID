@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import AttachmentGallery from "./AttachmentGallery.svelte";
   import DateFieldPicker from "./DateFieldPicker.svelte";
+  import RatingSlider from "./RatingSlider.svelte";
   import TagChipsInput from "./TagChipsInput.svelte";
   import RelationPicker, {
     type SelectedRelationEntry,
@@ -30,6 +31,8 @@
     fileToBase64,
     parseDurationInput,
     formatDurationMinutes,
+    validateDeadlineOrder,
+    formatDeadlineDisplay,
   } from "../lib/ipc";
 
   interface DraftCommentAttachment {
@@ -66,6 +69,7 @@
   let errorMsg = $state<string | null>(null);
 
   // Inline edit state
+  let editFormElement = $state<HTMLFormElement | null>(null);
   let editingTask = $state<boolean>(false);
   let editTitle = $state<string>("");
   let editDescription = $state<string>("");
@@ -75,11 +79,16 @@
   let editDifficulty = $state<number>(3);
   let editImportance = $state<number>(3);
   let editUrgentOverride = $state<boolean>(false);
-  let editManualPriority = $state<number>(0);
+  let editManualPriority = $state<number>(3);
   let editTags = $state<string[]>([]);
   let editAssignee = $state<string>("");
   let editEvaluator = $state<string>("");
   let editReporter = $state<string>("");
+
+  let editDateError = $state<string | null>(null);
+  let editDurationError = $state<string | null>(null);
+  let editDurationTimer: ReturnType<typeof setTimeout> | null = null;
+  let editDateTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Task-level attachment state
   let newTaskAttachmentDesc = $state<string>("");
@@ -129,11 +138,157 @@
     editAssignee = d.task.assignee;
     editEvaluator = d.task.evaluator;
     editReporter = d.task.reporter;
+    editDateError = null;
+    editDurationError = null;
   }
 
   $effect(() => {
     void refreshDetail(taskId);
   });
+
+  // Debounced validation on editEstimateInput (400ms)
+  $effect(() => {
+    if (!editingTask) return;
+    const current = editEstimateInput;
+    if (editDurationTimer) clearTimeout(editDurationTimer);
+    if (!current.trim()) {
+      editDurationError = null;
+      return;
+    }
+    const check = parseDurationInput(current);
+    if (!check.error && editDurationError) {
+      editDurationError = null;
+      return;
+    }
+    editDurationTimer = setTimeout(() => {
+      const res = parseDurationInput(current);
+      editDurationError = res.error;
+    }, 400);
+    return () => {
+      if (editDurationTimer) clearTimeout(editDurationTimer);
+    };
+  });
+
+  // Debounced validation on editSgdbDate vs editDueDate (400ms)
+  $effect(() => {
+    if (!editingTask) return;
+    const s = editSgdbDate;
+    const d = editDueDate;
+    if (editDateTimer) clearTimeout(editDateTimer);
+    const immediateErr = validateDeadlineOrder(s, d);
+    if (!immediateErr && editDateError) {
+      editDateError = null;
+      return;
+    }
+    editDateTimer = setTimeout(() => {
+      editDateError = validateDeadlineOrder(s, d);
+    }, 400);
+    return () => {
+      if (editDateTimer) clearTimeout(editDateTimer);
+    };
+  });
+
+  function validateEditDurationNow(): boolean {
+    if (editDurationTimer) clearTimeout(editDurationTimer);
+    const parsed = parseDurationInput(editEstimateInput);
+    editDurationError = parsed.error;
+    return !parsed.error;
+  }
+
+  function validateEditDatesNow(): boolean {
+    if (editDateTimer) clearTimeout(editDateTimer);
+    editDateError = validateDeadlineOrder(editSgdbDate, editDueDate);
+    return !editDateError;
+  }
+
+  function isEditDirty(): boolean {
+    if (!editingTask || !detail) return false;
+    const origEst =
+      detail.task.time_estimate_minutes !== null
+        ? formatDurationMinutes(detail.task.time_estimate_minutes)
+        : "";
+    return (
+      editTitle !== detail.task.title ||
+      editDescription !== detail.task.description ||
+      editDueDate !== (detail.task.due_date ?? "") ||
+      editSgdbDate !== (detail.task.sgdb_date ?? "") ||
+      editEstimateInput !== origEst ||
+      editDifficulty !== detail.task.difficulty ||
+      editImportance !== detail.task.importance ||
+      editManualPriority !== detail.task.manual_priority ||
+      editUrgentOverride !== detail.task.urgent_override ||
+      editAssignee !== detail.task.assignee ||
+      editEvaluator !== detail.task.evaluator ||
+      editReporter !== detail.task.reporter ||
+      editTags.join(",") !== detail.task.tags.join(",")
+    );
+  }
+
+  function cancelEditingWithConfirm() {
+    if (isEditDirty()) {
+      const ok = window.confirm("Discard unsaved changes?");
+      if (!ok) return;
+    }
+    if (detail) syncEditFields(detail);
+    editingTask = false;
+  }
+
+  function requestCloseDrawer() {
+    if (editingTask && isEditDirty()) {
+      const ok = window.confirm("Discard unsaved changes and close?");
+      if (!ok) return;
+    }
+    onClose();
+  }
+
+  function focusNextEditField(current: HTMLElement) {
+    if (!editFormElement) return;
+    const focusables = Array.from(
+      editFormElement.querySelectorAll<HTMLElement>(
+        'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [role="slider"]:not([disabled]), button:not([disabled])',
+      ),
+    ).filter((el) => el.tabIndex >= 0 && el.offsetParent !== null);
+    const idx = focusables.indexOf(current);
+    if (idx >= 0 && idx + 1 < focusables.length) {
+      focusables[idx + 1].focus();
+    }
+  }
+
+  function handleEditFormKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      void saveEdits();
+      return;
+    }
+    if (e.key === "Escape") {
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "[data-combobox-input], [data-date-field-input], [data-time-field-input]",
+        )
+      ) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      cancelEditingWithConfirm();
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        target.tagName === "INPUT" &&
+        (target as HTMLInputElement).type !== "submit" &&
+        (target as HTMLInputElement).type !== "button" &&
+        (target as HTMLInputElement).type !== "checkbox"
+      ) {
+        e.preventDefault();
+        focusNextEditField(target);
+      }
+    }
+  }
 
   onMount(() => {
     drawerElement?.focus();
@@ -167,28 +322,29 @@
     }
   }
 
-  async function handleSaveEdits(e: SubmitEvent) {
-    e.preventDefault();
+  async function saveEdits() {
     if (!detail) return;
     errorMsg = null;
 
-    if (
-      editSgdbDate.trim() &&
-      editDueDate.trim() &&
-      editSgdbDate.trim() > editDueDate.trim()
-    ) {
-      errorMsg =
-        "Should Get Done By (SGDB) date must be on or before Due Date.";
+    if (!editTitle.trim()) {
+      errorMsg = "Task title cannot be empty.";
       announce(errorMsg);
+      return;
+    }
+
+    if (!validateEditDatesNow()) {
+      errorMsg = editDateError;
+      if (errorMsg) announce(errorMsg);
+      return;
+    }
+
+    if (!validateEditDurationNow()) {
+      errorMsg = editDurationError;
+      if (errorMsg) announce(errorMsg);
       return;
     }
 
     const parsedDur = parseDurationInput(editEstimateInput);
-    if (parsedDur.error) {
-      errorMsg = parsedDur.error;
-      announce(errorMsg);
-      return;
-    }
 
     try {
       await updateExistingTask({
@@ -215,6 +371,11 @@
       errorMsg = String(err);
       announce(`Error saving task: ${String(err)}`);
     }
+  }
+
+  async function handleSaveEdits(e: SubmitEvent) {
+    e.preventDefault();
+    await saveEdits();
   }
 
   async function handleDeleteTask() {
@@ -378,8 +539,7 @@
     }
   }
 
-  async function handlePostComment(e: SubmitEvent) {
-    e.preventDefault();
+  async function postComment() {
     if (!detail || !commentBody.trim()) return;
     errorMsg = null;
     try {
@@ -428,6 +588,11 @@
     }
   }
 
+  async function handlePostComment(e: SubmitEvent) {
+    e.preventDefault();
+    await postComment();
+  }
+
   async function handleDeleteNote(noteId: number) {
     if (!detail) return;
     try {
@@ -445,7 +610,7 @@
   class="modal-backdrop"
   role="presentation"
   onclick={(e) => {
-    if (e.target === e.currentTarget) onClose();
+    if (e.target === e.currentTarget) requestCloseDrawer();
   }}
 >
   <div
@@ -456,7 +621,17 @@
     aria-labelledby="drawer-task-title"
     tabindex="-1"
     onkeydown={(e) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        const target = e.target as HTMLElement | null;
+        if (
+          target?.closest(
+            "[data-combobox-input], [data-date-field-input], [data-time-field-input]",
+          )
+        ) {
+          return;
+        }
+        requestCloseDrawer();
+      }
     }}
   >
     {#if loading && !detail}
@@ -483,7 +658,13 @@
           <button
             type="button"
             class="btn-sm"
-            onclick={() => (editingTask = !editingTask)}
+            onclick={() => {
+              if (editingTask) {
+                cancelEditingWithConfirm();
+              } else {
+                editingTask = true;
+              }
+            }}
           >
             {editingTask ? "Cancel Edit" : "Edit Fields"}
           </button>
@@ -496,7 +677,7 @@
           </button>
           <button
             type="button"
-            onclick={onClose}
+            onclick={requestCloseDrawer}
             aria-label="Close task detail drawer"
           >
             Close (Esc)
@@ -550,10 +731,14 @@
       </section>
 
       {#if editingTask}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <form
+          bind:this={editFormElement}
           onsubmit={handleSaveEdits}
+          onkeydown={handleEditFormKeydown}
           class="card"
           style="display: flex; flex-direction: column; gap: 0.85rem;"
+          novalidate
         >
           <h3 style="margin: 0; font-size: 1.05rem;">Edit Task Fields</h3>
           <div class="form-field">
@@ -573,50 +758,84 @@
           </div>
 
           <div class="form-grid">
-            <DateFieldPicker
-              id="edit-sgdb"
-              label="Should Get Done By (SGDB Date)"
-              bind:value={editSgdbDate}
-            />
-            <DateFieldPicker
-              id="edit-due"
-              label="Hard Due Date"
-              bind:value={editDueDate}
-            />
+            <div>
+              <DateFieldPicker
+                id="edit-sgdb"
+                label="Should Get Done By (SGDB Date)"
+                bind:value={editSgdbDate}
+                invalid={Boolean(editDateError)}
+                describedBy={editDateError ? "edit-date-err" : undefined}
+                onBlur={() => {
+                  validateEditDatesNow();
+                }}
+              />
+              {#if editDateError}
+                <span id="edit-date-err" class="field-error" role="alert">
+                  {editDateError}
+                </span>
+              {/if}
+            </div>
+
+            <div>
+              <DateFieldPicker
+                id="edit-due"
+                label="Hard Due Date"
+                bind:value={editDueDate}
+                invalid={Boolean(editDateError)}
+                onBlur={() => {
+                  validateEditDatesNow();
+                }}
+              />
+            </div>
+
             <div class="form-field">
               <label for="edit-est">Time Estimate (e.g. 45m, 2h, 1d)</label>
-              <input id="edit-est" type="text" bind:value={editEstimateInput} />
-            </div>
-            <div class="form-field">
-              <label for="edit-imp">Importance (1–5)</label>
               <input
-                id="edit-imp"
-                type="number"
-                min="1"
-                max="5"
-                bind:value={editImportance}
+                id="edit-est"
+                type="text"
+                bind:value={editEstimateInput}
+                onblur={() => {
+                  validateEditDurationNow();
+                }}
+                aria-invalid={editDurationError ? "true" : "false"}
+                aria-describedby={editDurationError
+                  ? "edit-dur-err"
+                  : undefined}
               />
+              {#if editDurationError}
+                <span id="edit-dur-err" class="field-error" role="alert">
+                  {editDurationError}
+                </span>
+              {/if}
             </div>
-            <div class="form-field">
-              <label for="edit-diff">Difficulty (1–5)</label>
-              <input
-                id="edit-diff"
-                type="number"
-                min="1"
-                max="5"
-                bind:value={editDifficulty}
-              />
-            </div>
-            <div class="form-field">
-              <label for="edit-prio">Manual Priority (-5 to +5)</label>
-              <input
-                id="edit-prio"
-                type="number"
-                min="-5"
-                max="5"
-                bind:value={editManualPriority}
-              />
-            </div>
+
+            <RatingSlider
+              id="edit-imp"
+              label="Importance (1–5)"
+              bind:value={editImportance}
+              min={1}
+              max={5}
+              step={1}
+            />
+
+            <RatingSlider
+              id="edit-diff"
+              label="Difficulty (1–5)"
+              bind:value={editDifficulty}
+              min={1}
+              max={5}
+              step={1}
+            />
+
+            <RatingSlider
+              id="edit-prio"
+              label="Manual Priority (1–5)"
+              bind:value={editManualPriority}
+              min={1}
+              max={5}
+              step={1}
+            />
+
             <div class="form-field">
               <label for="edit-assignee">Assignee</label>
               <input id="edit-assignee" type="text" bind:value={editAssignee} />
@@ -647,8 +866,14 @@
           </div>
 
           <div class="actions-row">
-            <button type="submit" class="btn-primary">Save Changes</button>
-            <button type="button" onclick={() => (editingTask = false)}>
+            <button
+              type="submit"
+              class="btn-primary"
+              title="Save Changes (Cmd/Ctrl+Enter)"
+            >
+              Save Changes
+            </button>
+            <button type="button" onclick={cancelEditingWithConfirm}>
               Cancel
             </button>
           </div>
@@ -665,15 +890,25 @@
             <span
               >· <strong>Difficulty:</strong> {detail.task.difficulty}/5</span
             >
+            <span
+              >· <strong>Priority:</strong>
+              {detail.task.manual_priority}/5</span
+            >
             <span>
               · <strong>Estimate:</strong>
               {formatDurationMinutes(detail.task.time_estimate_minutes)}
             </span>
             {#if detail.task.sgdb_date}
-              <span>· <strong>SGDB:</strong> {detail.task.sgdb_date}</span>
+              <span>
+                · <strong>SGDB:</strong>
+                {formatDeadlineDisplay(detail.task.sgdb_date)}
+              </span>
             {/if}
             {#if detail.task.due_date}
-              <span>· <strong>Due:</strong> {detail.task.due_date}</span>
+              <span>
+                · <strong>Due:</strong>
+                {formatDeadlineDisplay(detail.task.due_date)}
+              </span>
             {/if}
           </div>
 
@@ -995,8 +1230,22 @@
           </div>
         {/if}
 
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <form
           onsubmit={handlePostComment}
+          onkeydown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              e.stopPropagation();
+              void postComment();
+            } else if (
+              e.key === "Enter" &&
+              (e.target as HTMLElement | null)?.tagName === "INPUT" &&
+              (e.target as HTMLInputElement).type === "text"
+            ) {
+              e.preventDefault();
+            }
+          }}
           style="display: flex; flex-direction: column; gap: 0.65rem;"
         >
           <div class="form-field">
@@ -1073,7 +1322,13 @@
               </label>
             </div>
 
-            <button type="submit" class="btn-primary">Post Comment</button>
+            <button
+              type="submit"
+              class="btn-primary"
+              title="Post Comment (Cmd/Ctrl+Enter)"
+            >
+              Post Comment
+            </button>
           </div>
         </form>
       </section>

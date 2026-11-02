@@ -339,6 +339,51 @@ export function formatDurationMinutes(minutes: number | null): string {
   return `${mins}m`;
 }
 
+export function parseDeadlineToEpochMs(
+  raw: string | null | undefined,
+): number | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const dt = new Date(`${s}T20:00:00`);
+    return Number.isNaN(dt.getTime()) ? null : dt.getTime();
+  }
+  const dt = new Date(s);
+  return Number.isNaN(dt.getTime()) ? null : dt.getTime();
+}
+
+export function validateDeadlineOrder(
+  sgdbDate: string | null | undefined,
+  dueDate: string | null | undefined,
+): string | null {
+  const sgdbMs = parseDeadlineToEpochMs(sgdbDate);
+  const dueMs = parseDeadlineToEpochMs(dueDate);
+  if (sgdbMs !== null && dueMs !== null && sgdbMs > dueMs) {
+    return "Should Get Done By (SGDB) date/time must be on or before the Hard Due Date.";
+  }
+  return null;
+}
+
+export function formatDeadlineDisplay(raw: string | null | undefined): string {
+  if (!raw) return "—";
+  const s = raw.trim();
+  if (!s) return "—";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return s;
+  }
+  const dt = new Date(s);
+  if (Number.isNaN(dt.getTime())) {
+    return s;
+  }
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const min = String(dt.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
 export async function getSessionState(): Promise<AppSessionSnapshot> {
   return invoke<AppSessionSnapshot>("get_session_state");
 }

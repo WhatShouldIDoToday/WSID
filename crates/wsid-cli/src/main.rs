@@ -250,48 +250,71 @@ mod tests {
 
         // 1. Focus View
         assert_eq!(app.active_tab, ActiveTab::Focus);
-        terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
 
         // Open Detail Modal on selected task with Enter, then close with Esc
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.detail_modal.is_some());
-        terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.detail_modal.is_none());
 
         // 2. Switch to Kanban View ('2')
         app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
         assert_eq!(app.active_tab, ActiveTab::Kanban);
-        terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
 
         // 3. Switch to Eisenhower View ('3')
         app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
         assert_eq!(app.active_tab, ActiveTab::Eisenhower);
-        terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
 
         // 4. Switch to Database Search View ('4')
         app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
         assert_eq!(app.active_tab, ActiveTab::Database);
-        terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
 
         // 5. Switch to Data Entry View ('5')
         app.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
         assert_eq!(app.active_tab, ActiveTab::DataEntry);
-        terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
 
         // Toggle accessible mode ('a' back in Focus view)
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         assert!(app.accessible_mode);
-        terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        for cell in terminal.backend().buffer().content() {
+            assert!(
+                !matches!(cell.symbol(), "╭" | "╮" | "╰" | "╯" | "┌" | "┐" | "└" | "┘" | "─"),
+                "unexpected box-drawing symbol '{}' in accessible mode",
+                cell.symbol()
+            );
+        }
 
         // Open About & Third-Party Licenses modal ('?'), scroll ('j'), and close ('Esc')
         app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
         assert!(app.about_modal_open);
         app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert_eq!(app.about_scroll, 1);
-        terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.about_modal_open);
 
