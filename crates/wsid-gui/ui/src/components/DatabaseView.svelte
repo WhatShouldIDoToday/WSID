@@ -79,9 +79,7 @@
     }
   }
 
-  function ariaSortFor(
-    col: SortCol,
-  ): "ascending" | "descending" | "none" {
+  function ariaSortFor(col: SortCol): "ascending" | "descending" | "none" {
     if (sortCol !== col) return "none";
     return sortAsc ? "ascending" : "descending";
   }
@@ -130,9 +128,11 @@
     <h2 id="database-view-heading" style="margin: 0; font-size: 1.35rem;">
       Full Database & Fuzzy Search
     </h2>
-    <p style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;">
-      Hybrid SQLite FTS5 trigram + Nucleo fuzzy matcher with typo tolerance across
-      short IDs, titles, descriptions, tags, and personas.
+    <p
+      style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;"
+    >
+      Hybrid SQLite FTS5 trigram + Nucleo fuzzy matcher with typo tolerance
+      across short IDs, titles, descriptions, tags, and personas.
     </p>
   </div>
 
@@ -183,7 +183,9 @@
     </div>
   </div>
 
-  <div style="margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--text-secondary);">
+  <div
+    style="margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--text-secondary);"
+  >
     Showing <strong>{sortedHits.length}</strong> matching task(s).
   </div>
 
@@ -262,7 +264,10 @@
       <tbody>
         {#if sortedHits.length === 0}
           <tr>
-            <td colspan="10" style="text-align: center; padding: 1.5rem; color: var(--text-muted);">
+            <td
+              colspan="10"
+              style="text-align: center; padding: 1.5rem; color: var(--text-muted);"
+            >
               No tasks match the current search and filters.
             </td>
           </tr>
@@ -275,7 +280,10 @@
               <td>
                 <strong>{hit.task.title}</strong>
                 {#if hit.task.urgent_override}
-                  <span class="badge badge-urgent" style="margin-left: 0.35rem;">
+                  <span
+                    class="badge badge-urgent"
+                    style="margin-left: 0.35rem;"
+                  >
                     Urgent
                   </span>
                 {/if}

@@ -55,8 +55,12 @@
         Focus Queue ("What Should I Do?")
       </h2>
       {#if focusData}
-        <p style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.9rem;">
-          Showing top actionable unblocked tasks for <strong>@{focusData.persona}</strong>
+        <p
+          style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.9rem;"
+        >
+          Showing top actionable unblocked tasks for <strong
+            >@{focusData.persona}</strong
+          >
           under preset <strong>{PRESET_LABELS[focusData.preset]}</strong>.
         </p>
       {/if}
@@ -89,7 +93,8 @@
       <p style="margin: 0; color: var(--text-secondary);">
         @{focusData.persona} currently has no unblocked To Do or In Progress tasks.
         {#if focusData.blocked_summary.length > 0}
-          See the Blocked Tasks & Review Queue summary below for what you are waiting on.
+          See the Blocked Tasks & Review Queue summary below for what you are
+          waiting on.
         {/if}
       </p>
     </div>
@@ -100,16 +105,23 @@
     >
       {#each focusData.actionable_tasks as item, idx (item.task.id)}
         <li>
-          <article class="task-card" aria-labelledby={`focus-title-${item.task.id}`}>
+          <article
+            class="task-card"
+            aria-labelledby={`focus-title-${item.task.id}`}
+          >
             <div class="task-card-header">
               <div>
                 <div class="meta-row" style="margin-bottom: 0.3rem;">
-                  <span class="badge" style="background: var(--accent-primary); color: var(--accent-text-dark); font-weight: 800;">
+                  <span
+                    class="badge"
+                    style="background: var(--accent-primary); color: var(--accent-text-dark); font-weight: 800;"
+                  >
                     #{idx + 1} · Score {item.breakdown.total_score.toFixed(1)}
                   </span>
                   <span class="task-id-badge">{item.task.id}</span>
                   <span class="badge">{STATUS_LABELS[item.task.status]}</span>
-                  <span class="badge">{QUADRANT_META[item.quadrant].badge}</span>
+                  <span class="badge">{QUADRANT_META[item.quadrant].badge}</span
+                  >
                   {#if item.task.urgent_override}
                     <span class="badge badge-urgent">Urgent</span>
                   {/if}
@@ -119,7 +131,10 @@
                     </span>
                   {/if}
                 </div>
-                <h3 id={`focus-title-${item.task.id}`} style="margin: 0; font-size: 1.1rem;">
+                <h3
+                  id={`focus-title-${item.task.id}`}
+                  style="margin: 0; font-size: 1.1rem;"
+                >
                   {item.task.title}
                 </h3>
               </div>
@@ -129,7 +144,8 @@
                   <button
                     type="button"
                     class="btn-sm"
-                    onclick={() => handleQuickStatus(item.task.id, "in_progress")}
+                    onclick={() =>
+                      handleQuickStatus(item.task.id, "in_progress")}
                   >
                     Start Work
                   </button>
@@ -156,10 +172,16 @@
 
             <div class="meta-row">
               <span>Importance: <strong>{item.task.importance}/5</strong></span>
-              <span>· Difficulty: <strong>{item.task.difficulty}/5</strong></span>
+              <span
+                >· Difficulty: <strong>{item.task.difficulty}/5</strong></span
+              >
               <span>
                 · Estimate:
-                <strong>{formatDurationMinutes(item.task.time_estimate_minutes)}</strong>
+                <strong
+                  >{formatDurationMinutes(
+                    item.task.time_estimate_minutes,
+                  )}</strong
+                >
               </span>
               {#if item.breakdown.effective_deadline}
                 <span>
@@ -172,7 +194,8 @@
               {/if}
               {#if item.breakdown.unblocks_count > 0}
                 <span>
-                  · Unblocks <strong>{item.breakdown.unblocks_count}</strong> downstream task(s)
+                  · Unblocks <strong>{item.breakdown.unblocks_count}</strong> downstream
+                  task(s)
                 </span>
               {/if}
             </div>
@@ -192,13 +215,18 @@
 
   <!-- Blocked Summary & Detailed Blocked Queue -->
   <section class="card" aria-labelledby="blocked-summary-heading">
-    <h3 id="blocked-summary-heading" style="margin: 0 0 0.65rem 0; font-size: 1.08rem;">
+    <h3
+      id="blocked-summary-heading"
+      style="margin: 0 0 0.65rem 0; font-size: 1.08rem;"
+    >
       Blocked Tasks & Situational Awareness ({blockedTasks.length})
     </h3>
 
     {#if focusData && focusData.blocked_summary.length > 0}
       <div style="margin-bottom: 0.85rem;">
-        <p style="margin: 0 0 0.4rem 0; font-size: 0.88rem; color: var(--text-secondary);">
+        <p
+          style="margin: 0 0 0.4rem 0; font-size: 0.88rem; color: var(--text-secondary);"
+        >
           Grouped summary by project/tag and who is holding the blocker:
         </p>
         <ul style="margin: 0; padding-left: 1.2rem; font-size: 0.9rem;">
@@ -231,7 +259,9 @@
                 {STATUS_LABELS[bt.status]}
               </span>
               {#if bt.blocked_by.length > 0}
-                <div style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                <div
+                  style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.25rem;"
+                >
                   Waiting on:
                   {#each bt.blocked_by as b, i}
                     {i > 0 ? ", " : ""}

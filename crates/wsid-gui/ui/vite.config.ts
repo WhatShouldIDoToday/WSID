@@ -10,7 +10,10 @@ export default defineConfig({
       thirdParty: {
         multipleVersions: true,
         output: {
-          file: path.resolve(__dirname, "src/lib/generated-frontend-licenses.json"),
+          file: path.resolve(
+            __dirname,
+            "src/lib/generated-frontend-licenses.json",
+          ),
           template(dependencies) {
             const mapped = dependencies.map((dep) => {
               const repo =
@@ -18,7 +21,7 @@ export default defineConfig({
                   ? dep.repository
                   : dep.repository && typeof dep.repository === "object"
                     ? dep.repository.url
-                    : dep.homepage ?? null;
+                    : (dep.homepage ?? null);
               return {
                 name: dep.name ?? "unknown",
                 version: dep.version ?? "unknown",

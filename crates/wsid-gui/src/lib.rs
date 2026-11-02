@@ -762,6 +762,10 @@ pub fn spawn_db_change_watcher(app_handle: AppHandle, state: SharedGuiState) {
     });
 }
 
+fn tauri_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 pub fn run() {
     let shared_state: SharedGuiState = Arc::new(Mutex::new(GuiAppState::initialize()));
 
@@ -802,7 +806,7 @@ pub fn run() {
             read_attachment_preview_data_url,
             get_about_info,
         ])
-        .run(tauri::generate_context!())
+        .run(tauri_context())
         .expect("error while running WSID desktop application");
 }
 
@@ -867,5 +871,22 @@ mod tests {
         assert_eq!(about.license_spdx, "Apache-2.0");
         assert_eq!(about.repository_url, "https://github.com/dmbeta/WSID");
         assert!(!about.rust_licenses.licenses.is_empty());
+    }
+
+    #[test]
+    fn tauri_context_embeds_valid_window_icon_and_frontend_assets() {
+        let context = tauri_context();
+
+        let icon = context
+            .default_window_icon()
+            .expect("default_window_icon should be embedded");
+        assert!(icon.width() > 0 && icon.height() > 0);
+        assert_eq!(icon.rgba().len(), (icon.width() * icon.height() * 4) as usize, "icon RGBA byte length must match width * height * 4");
+
+        let index_html = context
+            .assets()
+            .get(&"/index.html".into())
+            .expect("/index.html must be embedded in Tauri context assets");
+        assert!(!index_html.is_empty());
     }
 }

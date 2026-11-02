@@ -1,0 +1,2 @@
+[fmt]
+ignorePatterns = ["src/lib/generated-frontend-licenses.json"]

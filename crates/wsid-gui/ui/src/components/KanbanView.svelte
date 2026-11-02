@@ -61,7 +61,9 @@
       <h2 id="kanban-view-heading" style="margin: 0; font-size: 1.35rem;">
         Kanban Board
       </h2>
-      <p style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;">
+      <p
+        style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;"
+      >
         Every card includes a keyboard-accessible "Move to column" selector so
         moving tasks never requires pointer drag-and-drop.
       </p>
@@ -130,7 +132,9 @@
                       <span class="badge badge-urgent">Urgent</span>
                     {/if}
                     {#if task.attachments.length > 0}
-                      <span class="badge">{task.attachments.length} file(s)</span>
+                      <span class="badge"
+                        >{task.attachments.length} file(s)</span
+                      >
                     {/if}
                   </div>
 

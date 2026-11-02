@@ -2,26 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type TaskStatus =
-  | "backlog"
-  | "todo"
-  | "in_progress"
-  | "in_review"
-  | "stuck"
-  | "completed";
+  "backlog" | "todo" | "in_progress" | "in_review" | "stuck" | "completed";
 
 export type OriginKind = "manual" | "mention" | "takenote" | "review";
 
 export type FocusPreset =
-  | "balanced"
-  | "quick_wins"
-  | "eat_the_frog"
-  | "unblock_others";
+  "balanced" | "quick_wins" | "eat_the_frog" | "unblock_others";
 
 export type EisenhowerQuadrant =
-  | "q1_do_first"
-  | "q2_schedule"
-  | "q3_delegate_quick"
-  | "q4_later";
+  "q1_do_first" | "q2_schedule" | "q3_delegate_quick" | "q4_later";
 
 export type RelationInputKind =
   | "blocks"
@@ -644,7 +633,8 @@ export function fileToBase64(file: Blob): Promise<string> {
         reject(new Error("Failed to read file as base64 string"));
       }
     };
-    reader.onerror = () => reject(reader.error ?? new Error("FileReader error"));
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("FileReader error"));
     reader.readAsDataURL(file);
   });
 }

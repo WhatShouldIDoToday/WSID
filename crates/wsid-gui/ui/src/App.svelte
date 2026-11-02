@@ -217,11 +217,7 @@
         </button>
 
         {#if !session.is_global_db}
-          <button
-            type="button"
-            class="btn-sm"
-            onclick={handleSwitchToGlobalDb}
-          >
+          <button type="button" class="btn-sm" onclick={handleSwitchToGlobalDb}>
             Switch to Global DB
           </button>
         {/if}

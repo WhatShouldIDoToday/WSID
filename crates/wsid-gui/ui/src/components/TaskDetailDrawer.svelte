@@ -261,7 +261,9 @@
             description: newTaskAttachmentDesc.trim() || null,
           });
         }
-        announce(`Attached ${file.name || "clipboard image"} to ${detail.task.id}`);
+        announce(
+          `Attached ${file.name || "clipboard image"} to ${detail.task.id}`,
+        );
       } catch (err) {
         errorMsg = String(err);
         announce(`Failed to attach file: ${String(err)}`);
@@ -350,7 +352,8 @@
           ...pendingCommentAttachments,
           {
             path: savedPath,
-            description: pendingCommentDesc.trim() || file.name || "Pasted image",
+            description:
+              pendingCommentDesc.trim() || file.name || "Pasted image",
           },
         ];
         announce(`Pasted image staged for comment`);
@@ -470,7 +473,11 @@
       {#if errorMsg}
         <div class="banner-alert" role="alert">
           <span>{errorMsg}</span>
-          <button type="button" class="btn-sm" onclick={() => (errorMsg = null)}>
+          <button
+            type="button"
+            class="btn-sm"
+            onclick={() => (errorMsg = null)}
+          >
             Dismiss
           </button>
         </div>
@@ -509,16 +516,26 @@
       </section>
 
       {#if editingTask}
-        <form onsubmit={handleSaveEdits} class="card" style="display: flex; flex-direction: column; gap: 0.85rem;">
+        <form
+          onsubmit={handleSaveEdits}
+          class="card"
+          style="display: flex; flex-direction: column; gap: 0.85rem;"
+        >
           <h3 style="margin: 0; font-size: 1.05rem;">Edit Task Fields</h3>
           <div class="form-field">
             <label for="edit-title">Title *</label>
-            <input id="edit-title" type="text" bind:value={editTitle} required />
+            <input
+              id="edit-title"
+              type="text"
+              bind:value={editTitle}
+              required
+            />
           </div>
 
           <div class="form-field">
             <label for="edit-desc">Description</label>
-            <textarea id="edit-desc" rows="4" bind:value={editDescription}></textarea>
+            <textarea id="edit-desc" rows="4" bind:value={editDescription}
+            ></textarea>
           </div>
 
           <div class="form-grid">
@@ -570,7 +587,11 @@
             </div>
             <div class="form-field">
               <label for="edit-evaluator">Evaluator</label>
-              <input id="edit-evaluator" type="text" bind:value={editEvaluator} />
+              <input
+                id="edit-evaluator"
+                type="text"
+                bind:value={editEvaluator}
+              />
             </div>
             <div class="form-field">
               <label for="edit-reporter">Reporter</label>
@@ -579,7 +600,9 @@
           </div>
 
           <div class="form-field">
-            <label for="edit-tags">Tags (single-word tokens, comma or space separated)</label>
+            <label for="edit-tags"
+              >Tags (single-word tokens, comma or space separated)</label
+            >
             <input id="edit-tags" type="text" bind:value={editTagsInput} />
           </div>
 
@@ -605,8 +628,12 @@
             <span><strong>Assignee:</strong> @{detail.task.assignee}</span>
             <span>· <strong>Evaluator:</strong> @{detail.task.evaluator}</span>
             <span>· <strong>Reporter:</strong> @{detail.task.reporter}</span>
-            <span>· <strong>Importance:</strong> {detail.task.importance}/5</span>
-            <span>· <strong>Difficulty:</strong> {detail.task.difficulty}/5</span>
+            <span
+              >· <strong>Importance:</strong> {detail.task.importance}/5</span
+            >
+            <span
+              >· <strong>Difficulty:</strong> {detail.task.difficulty}/5</span
+            >
             <span>
               · <strong>Estimate:</strong>
               {formatDurationMinutes(detail.task.time_estimate_minutes)}
@@ -635,7 +662,10 @@
 
       <!-- Task-Level Attachments -->
       <section class="card" aria-labelledby="drawer-attachments-heading">
-        <h3 id="drawer-attachments-heading" style="margin: 0 0 0.75rem 0; font-size: 1.02rem;">
+        <h3
+          id="drawer-attachments-heading"
+          style="margin: 0 0 0.75rem 0; font-size: 1.02rem;"
+        >
           Task Attachments ({detail.task.attachments.length})
         </h3>
 
@@ -701,11 +731,16 @@
 
       <!-- Task Relations & Blocker Cleanup -->
       <section class="card" aria-labelledby="drawer-relations-heading">
-        <h3 id="drawer-relations-heading" style="margin: 0 0 0.75rem 0; font-size: 1.02rem;">
+        <h3
+          id="drawer-relations-heading"
+          style="margin: 0 0 0.75rem 0; font-size: 1.02rem;"
+        >
           Task Dependencies & Graph Links
         </h3>
 
-        <div style="display: flex; flex-direction: column; gap: 0.65rem; margin-bottom: 0.85rem;">
+        <div
+          style="display: flex; flex-direction: column; gap: 0.65rem; margin-bottom: 0.85rem;"
+        >
           {#if detail.blockers.length > 0}
             <div>
               <strong>Blocked By ({detail.blockers.length}):</strong>
@@ -866,7 +901,11 @@
 
         <form onsubmit={handleAddRelation} class="actions-row">
           <label for="rel-kind-select" class="sr-only">Relation Type</label>
-          <select id="rel-kind-select" bind:value={newRelKind} style="width: auto;">
+          <select
+            id="rel-kind-select"
+            bind:value={newRelKind}
+            style="width: auto;"
+          >
             <option value="blocks">Blocks</option>
             <option value="blocked_by">Blocked By</option>
             <option value="sub_task_of">Sub-task Of</option>
@@ -889,18 +928,23 @@
 
       <!-- Notes & Comment Mention Thread -->
       <section class="card" aria-labelledby="drawer-notes-heading">
-        <h3 id="drawer-notes-heading" style="margin: 0 0 0.75rem 0; font-size: 1.02rem;">
+        <h3
+          id="drawer-notes-heading"
+          style="margin: 0 0 0.75rem 0; font-size: 1.02rem;"
+        >
           Comments & Review Thread ({detail.notes.length})
         </h3>
 
         {#if detail.notes.length === 0}
           <p class="field-hint">
-            No comments yet. Mention <code>@persona</code> to spawn an urgent blocking
-            subtask, <code>@takenote:persona</code> for a non-blocking related note,
-            or <code>#AB1234</code> to cross-link another task.
+            No comments yet. Mention <code>@persona</code> to spawn an urgent
+            blocking subtask, <code>@takenote:persona</code> for a non-blocking
+            related note, or <code>#AB1234</code> to cross-link another task.
           </p>
         {:else}
-          <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem;">
+          <div
+            style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem;"
+          >
             {#each detail.notes as note (note.id)}
               <article
                 style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 0.5rem; padding: 0.75rem;"
@@ -908,7 +952,9 @@
                 <div
                   style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;"
                 >
-                  <span style="font-size: 0.84rem; color: var(--text-secondary);">
+                  <span
+                    style="font-size: 0.84rem; color: var(--text-secondary);"
+                  >
                     <strong>@{note.author}</strong> · {note.created_at}
                   </span>
                   <button
@@ -938,7 +984,10 @@
           </div>
         {/if}
 
-        <form onsubmit={handlePostComment} style="display: flex; flex-direction: column; gap: 0.65rem;">
+        <form
+          onsubmit={handlePostComment}
+          style="display: flex; flex-direction: column; gap: 0.65rem;"
+        >
           <div class="form-field">
             <label for="new-comment-body">
               Add Comment (as @{activePersona})
@@ -964,9 +1013,8 @@
                     type="button"
                     class="btn-sm btn-danger"
                     onclick={() => {
-                      pendingCommentAttachments = pendingCommentAttachments.filter(
-                        (_, i) => i !== idx,
-                      );
+                      pendingCommentAttachments =
+                        pendingCommentAttachments.filter((_, i) => i !== idx);
                     }}
                   >
                     Remove
@@ -993,7 +1041,9 @@
               >
                 Attach File to Comment...
               </button>
-              <label style="display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem;">
+              <label
+                style="display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem;"
+              >
                 <input type="checkbox" bind:checked={commentSpawnSubtasks} />
                 Auto-spawn @mention subtasks
               </label>

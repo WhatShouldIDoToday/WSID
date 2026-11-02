@@ -20,13 +20,8 @@
     announce: (msg: string) => void;
   }
 
-  let {
-    activePersona,
-    knownPersonas,
-    knownTags,
-    onCreated,
-    announce,
-  }: Props = $props();
+  let { activePersona, knownPersonas, knownTags, onCreated, announce }: Props =
+    $props();
 
   let title = $state<string>("");
   let description = $state<string>("");
@@ -169,11 +164,7 @@
       return;
     }
 
-    if (
-      sgdbDate.trim() &&
-      dueDate.trim() &&
-      sgdbDate.trim() > dueDate.trim()
-    ) {
+    if (sgdbDate.trim() && dueDate.trim() && sgdbDate.trim() > dueDate.trim()) {
       dateError =
         "Should Get Done By (SGDB) date must be on or before the Hard Due Date.";
       announce(dateError);
@@ -245,9 +236,11 @@
     <h2 id="data-entry-heading" style="margin: 0; font-size: 1.35rem;">
       Task Data Entry
     </h2>
-    <p style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;">
-      Create a task with full scheduling metadata, roles, graph dependencies, and
-      file/image attachments.
+    <p
+      style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;"
+    >
+      Create a task with full scheduling metadata, roles, graph dependencies,
+      and file/image attachments.
     </p>
   </div>
 
@@ -319,7 +312,8 @@
           aria-describedby="entry-date-hint"
         />
         <span id="entry-date-hint" class="field-hint">
-          Target internal completion date (must be &le; Due Date if both are set).
+          Target internal completion date (must be &le; Due Date if both are
+          set).
         </span>
         {#if dateError}
           <span class="field-error" role="alert">{dateError}</span>
@@ -432,7 +426,8 @@
           bind:value={evaluator}
         />
         <span class="field-hint">
-          If Assignee &ne; Evaluator, completing this task moves it to In Review.
+          If Assignee &ne; Evaluator, completing this task moves it to In
+          Review.
         </span>
       </div>
     </div>
@@ -568,11 +563,7 @@
             />
           </div>
           <div class="actions-row">
-            <button
-              type="button"
-              class="btn-sm"
-              onclick={handlePickAttachment}
-            >
+            <button type="button" class="btn-sm" onclick={handlePickAttachment}>
               Choose File from Disk...
             </button>
             <span class="field-hint">
@@ -583,7 +574,9 @@
       </div>
 
       {#if pendingAttachments.length > 0}
-        <ul style="margin: 0.75rem 0 0 0; padding-left: 1.2rem; font-size: 0.88rem;">
+        <ul
+          style="margin: 0.75rem 0 0 0; padding-left: 1.2rem; font-size: 0.88rem;"
+        >
           {#each pendingAttachments as att, idx}
             <li style="margin-bottom: 0.3rem;">
               <code>{att.path}</code>

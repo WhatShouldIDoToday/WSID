@@ -110,13 +110,19 @@
           </div>
         {/if}
 
-        <figcaption style="display: flex; flex-direction: column; gap: 0.35rem;">
+        <figcaption
+          style="display: flex; flex-direction: column; gap: 0.35rem;"
+        >
           <div style="font-size: 0.85rem; font-weight: 600;">
-            Alt / Description: <span style="font-weight: 400;">{getAltText(att)}</span>
+            Alt / Description: <span style="font-weight: 400;"
+              >{getAltText(att)}</span
+            >
           </div>
 
           <div style="font-size: 0.78rem; color: var(--text-secondary);">
-            Disk location ({att.is_managed ? "Managed app-data copy" : "External file"}):
+            Disk location ({att.is_managed
+              ? "Managed app-data copy"
+              : "External file"}):
             <button
               type="button"
               class="attachment-disk-path"
@@ -128,7 +134,9 @@
           </div>
 
           {#if editingId === att.id}
-            <div style="display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.25rem;">
+            <div
+              style="display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.25rem;"
+            >
               <label for={`att-desc-${att.id}`} class="sr-only">
                 Alt text description for {att.file_name}
               </label>
@@ -240,7 +248,8 @@
         <button
           type="button"
           class="btn-sm btn-primary"
-          onclick={() => lightboxAttachment && handleOpenNative(lightboxAttachment)}
+          onclick={() =>
+            lightboxAttachment && handleOpenNative(lightboxAttachment)}
         >
           Open in Native OS Application
         </button>

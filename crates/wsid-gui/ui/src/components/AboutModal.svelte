@@ -54,21 +54,26 @@
       .filter((g): g is LicenseGroup => g !== null);
   });
 
-  let filteredFrontendPackages = $derived.by((): FrontendDependencyLicense[] => {
-    const q = searchFilter.trim().toLowerCase();
-    if (!q) return frontendPackages;
-    return frontendPackages.filter(
-      (pkg) =>
-        pkg.name.toLowerCase().includes(q) ||
-        (pkg.license && pkg.license.toLowerCase().includes(q)) ||
-        (pkg.repository && pkg.repository.toLowerCase().includes(q)) ||
-        (pkg.author && pkg.author.toLowerCase().includes(q)),
-    );
-  });
+  let filteredFrontendPackages = $derived.by(
+    (): FrontendDependencyLicense[] => {
+      const q = searchFilter.trim().toLowerCase();
+      if (!q) return frontendPackages;
+      return frontendPackages.filter(
+        (pkg) =>
+          pkg.name.toLowerCase().includes(q) ||
+          (pkg.license && pkg.license.toLowerCase().includes(q)) ||
+          (pkg.repository && pkg.repository.toLowerCase().includes(q)) ||
+          (pkg.author && pkg.author.toLowerCase().includes(q)),
+      );
+    },
+  );
 
   let totalRustCrateAttributions = $derived.by((): number => {
     if (!aboutData) return 0;
-    return aboutData.rust_licenses.overview.reduce((sum, item) => sum + item.count, 0);
+    return aboutData.rust_licenses.overview.reduce(
+      (sum, item) => sum + item.count,
+      0,
+    );
   });
 
   onMount(() => {
@@ -111,7 +116,9 @@
   <div class="drawer-panel about-modal-panel">
     <header class="drawer-header">
       <div>
-        <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+        <div
+          style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;"
+        >
           <span class="task-id-badge">WSID</span>
           <span class="badge badge-q2">
             v{aboutData?.version ?? "0.1.0"}
@@ -120,7 +127,10 @@
             License: {aboutData?.license_spdx ?? "Apache-2.0"}
           </span>
         </div>
-        <h2 id="about-modal-title" style="margin: 0.4rem 0 0 0; font-size: 1.15rem;">
+        <h2
+          id="about-modal-title"
+          style="margin: 0.4rem 0 0 0; font-size: 1.15rem;"
+        >
           {aboutData?.app_full_name ?? "WSID — What Should I Do?"}
         </h2>
       </div>
@@ -141,12 +151,16 @@
         >
           <div>
             <p style="margin: 0 0 0.25rem 0; font-size: 0.9rem;">
-              Offline-first, cross-platform desktop &amp; terminal task manager with human + AI persona collaboration.
+              Offline-first, cross-platform desktop &amp; terminal task manager
+              with human + AI persona collaboration.
             </p>
-            <p style="margin: 0; font-size: 0.82rem; color: var(--text-secondary);">
+            <p
+              style="margin: 0; font-size: 0.82rem; color: var(--text-secondary);"
+            >
               Repository:{" "}
               <a
-                href={aboutData?.repository_url ?? "https://github.com/dmbeta/WSID"}
+                href={aboutData?.repository_url ??
+                  "https://github.com/dmbeta/WSID"}
                 target="_blank"
                 rel="noopener noreferrer"
                 style="color: var(--accent); font-family: var(--font-mono);"
@@ -155,7 +169,11 @@
               </a>
             </p>
           </div>
-          <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;" role="tablist" aria-label="License categories">
+          <div
+            style="display: flex; gap: 0.4rem; flex-wrap: wrap;"
+            role="tablist"
+            aria-label="License categories"
+          >
             <button
               type="button"
               role="tab"
@@ -169,7 +187,9 @@
               type="button"
               role="tab"
               aria-selected={activeSection === "frontend"}
-              class="btn btn-sm {activeSection === 'frontend' ? 'btn-primary' : ''}"
+              class="btn btn-sm {activeSection === 'frontend'
+                ? 'btn-primary'
+                : ''}"
               onclick={() => (activeSection = "frontend")}
             >
               Frontend Packages ({frontendPackages.length})
@@ -178,7 +198,9 @@
               type="button"
               role="tab"
               aria-selected={activeSection === "project"}
-              class="btn btn-sm {activeSection === 'project' ? 'btn-primary' : ''}"
+              class="btn btn-sm {activeSection === 'project'
+                ? 'btn-primary'
+                : ''}"
               onclick={() => (activeSection = "project")}
             >
               Project License (Apache-2.0)
@@ -199,7 +221,10 @@
       {:else if aboutData}
         {#if activeSection === "project"}
           <section class="card" aria-labelledby="project-license-heading">
-            <h3 id="project-license-heading" style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">
+            <h3
+              id="project-license-heading"
+              style="margin: 0 0 0.5rem 0; font-size: 0.95rem;"
+            >
               WSID Project License ({aboutData.license_spdx})
             </h3>
             <pre class="license-text-block">{aboutData.license_text}</pre>
@@ -219,7 +244,10 @@
 
           {#if activeSection === "rust"}
             <section class="card" aria-labelledby="rust-overview-heading">
-              <h3 id="rust-overview-heading" style="margin: 0 0 0.5rem 0; font-size: 0.9rem;">
+              <h3
+                id="rust-overview-heading"
+                style="margin: 0 0 0.5rem 0; font-size: 0.9rem;"
+              >
                 Rust Crate License Summary (generated by cargo-about)
               </h3>
               <div style="display: flex; flex-wrap: wrap; gap: 0.4rem;">
@@ -246,7 +274,10 @@
               </div>
             </section>
 
-            <section aria-label="Rust Third-Party License Groups" style="display: flex; flex-direction: column; gap: 0.65rem;">
+            <section
+              aria-label="Rust Third-Party License Groups"
+              style="display: flex; flex-direction: column; gap: 0.65rem;"
+            >
               {#if filteredRustGroups.length === 0}
                 <p style="color: var(--text-muted); font-size: 0.85rem;">
                   No Rust crates or licenses match "{searchFilter}".
@@ -256,27 +287,45 @@
                   <details class="card license-details">
                     <summary class="license-summary">
                       <div>
-                        <span class="badge badge-q2" style="margin-right: 0.5rem;">{group.id}</span>
+                        <span
+                          class="badge badge-q2"
+                          style="margin-right: 0.5rem;">{group.id}</span
+                        >
                         <strong>{group.name}</strong>
                       </div>
-                      <span style="font-size: 0.8rem; color: var(--text-secondary);">
-                        {group.used_by.length} crate{group.used_by.length === 1 ? "" : "s"}
+                      <span
+                        style="font-size: 0.8rem; color: var(--text-secondary);"
+                      >
+                        {group.used_by.length} crate{group.used_by.length === 1
+                          ? ""
+                          : "s"}
                       </span>
                     </summary>
 
-                    <div style="margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem;">
-                      <ul class="crate-attribution-list" aria-label="Crates using {group.name}">
+                    <div
+                      style="margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem;"
+                    >
+                      <ul
+                        class="crate-attribution-list"
+                        aria-label="Crates using {group.name}"
+                      >
                         {#each group.used_by as krate (`${krate.name}-${krate.version}`)}
                           <li class="crate-attribution-item">
                             <div>
-                              <span style="font-family: var(--font-mono); font-weight: 600;">
+                              <span
+                                style="font-family: var(--font-mono); font-weight: 600;"
+                              >
                                 {krate.name}
                               </span>
-                              <span style="font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-secondary);">
+                              <span
+                                style="font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-secondary);"
+                              >
                                 v{krate.version}
                               </span>
                               {#if krate.authors.length > 0}
-                                <span style="font-size: 0.76rem; color: var(--text-muted); margin-left: 0.35rem;">
+                                <span
+                                  style="font-size: 0.76rem; color: var(--text-muted); margin-left: 0.35rem;"
+                                >
                                   by {krate.authors.join(", ")}
                                 </span>
                               {/if}
@@ -296,7 +345,9 @@
                       </ul>
 
                       <details style="margin-top: 0.35rem;">
-                        <summary style="cursor: pointer; font-size: 0.8rem; color: var(--accent);">
+                        <summary
+                          style="cursor: pointer; font-size: 0.8rem; color: var(--accent);"
+                        >
                           View full {group.id} license text
                         </summary>
                         <pre class="license-text-block">{group.text}</pre>
@@ -307,7 +358,10 @@
               {/if}
             </section>
           {:else if activeSection === "frontend"}
-            <section aria-label="Frontend Third-Party Packages" style="display: flex; flex-direction: column; gap: 0.65rem;">
+            <section
+              aria-label="Frontend Third-Party Packages"
+              style="display: flex; flex-direction: column; gap: 0.65rem;"
+            >
               {#if filteredFrontendPackages.length === 0}
                 <p style="color: var(--text-muted); font-size: 0.85rem;">
                   No frontend packages match "{searchFilter}".
@@ -317,21 +371,31 @@
                   <details class="card license-details">
                     <summary class="license-summary">
                       <div>
-                        <span style="font-family: var(--font-mono); font-weight: 700;">
+                        <span
+                          style="font-family: var(--font-mono); font-weight: 700;"
+                        >
                           {pkg.name}
                         </span>
                         {#if pkg.version}
-                          <span style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-secondary); margin-left: 0.35rem;">
+                          <span
+                            style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-secondary); margin-left: 0.35rem;"
+                          >
                             v{pkg.version}
                           </span>
                         {/if}
                       </div>
-                      <span class="badge badge-q2">{pkg.license ?? "Unknown"}</span>
+                      <span class="badge badge-q2"
+                        >{pkg.license ?? "Unknown"}</span
+                      >
                     </summary>
 
-                    <div style="margin-top: 0.65rem; display: flex; flex-direction: column; gap: 0.4rem;">
+                    <div
+                      style="margin-top: 0.65rem; display: flex; flex-direction: column; gap: 0.4rem;"
+                    >
                       {#if pkg.author}
-                        <div style="font-size: 0.8rem; color: var(--text-secondary);">
+                        <div
+                          style="font-size: 0.8rem; color: var(--text-secondary);"
+                        >
                           Author: {pkg.author}
                         </div>
                       {/if}

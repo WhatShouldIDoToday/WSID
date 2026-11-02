@@ -27,4 +27,6 @@ rustc-ice-*.txt
 node_modules/
 crates/wsid-gui/ui/dist/
 crates/wsid-gui/gen/
+.rumdl_cache/
+
 
