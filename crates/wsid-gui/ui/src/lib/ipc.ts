@@ -286,34 +286,95 @@ export function isImageMediaType(mediaType: string): boolean {
 }
 
 /**
- * Parses human-friendly duration strings such as `30m`, `2h`, `1h30m`, `3d`, `1w`
- * into minutes (assuming 8h = 480m workdays and 5d = 2400m workweeks).
+ * Parses human-friendly duration strings such as `1w 2d 3h 20m`, `1d 2h 20m`, `2h 30m`, `45m`, or `45`
+ * into minutes (1w = 7d = 10,080m, 1d = 24h = 1,440m, 1h = 60m, 1m = 1m).
+ * Rejects duplicate time units (e.g. `20m 10m` or `1h 2h`).
  */
 export function parseDurationInput(raw: string): {
   minutes: number | null;
+  normalized: string | null;
   error: string | null;
 } {
   const trimmed = raw.trim().toLowerCase();
   if (!trimmed) {
-    return { minutes: null, error: null };
+    return { minutes: null, normalized: null, error: null };
   }
   if (/^\d+$/.test(trimmed)) {
-    return { minutes: parseInt(trimmed, 10), error: null };
+    const mins = parseInt(trimmed, 10);
+    if (mins <= 0) {
+      return {
+        minutes: null,
+        normalized: null,
+        error: "Time estimate must be greater than 0 minutes.",
+      };
+    }
+    return {
+      minutes: mins,
+      normalized: formatDurationMinutes(mins),
+      error: null,
+    };
   }
 
-  const tokenRegex = /(\d+)\s*([wdhm])/g;
+  const tokenRegex = /(\d+)\s*([a-z]+)/g;
   let match: RegExpExecArray | null;
   let total = 0;
   let consumed = "";
+  const seenUnits = new Set<string>();
 
   while ((match = tokenRegex.exec(trimmed)) !== null) {
     const val = parseInt(match[1], 10);
-    const unit = match[2];
+    const rawUnit = match[2];
     consumed += match[0];
-    if (unit === "w") total += val * 5 * 480;
-    else if (unit === "d") total += val * 480;
-    else if (unit === "h") total += val * 60;
-    else if (unit === "m") total += val;
+
+    let canonical: "w" | "d" | "h" | "m";
+    let multiplier: number;
+    if (
+      rawUnit === "w" ||
+      rawUnit === "wk" ||
+      rawUnit === "wks" ||
+      rawUnit === "week" ||
+      rawUnit === "weeks"
+    ) {
+      canonical = "w";
+      multiplier = 7 * 24 * 60;
+    } else if (rawUnit === "d" || rawUnit === "day" || rawUnit === "days") {
+      canonical = "d";
+      multiplier = 24 * 60;
+    } else if (
+      rawUnit === "h" ||
+      rawUnit === "hr" ||
+      rawUnit === "hrs" ||
+      rawUnit === "hour" ||
+      rawUnit === "hours"
+    ) {
+      canonical = "h";
+      multiplier = 60;
+    } else if (
+      rawUnit === "m" ||
+      rawUnit === "min" ||
+      rawUnit === "mins" ||
+      rawUnit === "minute" ||
+      rawUnit === "minutes"
+    ) {
+      canonical = "m";
+      multiplier = 1;
+    } else {
+      return {
+        minutes: null,
+        normalized: null,
+        error: `Unknown time unit '${rawUnit}'. Use w (weeks), d (days), h (hours), or m (minutes).`,
+      };
+    }
+
+    if (seenUnits.has(canonical)) {
+      return {
+        minutes: null,
+        normalized: null,
+        error: `Duplicate time unit '${canonical}' — specify each unit (w, d, h, m) at most once.`,
+      };
+    }
+    seenUnits.add(canonical);
+    total += val * multiplier;
   }
 
   const normalizedInput = trimmed.replace(/\s+/g, "");
@@ -321,22 +382,46 @@ export function parseDurationInput(raw: string): {
   if (!normalizedConsumed || normalizedInput !== normalizedConsumed) {
     return {
       minutes: null,
+      normalized: null,
       error:
-        "Use formats like 30m, 2h, 1h30m, 3d, or 1w (or plain minutes like 45).",
+        "Invalid time estimate. Use formats like '1w 2d 3h 20m', '1d 2h 20m', '2h 30m', or '45m'.",
     };
   }
 
-  return { minutes: total, error: null };
+  if (total <= 0) {
+    return {
+      minutes: null,
+      normalized: null,
+      error: "Time estimate must be greater than 0 minutes.",
+    };
+  }
+
+  return {
+    minutes: total,
+    normalized: formatDurationMinutes(total),
+    error: null,
+  };
 }
 
+/**
+ * Formats minutes into a human-readable string in decreasing order of time span (`w`, `d`, `h`, `m`).
+ */
 export function formatDurationMinutes(minutes: number | null): string {
   if (minutes === null || minutes === undefined) return "—";
   if (minutes <= 0) return "0m";
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
-  if (hours > 0) return `${hours}h`;
-  return `${mins}m`;
+  const weeks = Math.floor(minutes / (7 * 24 * 60));
+  const remAfterWeeks = minutes % (7 * 24 * 60);
+  const days = Math.floor(remAfterWeeks / (24 * 60));
+  const remAfterDays = remAfterWeeks % (24 * 60);
+  const hours = Math.floor(remAfterDays / 60);
+  const mins = remAfterDays % 60;
+
+  const parts: string[] = [];
+  if (weeks > 0) parts.push(`${weeks}w`);
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (mins > 0) parts.push(`${mins}m`);
+  return parts.join(" ");
 }
 
 export function parseDeadlineToEpochMs(
@@ -349,20 +434,66 @@ export function parseDeadlineToEpochMs(
     const dt = new Date(`${s}T20:00:00`);
     return Number.isNaN(dt.getTime()) ? null : dt.getTime();
   }
-  const dt = new Date(s);
+  const withoutBracket = s.replace(/\[.*\]$/, "");
+  // Normalize historical LMT offsets with seconds (e.g. -04:56:02 -> -04:56)
+  const normalized = withoutBracket.replace(/([+-]\d{2}:\d{2}):\d{2}$/, "$1");
+  const dt = new Date(normalized);
   return Number.isNaN(dt.getTime()) ? null : dt.getTime();
+}
+
+export interface DeadlineValidationResult {
+  sgdbError: string | null;
+  dueError: string | null;
+  orderError: string | null;
+}
+
+export function validateDeadlines(params: {
+  sgdbDate?: string | null;
+  dueDate?: string | null;
+  checkPastSgdb?: boolean;
+  checkPastDue?: boolean;
+  nowMs?: number;
+}): DeadlineValidationResult {
+  const nowMs = params.nowMs ?? Date.now();
+  const sgdbMs = parseDeadlineToEpochMs(params.sgdbDate);
+  const dueMs = parseDeadlineToEpochMs(params.dueDate);
+
+  let sgdbError: string | null = null;
+  let dueError: string | null = null;
+  let orderError: string | null = null;
+
+  if (params.checkPastSgdb && sgdbMs !== null && sgdbMs < nowMs) {
+    sgdbError = "Should Get Done By (SGDB) date/time cannot be in the past.";
+  }
+  if (params.checkPastDue && dueMs !== null && dueMs < nowMs) {
+    dueError = "Hard Due Date cannot be in the past.";
+  }
+  if (sgdbMs !== null && dueMs !== null && sgdbMs > dueMs) {
+    orderError =
+      "Hard Due Date must be on or after the SGDB Date (Soft Deadline).";
+    if (!dueError) {
+      dueError = orderError;
+    }
+    if (!sgdbError) {
+      sgdbError =
+        "SGDB Date (Soft Deadline) must be on or before the Hard Due Date.";
+    }
+  }
+
+  return { sgdbError, dueError, orderError };
 }
 
 export function validateDeadlineOrder(
   sgdbDate: string | null | undefined,
   dueDate: string | null | undefined,
 ): string | null {
-  const sgdbMs = parseDeadlineToEpochMs(sgdbDate);
-  const dueMs = parseDeadlineToEpochMs(dueDate);
-  if (sgdbMs !== null && dueMs !== null && sgdbMs > dueMs) {
-    return "Should Get Done By (SGDB) date/time must be on or before the Hard Due Date.";
-  }
-  return null;
+  const res = validateDeadlines({
+    sgdbDate,
+    dueDate,
+    checkPastSgdb: false,
+    checkPastDue: false,
+  });
+  return res.orderError;
 }
 
 export function formatDeadlineDisplay(raw: string | null | undefined): string {

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
-use wsid_core::{FocusPreset, RelationInputKind, Result, TaskStatus, WsidError, parse_deadline_datetime};
+use wsid_core::{FocusPreset, RelationInputKind, Result, TaskStatus, parse_deadline_datetime};
 
 #[derive(Debug, Parser)]
 #[command(name = "wsid", version, about = "WSID (What Should I Do?) — Offline-first, accessible task manager & MCP server")]
@@ -336,63 +336,11 @@ pub struct SearchArgs {
     pub limit: Option<usize>,
 }
 
-/// Parses human-friendly time estimates like `"15m"`, `"2h"`, `"1h30m"`, `"3d"`, `"1w"`, or plain minutes `"45"`.
-/// Uses 8-hour workdays (`480` minutes/day) and 5-day workweeks (`2400` minutes/week).
+/// Parses human-friendly time estimates like `"1w 2d 3h 20m"`, `"1d 2h 20m"`, `"2h 30m"`, `"15m"`, or plain minutes `"45"`,
+/// rejecting duplicate time units (e.g. `"20m 10m"`).
 pub fn parse_duration_estimate(raw: &str) -> Result<i64> {
-    let trimmed = raw.trim().to_ascii_lowercase();
-    if trimmed.is_empty() {
-        return Err(WsidError::Validation("time estimate cannot be empty".to_string()));
-    }
-
-    if let Ok(plain_mins) = trimmed.parse::<i64>() {
-        if plain_mins < 0 {
-            return Err(WsidError::Validation("time estimate cannot be negative".to_string()));
-        }
-        return Ok(plain_mins);
-    }
-
-    let mut total_minutes: i64 = 0;
-    let mut current_digits = String::new();
-
-    for ch in trimmed.chars() {
-        if ch.is_ascii_digit() {
-            current_digits.push(ch);
-        } else if ch.is_whitespace() {
-            continue;
-        } else {
-            if current_digits.is_empty() {
-                return Err(WsidError::Validation(format!(
-                    "invalid time estimate '{raw}': expected format like '15m', '2h', '3d', '1w', or '1h30m'"
-                )));
-            }
-            let val: i64 = current_digits
-                .parse()
-                .map_err(|_| WsidError::Validation(format!("invalid number in time estimate '{raw}'")))?;
-            current_digits.clear();
-
-            let multiplier = match ch {
-                'm' => 1,
-                'h' => 60,
-                'd' => 480,
-                'w' => 2400,
-                _ => {
-                    return Err(WsidError::Validation(format!(
-                        "unsupported unit '{ch}' in time estimate '{raw}': use m (minutes), h (hours), d (8h days), or w (5d weeks)"
-                    )));
-                }
-            };
-            total_minutes = total_minutes.saturating_add(val.saturating_mul(multiplier));
-        }
-    }
-
-    if !current_digits.is_empty() {
-        let val: i64 = current_digits
-            .parse()
-            .map_err(|_| WsidError::Validation(format!("invalid number in time estimate '{raw}'")))?;
-        total_minutes = total_minutes.saturating_add(val);
-    }
-
-    Ok(total_minutes)
+    let mins = wsid_core::parse_duration_minutes(raw)?;
+    Ok(i64::from(mins))
 }
 
 pub fn format_duration_estimate(minutes: Option<i64>) -> String {
@@ -402,17 +350,7 @@ pub fn format_duration_estimate(minutes: Option<i64>) -> String {
     if mins <= 0 {
         return "0m".to_string();
     }
-    if mins % 2400 == 0 {
-        format!("{}w", mins / 2400)
-    } else if mins % 480 == 0 {
-        format!("{}d", mins / 480)
-    } else if mins >= 60 {
-        let h = mins / 60;
-        let rem = mins % 60;
-        if rem == 0 { format!("{h}h") } else { format!("{h}h{rem}m") }
-    } else {
-        format!("{mins}m")
-    }
+    wsid_core::format_duration_minutes(mins as u32)
 }
 
 pub fn parse_date_arg(field: &str, raw: Option<&str>) -> Result<Option<String>> {
@@ -448,18 +386,21 @@ mod tests {
         assert_eq!(parse_duration_estimate("15m").unwrap(), 15);
         assert_eq!(parse_duration_estimate("2h").unwrap(), 120);
         assert_eq!(parse_duration_estimate("1h30m").unwrap(), 90);
-        assert_eq!(parse_duration_estimate("3d").unwrap(), 1440);
-        assert_eq!(parse_duration_estimate("1w").unwrap(), 2400);
+        assert_eq!(parse_duration_estimate("1d 2h 20m").unwrap(), 1580);
+        assert_eq!(parse_duration_estimate("20m 2h 1d").unwrap(), 1580);
+        assert_eq!(parse_duration_estimate("1w").unwrap(), 10080);
         assert_eq!(parse_duration_estimate("45").unwrap(), 45);
 
         assert!(parse_duration_estimate("10x").is_err());
+        assert!(parse_duration_estimate("20m 10m").is_err());
+        assert!(parse_duration_estimate("1h 2h").is_err());
         assert!(parse_duration_estimate("").is_err());
 
         assert_eq!(format_duration_estimate(Some(15)), "15m");
         assert_eq!(format_duration_estimate(Some(120)), "2h");
-        assert_eq!(format_duration_estimate(Some(90)), "1h30m");
-        assert_eq!(format_duration_estimate(Some(480)), "1d");
-        assert_eq!(format_duration_estimate(Some(2400)), "1w");
+        assert_eq!(format_duration_estimate(Some(90)), "1h 30m");
+        assert_eq!(format_duration_estimate(Some(1580)), "1d 2h 20m");
+        assert_eq!(format_duration_estimate(Some(10080)), "1w");
         assert_eq!(format_duration_estimate(None), "-");
     }
 }

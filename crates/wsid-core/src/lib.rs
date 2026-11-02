@@ -50,7 +50,7 @@ pub use scoring::{
 };
 pub use search::{SearchHit, SearchQuery, query_fts_trigram_ids, search_tasks};
 pub use tasks::{
-    create_task, delete_task, delete_task_with_attachments_dir, get_task, list_tasks, normalize_tag, normalize_tags, normalize_user,
-    parse_deadline_datetime, parse_deadline_naive_date, update_task, validate_dates, validate_difficulty, validate_importance,
-    validate_manual_priority, validate_time_estimate,
+    create_task, delete_task, delete_task_with_attachments_dir, format_duration_minutes, get_task, list_tasks, normalize_tag,
+    normalize_tags, normalize_user, parse_deadline_datetime, parse_deadline_naive_date, parse_duration_minutes, update_task,
+    validate_dates, validate_difficulty, validate_importance, validate_manual_priority, validate_time_estimate,
 };

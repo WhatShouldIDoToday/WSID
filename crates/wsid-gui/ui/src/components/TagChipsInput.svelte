@@ -2,6 +2,7 @@
   interface Props {
     tags?: string[];
     knownTags?: string[];
+    inputText?: string;
     id?: string;
     label?: string;
     placeholder?: string;
@@ -10,12 +11,11 @@
   let {
     tags = $bindable<string[]>([]),
     knownTags = [],
+    inputText = $bindable(""),
     id = "tags-chip-input",
     label = "Tags",
     placeholder = "Add tag...",
   }: Props = $props();
-
-  let inputText = $state("");
 
   function commitToken(raw: string) {
     const pieces = raw

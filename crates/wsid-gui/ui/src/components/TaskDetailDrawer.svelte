@@ -7,6 +7,7 @@
   import RelationPicker, {
     type SelectedRelationEntry,
   } from "./RelationPicker.svelte";
+  import ConfirmModal from "./ConfirmModal.svelte";
   import {
     type TaskFullDetail,
     type TaskStatus,
@@ -31,7 +32,7 @@
     fileToBase64,
     parseDurationInput,
     formatDurationMinutes,
-    validateDeadlineOrder,
+    validateDeadlines,
     formatDeadlineDisplay,
   } from "../lib/ipc";
 
@@ -85,10 +86,21 @@
   let editEvaluator = $state<string>("");
   let editReporter = $state<string>("");
 
-  let editDateError = $state<string | null>(null);
+  let editSgdbError = $state<string | null>(null);
+  let editDueError = $state<string | null>(null);
   let editDurationError = $state<string | null>(null);
   let editDurationTimer: ReturnType<typeof setTimeout> | null = null;
   let editDateTimer: ReturnType<typeof setTimeout> | null = null;
+
+  let editDurationPreview = $derived.by((): string | null => {
+    const trimmed = editEstimateInput.trim();
+    if (!trimmed) return null;
+    const parsed = parseDurationInput(trimmed);
+    if (parsed.error || parsed.minutes === null || !parsed.normalized) {
+      return null;
+    }
+    return `= ${parsed.normalized} (${parsed.minutes.toLocaleString()} min${parsed.minutes === 1 ? "" : "s"})`;
+  });
 
   // Task-level attachment state
   let newTaskAttachmentDesc = $state<string>("");
@@ -138,7 +150,8 @@
     editAssignee = d.task.assignee;
     editEvaluator = d.task.evaluator;
     editReporter = d.task.reporter;
-    editDateError = null;
+    editSgdbError = null;
+    editDueError = null;
     editDurationError = null;
   }
 
@@ -174,31 +187,62 @@
     if (!editingTask) return;
     const s = editSgdbDate;
     const d = editDueDate;
+    const checkPastSgdb = s !== (detail?.task.sgdb_date ?? "");
+    const checkPastDue = d !== (detail?.task.due_date ?? "");
     if (editDateTimer) clearTimeout(editDateTimer);
-    const immediateErr = validateDeadlineOrder(s, d);
-    if (!immediateErr && editDateError) {
-      editDateError = null;
+    const check = validateDeadlines({
+      sgdbDate: s,
+      dueDate: d,
+      checkPastSgdb,
+      checkPastDue,
+    });
+    if (!check.sgdbError && editSgdbError) {
+      editSgdbError = null;
+    }
+    if (!check.dueError && editDueError) {
+      editDueError = null;
+    }
+    if (!check.sgdbError && !check.dueError) {
       return;
     }
     editDateTimer = setTimeout(() => {
-      editDateError = validateDeadlineOrder(s, d);
+      const res = validateDeadlines({
+        sgdbDate: s,
+        dueDate: d,
+        checkPastSgdb,
+        checkPastDue,
+      });
+      editSgdbError = res.sgdbError;
+      editDueError = res.dueError;
     }, 400);
     return () => {
       if (editDateTimer) clearTimeout(editDateTimer);
     };
   });
 
-  function validateEditDurationNow(): boolean {
+  function validateEditDurationNow(normalizeOnValid = false): boolean {
     if (editDurationTimer) clearTimeout(editDurationTimer);
     const parsed = parseDurationInput(editEstimateInput);
     editDurationError = parsed.error;
+    if (normalizeOnValid && !parsed.error && parsed.normalized) {
+      editEstimateInput = parsed.normalized;
+    }
     return !parsed.error;
   }
 
   function validateEditDatesNow(): boolean {
     if (editDateTimer) clearTimeout(editDateTimer);
-    editDateError = validateDeadlineOrder(editSgdbDate, editDueDate);
-    return !editDateError;
+    const checkPastSgdb = editSgdbDate !== (detail?.task.sgdb_date ?? "");
+    const checkPastDue = editDueDate !== (detail?.task.due_date ?? "");
+    const res = validateDeadlines({
+      sgdbDate: editSgdbDate,
+      dueDate: editDueDate,
+      checkPastSgdb,
+      checkPastDue,
+    });
+    editSgdbError = res.sgdbError;
+    editDueError = res.dueError;
+    return !res.sgdbError && !res.dueError;
   }
 
   function isEditDirty(): boolean {
@@ -224,10 +268,16 @@
     );
   }
 
+  let confirmDiscardAction = $state<"cancel_edit" | "close_drawer" | null>(
+    null,
+  );
+  let confirmDiscardOpen = $state<boolean>(false);
+
   function cancelEditingWithConfirm() {
     if (isEditDirty()) {
-      const ok = window.confirm("Discard unsaved changes?");
-      if (!ok) return;
+      confirmDiscardAction = "cancel_edit";
+      confirmDiscardOpen = true;
+      return;
     }
     if (detail) syncEditFields(detail);
     editingTask = false;
@@ -235,10 +285,23 @@
 
   function requestCloseDrawer() {
     if (editingTask && isEditDirty()) {
-      const ok = window.confirm("Discard unsaved changes and close?");
-      if (!ok) return;
+      confirmDiscardAction = "close_drawer";
+      confirmDiscardOpen = true;
+      return;
     }
     onClose();
+  }
+
+  function handleConfirmDiscard() {
+    const action = confirmDiscardAction;
+    confirmDiscardAction = null;
+    confirmDiscardOpen = false;
+    if (action === "close_drawer") {
+      onClose();
+    } else {
+      if (detail) syncEditFields(detail);
+      editingTask = false;
+    }
   }
 
   function focusNextEditField(current: HTMLElement) {
@@ -333,12 +396,12 @@
     }
 
     if (!validateEditDatesNow()) {
-      errorMsg = editDateError;
+      errorMsg = editSgdbError ?? editDueError;
       if (errorMsg) announce(errorMsg);
       return;
     }
 
-    if (!validateEditDurationNow()) {
+    if (!validateEditDurationNow(true)) {
       errorMsg = editDurationError;
       if (errorMsg) announce(errorMsg);
       return;
@@ -757,46 +820,49 @@
             ></textarea>
           </div>
 
+          <div class="form-grid-dates">
+            <DateFieldPicker
+              id="edit-sgdb"
+              label="SGDB Date (Soft Deadline)"
+              bind:value={editSgdbDate}
+              invalid={Boolean(editSgdbError)}
+              errorMessage={editSgdbError}
+              onBlur={() => {
+                validateEditDatesNow();
+              }}
+            />
+
+            <DateFieldPicker
+              id="edit-due"
+              label="Hard Due Date"
+              bind:value={editDueDate}
+              minDate={editSgdbDate}
+              invalid={Boolean(editDueError)}
+              errorMessage={editDueError}
+              onBlur={() => {
+                validateEditDatesNow();
+              }}
+            />
+          </div>
+
           <div class="form-grid">
-            <div>
-              <DateFieldPicker
-                id="edit-sgdb"
-                label="Should Get Done By (SGDB Date)"
-                bind:value={editSgdbDate}
-                invalid={Boolean(editDateError)}
-                describedBy={editDateError ? "edit-date-err" : undefined}
-                onBlur={() => {
-                  validateEditDatesNow();
-                }}
-              />
-              {#if editDateError}
-                <span id="edit-date-err" class="field-error" role="alert">
-                  {editDateError}
-                </span>
-              {/if}
-            </div>
-
-            <div>
-              <DateFieldPicker
-                id="edit-due"
-                label="Hard Due Date"
-                bind:value={editDueDate}
-                invalid={Boolean(editDateError)}
-                onBlur={() => {
-                  validateEditDatesNow();
-                }}
-              />
-            </div>
-
             <div class="form-field">
-              <label for="edit-est">Time Estimate (e.g. 45m, 2h, 1d)</label>
+              <div class="date-picker-label-row">
+                <label for="edit-est">Time Estimate</label>
+                {#if editDurationPreview && !editDurationError}
+                  <span class="duration-preview-badge"
+                    >{editDurationPreview}</span
+                  >
+                {/if}
+              </div>
               <input
                 id="edit-est"
                 type="text"
                 bind:value={editEstimateInput}
                 onblur={() => {
-                  validateEditDurationNow();
+                  validateEditDurationNow(true);
                 }}
+                placeholder="e.g. 1w 2d 3h 20m, 2h 30m, 45m"
                 aria-invalid={editDurationError ? "true" : "false"}
                 aria-describedby={editDurationError
                   ? "edit-dur-err"
@@ -1335,3 +1401,19 @@
     {/if}
   </div>
 </div>
+
+<ConfirmModal
+  bind:open={confirmDiscardOpen}
+  title="Discard Unsaved Changes?"
+  description={confirmDiscardAction === "close_drawer"
+    ? "You have unsaved changes to this task. Discard changes and close the drawer?"
+    : "You have unsaved changes to this task. Discard your edits?"}
+  confirmLabel="Discard Changes"
+  cancelLabel="Keep Editing"
+  danger={true}
+  onConfirm={handleConfirmDiscard}
+  onCancel={() => {
+    confirmDiscardAction = null;
+    confirmDiscardOpen = false;
+  }}
+/>

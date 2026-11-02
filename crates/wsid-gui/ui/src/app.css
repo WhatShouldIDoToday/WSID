@@ -748,12 +748,65 @@ table.db-table th {
   background: rgba(56, 189, 248, 0.12);
 }
 
+/* Confirmation Modal (bits-ui Dialog) */
+.confirm-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.78);
+  z-index: 2500;
+}
+
+.confirm-modal-panel,
+.confirm-modal-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2501;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  width: min(26rem, 92vw);
+  padding: 1.25rem;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.confirm-modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.confirm-modal-description,
+.confirm-modal-desc {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.confirm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+}
+
 /* Date Picker & Time Field (bits-ui) */
 .date-picker-label-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 0.5rem;
+  flex-wrap: nowrap;
+}
+
+.date-picker-label-row label {
+  white-space: nowrap;
 }
 
 .tz-badge {
@@ -765,6 +818,7 @@ table.db-table th {
   padding: 0.08rem 0.45rem;
   font-family: var(--font-mono);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .date-picker-row {
@@ -784,16 +838,24 @@ table.db-table th {
   padding: 0.38rem 0.55rem;
   min-height: 2.35rem;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .date-picker-input {
-  flex: 1 1 auto;
-  min-width: 7.5rem;
+  flex: 1 0 max-content;
+  min-width: 7.75rem;
 }
 
 .time-field-input {
-  flex: 0 1 auto;
-  min-width: 5.75rem;
+  flex: 0 0 max-content;
+  min-width: 6.75rem;
+}
+
+.date-picker-input[data-invalid],
+.time-field-input[data-invalid],
+.date-picker-input[aria-invalid="true"],
+.time-field-input[aria-invalid="true"] {
+  border-color: var(--danger);
 }
 
 .date-picker-input:focus-within,
@@ -881,6 +943,13 @@ table.db-table th {
   font-size: 0.85rem;
 }
 
+.date-picker-nav-btn[data-disabled],
+.date-picker-nav-btn[aria-disabled="true"] {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .date-picker-grid {
   border-collapse: collapse;
 }
@@ -908,7 +977,9 @@ table.db-table th {
   cursor: pointer;
 }
 
-.date-picker-day:hover {
+.date-picker-day:hover:not([data-disabled]):not([data-unavailable]):not(
+    [aria-disabled="true"]
+  ) {
   background: var(--bg-elevated);
 }
 
@@ -925,6 +996,17 @@ table.db-table th {
 .date-picker-day[data-outside-month] {
   color: var(--text-muted);
   opacity: 0.45;
+}
+
+.date-picker-day[data-disabled],
+.date-picker-day[data-unavailable],
+.date-picker-day[aria-disabled="true"],
+.date-picker-cell[data-disabled] .date-picker-day,
+.date-picker-cell[data-unavailable] .date-picker-day {
+  color: var(--text-muted);
+  opacity: 0.32;
+  cursor: not-allowed;
+  text-decoration: line-through;
 }
 
 /* Discrete Rating Slider (bits-ui) */
@@ -1270,6 +1352,14 @@ input[type="text"].tag-compact-input {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   gap: 1rem;
+  align-items: start;
+}
+
+.form-grid-dates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+  gap: 1rem;
+  align-items: start;
 }
 
 .form-field,

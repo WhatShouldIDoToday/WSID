@@ -65,19 +65,30 @@ pub fn parse_deadline_datetime(field_name: &str, raw: &str) -> Result<(String, N
         Some(idx) if trimmed.ends_with(']') => &trimmed[..idx],
         _ => trimmed,
     };
+    // Normalize historical LMT offsets with seconds (e.g. `-04:56:02` -> `-04:56`) for RFC3339 compatibility
+    let normalized_offset: String = if without_bracket.len() > 19 {
+        let tail = &without_bracket[19..];
+        if tail.len() == 9 && (tail.starts_with('+') || tail.starts_with('-')) && tail.as_bytes()[3] == b':' && tail.as_bytes()[6] == b':' {
+            format!("{}{}", &without_bracket[..19], &tail[..6])
+        } else {
+            without_bracket.to_string()
+        }
+    } else {
+        without_bracket.to_string()
+    };
 
-    if let Ok(d) = NaiveDate::parse_from_str(without_bracket, "%Y-%m-%d") {
+    if let Ok(d) = NaiveDate::parse_from_str(&normalized_offset, "%Y-%m-%d") {
         let default_time = NaiveTime::from_hms_opt(20, 0, 0).expect("valid 20:00:00 time");
-        return Ok((without_bracket.to_string(), NaiveDateTime::new(d, default_time)));
+        return Ok((normalized_offset, NaiveDateTime::new(d, default_time)));
     }
 
-    if let Ok(dt) = DateTime::parse_from_rfc3339(without_bracket) {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized_offset) {
         let local_naive = dt.with_timezone(&Local).naive_local();
-        return Ok((trimmed.to_string(), local_naive));
+        return Ok((normalized_offset, local_naive));
     }
 
     for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
-        if let Ok(ndt) = NaiveDateTime::parse_from_str(without_bracket, fmt) {
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(&normalized_offset, fmt) {
             let iso = ndt.format("%Y-%m-%dT%H:%M").to_string();
             return Ok((iso, ndt));
         }
@@ -86,6 +97,132 @@ pub fn parse_deadline_datetime(field_name: &str, raw: &str) -> Result<(String, N
     Err(WsidError::Validation(format!(
         "invalid {field_name} '{trimmed}': expected YYYY-MM-DD or ISO-8601 date-time (e.g. 2026-11-05T20:00)"
     )))
+}
+
+/// Parses a human-readable duration string (e.g. `"1w 2d 3h 20m"`, `"1d 2h 20m"`, `"2h 30m"`, `"45m"`, or `"45"`)
+/// into total minutes, rejecting duplicate time units (e.g. `"20m 10m"` or `"1h 2h"`).
+pub fn parse_duration_minutes(raw: &str) -> Result<u32> {
+    let s = raw.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return Err(WsidError::Validation("time estimate cannot be empty".to_string()));
+    }
+
+    if let Ok(mins) = s.parse::<u32>() {
+        if mins == 0 {
+            return Err(WsidError::Validation("time estimate must be greater than 0 minutes".to_string()));
+        }
+        return Ok(mins);
+    }
+
+    let mut total_minutes: u32 = 0;
+    let mut seen_w = false;
+    let mut seen_d = false;
+    let mut seen_h = false;
+    let mut seen_m = false;
+    let mut matched_any = false;
+
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+
+        let num_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if num_start == i {
+            return Err(WsidError::Validation(format!(
+                "invalid time estimate '{raw}': expected format like '1w 2d 3h 20m', '1d 2h 20m', or '45m'"
+            )));
+        }
+        let val: u32 = s[num_start..i]
+            .parse()
+            .map_err(|_| WsidError::Validation(format!("invalid number in time estimate '{raw}'")))?;
+
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+
+        let unit_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+            i += 1;
+        }
+        if unit_start == i {
+            return Err(WsidError::Validation(format!("missing time unit after '{}' in '{raw}' (use w, d, h, or m)", &s[num_start..i])));
+        }
+
+        let unit = &s[unit_start..i];
+        let (canonical, multiplier) = match unit {
+            "w" | "wk" | "wks" | "week" | "weeks" => ('w', 7 * 24 * 60u32),
+            "d" | "day" | "days" => ('d', 24 * 60u32),
+            "h" | "hr" | "hrs" | "hour" | "hours" => ('h', 60u32),
+            "m" | "min" | "mins" | "minute" | "minutes" => ('m', 1u32),
+            _ => {
+                return Err(WsidError::Validation(format!("unknown time unit '{unit}' in '{raw}' (use w, d, h, or m)")));
+            }
+        };
+
+        let seen_slot = match canonical {
+            'w' => &mut seen_w,
+            'd' => &mut seen_d,
+            'h' => &mut seen_h,
+            _ => &mut seen_m,
+        };
+        if *seen_slot {
+            return Err(WsidError::Validation(format!(
+                "duplicate time unit '{canonical}' in '{raw}' (specify each unit w, d, h, m at most once)"
+            )));
+        }
+        *seen_slot = true;
+
+        let added = val
+            .checked_mul(multiplier)
+            .ok_or_else(|| WsidError::Validation(format!("time estimate '{raw}' is too large")))?;
+        total_minutes = total_minutes
+            .checked_add(added)
+            .ok_or_else(|| WsidError::Validation(format!("time estimate '{raw}' is too large")))?;
+        matched_any = true;
+    }
+
+    if !matched_any || total_minutes == 0 {
+        return Err(WsidError::Validation("time estimate must be greater than 0 minutes".to_string()));
+    }
+
+    Ok(total_minutes)
+}
+
+/// Formats a duration in minutes into a human-readable string in decreasing order of time span
+/// (`w`, `d`, `h`, `m`, e.g. `"1w 2d 3h 20m"`).
+pub fn format_duration_minutes(total_minutes: u32) -> String {
+    if total_minutes == 0 {
+        return "0m".to_string();
+    }
+    let weeks = total_minutes / (7 * 24 * 60);
+    let rem_after_weeks = total_minutes % (7 * 24 * 60);
+    let days = rem_after_weeks / (24 * 60);
+    let rem_after_days = rem_after_weeks % (24 * 60);
+    let hours = rem_after_days / 60;
+    let mins = rem_after_days % 60;
+
+    let mut parts = Vec::with_capacity(4);
+    if weeks > 0 {
+        parts.push(format!("{weeks}w"));
+    }
+    if days > 0 {
+        parts.push(format!("{days}d"));
+    }
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    if mins > 0 {
+        parts.push(format!("{mins}m"));
+    }
+    parts.join(" ")
 }
 
 /// Extracts the calendar `NaiveDate` from a stored deadline string (`YYYY-MM-DD` or ISO-8601 date-time).
@@ -681,5 +818,25 @@ mod tests {
 
         delete_task(&mut db, &created.id).unwrap();
         assert!(matches!(get_task(&db, &created.id), Err(WsidError::TaskNotFound(_))));
+    }
+
+    #[test]
+    fn parses_and_formats_durations_and_rejects_duplicate_units() {
+        assert_eq!(parse_duration_minutes("1d 2h 20m").unwrap(), 1440 + 120 + 20);
+        assert_eq!(parse_duration_minutes("20m 2h 1d").unwrap(), 1440 + 120 + 20);
+        assert_eq!(parse_duration_minutes("1w 2d 3h 20m").unwrap(), 10080 + 2880 + 180 + 20);
+        assert_eq!(parse_duration_minutes("45").unwrap(), 45);
+
+        // Reject duplicate units
+        assert!(parse_duration_minutes("20m 10m").is_err());
+        assert!(parse_duration_minutes("1h 2h").is_err());
+        assert!(parse_duration_minutes("1d 3d").is_err());
+        assert!(parse_duration_minutes("1w 2w").is_err());
+
+        // Format back in decreasing order (w, d, h, m)
+        assert_eq!(format_duration_minutes(1440 + 120 + 20), "1d 2h 20m");
+        assert_eq!(format_duration_minutes(10080 + 2880 + 180 + 20), "1w 2d 3h 20m");
+        assert_eq!(format_duration_minutes(140), "2h 20m");
+        assert_eq!(format_duration_minutes(45), "45m");
     }
 }

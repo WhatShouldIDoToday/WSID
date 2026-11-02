@@ -20,8 +20,19 @@
   let searchFilter = $state("");
   let activeSection = $state<"rust" | "frontend" | "project">("rust");
 
-  const frontendPackages: FrontendDependencyLicense[] =
-    frontendLicensesJson as FrontendDependencyLicense[];
+  const frontendPackages: FrontendDependencyLicense[] = (() => {
+    const raw = frontendLicensesJson as FrontendDependencyLicense[];
+    const seen = new Set<string>();
+    const deduped: FrontendDependencyLicense[] = [];
+    for (const pkg of raw) {
+      const key = `${pkg.name}@${pkg.version}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(pkg);
+      }
+    }
+    return deduped.sort((a, b) => a.name.localeCompare(b.name));
+  })();
 
   let filteredRustGroups = $derived.by((): LicenseGroup[] => {
     if (!aboutData) return [];
@@ -283,8 +294,11 @@
                   No Rust crates or licenses match "{searchFilter}".
                 </p>
               {:else}
-                {#each filteredRustGroups as group, idx (`${group.id}-${idx}`)}
-                  <details class="card license-details">
+                {#each filteredRustGroups as group (group.id)}
+                  <details
+                    class="card license-details"
+                    open={searchFilter.trim().length > 0}
+                  >
                     <summary class="license-summary">
                       <div>
                         <span

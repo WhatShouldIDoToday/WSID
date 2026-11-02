@@ -16,16 +16,17 @@
   interface Props {
     excludeTaskId?: string;
     buttonLabel?: string;
+    searchQuery?: string;
     onAdd: (entry: SelectedRelationEntry) => void | Promise<void>;
   }
 
   let {
     excludeTaskId = "",
     buttonLabel = "Add Relation",
+    searchQuery = $bindable(""),
     onAdd,
   }: Props = $props();
 
-  let searchQuery = $state("");
   let selectedTaskId = $state("");
   let open = $state(false);
   let results = $state<SearchHit[]>([]);

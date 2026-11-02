@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ConfirmModal from "./ConfirmModal.svelte";
   import DateFieldPicker from "./DateFieldPicker.svelte";
   import RatingSlider from "./RatingSlider.svelte";
   import TagChipsInput from "./TagChipsInput.svelte";
@@ -16,7 +17,7 @@
     saveClipboardBytesForDraft,
     fileToBase64,
     parseDurationInput,
-    validateDeadlineOrder,
+    validateDeadlines,
   } from "../lib/ipc";
 
   interface DraftAttachmentItem {
@@ -32,12 +33,19 @@
     activeUser: string;
     knownUsers: string[];
     knownTags: string[];
+    isDirty?: boolean;
     onCreated: (createdId: string) => void;
     announce: (msg: string) => void;
   }
 
-  let { activeUser, knownUsers, knownTags, onCreated, announce }: Props =
-    $props();
+  let {
+    activeUser,
+    knownUsers,
+    knownTags,
+    isDirty = $bindable(false),
+    onCreated,
+    announce,
+  }: Props = $props();
 
   let formElement = $state<HTMLFormElement | null>(null);
 
@@ -61,14 +69,32 @@
   let nextAttachmentDesc = $state<string>("");
   let isDragging = $state<boolean>(false);
 
+  let sgdbPartial = $state<boolean>(false);
+  let duePartial = $state<boolean>(false);
+  let tagInputText = $state<string>("");
+  let relationSearchQuery = $state<string>("");
+  let formResetKey = $state<number>(0);
+  let showResetConfirmModal = $state<boolean>(false);
+
   let titleTouched = $state<boolean>(false);
   let titleError = $state<string | null>(null);
-  let dateError = $state<string | null>(null);
+  let sgdbError = $state<string | null>(null);
+  let dueError = $state<string | null>(null);
   let durationError = $state<string | null>(null);
   let formError = $state<string | null>(null);
 
   let durationTimer: ReturnType<typeof setTimeout> | null = null;
   let dateTimer: ReturnType<typeof setTimeout> | null = null;
+
+  let durationPreview = $derived.by((): string | null => {
+    const trimmed = estimateInput.trim();
+    if (!trimmed) return null;
+    const parsed = parseDurationInput(trimmed);
+    if (parsed.error || parsed.minutes === null || !parsed.normalized) {
+      return null;
+    }
+    return `= ${parsed.normalized} (${parsed.minutes.toLocaleString()} min${parsed.minutes === 1 ? "" : "s"})`;
+  });
 
   $effect(() => {
     if (!reporter) reporter = activeUser;
@@ -105,18 +131,35 @@
     };
   });
 
-  // Debounced validation on SGDB vs Hard Due Date (400ms idle)
+  // Debounced validation on SGDB vs Hard Due Date + past date check (400ms idle)
   $effect(() => {
     const s = sgdbDate;
     const d = dueDate;
     if (dateTimer) clearTimeout(dateTimer);
-    const immediateErr = validateDeadlineOrder(s, d);
-    if (!immediateErr && dateError) {
-      dateError = null;
+    const check = validateDeadlines({
+      sgdbDate: s,
+      dueDate: d,
+      checkPastSgdb: true,
+      checkPastDue: true,
+    });
+    if (!check.sgdbError && sgdbError) {
+      sgdbError = null;
+    }
+    if (!check.dueError && dueError) {
+      dueError = null;
+    }
+    if (!check.sgdbError && !check.dueError) {
       return;
     }
     dateTimer = setTimeout(() => {
-      dateError = validateDeadlineOrder(s, d);
+      const res = validateDeadlines({
+        sgdbDate: s,
+        dueDate: d,
+        checkPastSgdb: true,
+        checkPastDue: true,
+      });
+      sgdbError = res.sgdbError;
+      dueError = res.dueError;
     }, 400);
     return () => {
       if (dateTimer) clearTimeout(dateTimer);
@@ -132,35 +175,58 @@
     return true;
   }
 
-  function validateDurationNow(): boolean {
+  function validateDurationNow(normalizeOnValid = false): boolean {
     if (durationTimer) clearTimeout(durationTimer);
     const parsed = parseDurationInput(estimateInput);
     durationError = parsed.error;
+    if (normalizeOnValid && !parsed.error && parsed.normalized) {
+      estimateInput = parsed.normalized;
+    }
     return !parsed.error;
   }
 
   function validateDatesNow(): boolean {
     if (dateTimer) clearTimeout(dateTimer);
-    dateError = validateDeadlineOrder(sgdbDate, dueDate);
-    return !dateError;
+    const res = validateDeadlines({
+      sgdbDate,
+      dueDate,
+      checkPastSgdb: true,
+      checkPastDue: true,
+    });
+    sgdbError = res.sgdbError;
+    dueError = res.dueError;
+    return !res.sgdbError && !res.dueError;
   }
 
   function isFormDirty(): boolean {
     return (
       title.trim().length > 0 ||
       description.trim().length > 0 ||
+      status !== "todo" ||
       sgdbDate.trim().length > 0 ||
       dueDate.trim().length > 0 ||
+      sgdbPartial ||
+      duePartial ||
       estimateInput.trim().length > 0 ||
       importance !== 3 ||
       difficulty !== 3 ||
       manualPriority !== 3 ||
       urgentOverride ||
       tags.length > 0 ||
+      tagInputText.trim().length > 0 ||
       stagedRelations.length > 0 ||
-      pendingAttachments.length > 0
+      relationSearchQuery.trim().length > 0 ||
+      pendingAttachments.length > 0 ||
+      nextAttachmentDesc.trim().length > 0 ||
+      (reporter.trim().length > 0 && reporter.trim() !== activeUser) ||
+      (assignee.trim().length > 0 && assignee.trim() !== activeUser) ||
+      (evaluator.trim().length > 0 && evaluator.trim() !== activeUser)
     );
   }
+
+  $effect(() => {
+    isDirty = isFormDirty();
+  });
 
   function basenameOfPath(rawPath: string): string {
     const parts = rawPath.split(/[/\\]/);
@@ -249,34 +315,42 @@
   }
 
   function resetForm() {
+    if (durationTimer) clearTimeout(durationTimer);
+    if (dateTimer) clearTimeout(dateTimer);
     title = "";
     description = "";
     status = "todo";
     sgdbDate = "";
     dueDate = "";
+    sgdbPartial = false;
+    duePartial = false;
     estimateInput = "";
     importance = 3;
     difficulty = 3;
     manualPriority = 3;
     urgentOverride = false;
     tags = [];
+    tagInputText = "";
     reporter = activeUser;
     assignee = activeUser;
     evaluator = activeUser;
     stagedRelations = [];
+    relationSearchQuery = "";
     pendingAttachments = [];
     nextAttachmentDesc = "";
     titleTouched = false;
     titleError = null;
-    dateError = null;
+    sgdbError = null;
+    dueError = null;
     durationError = null;
     formError = null;
+    formResetKey += 1;
   }
 
   function handleCancelOrReset() {
     if (isFormDirty()) {
-      const ok = window.confirm("Discard unsaved changes?");
-      if (!ok) return;
+      showResetConfirmModal = true;
+      return;
     }
     resetForm();
     announce("Form reset");
@@ -341,14 +415,14 @@
 
     const titleOk = validateTitleNow();
     const datesOk = validateDatesNow();
-    const durOk = validateDurationNow();
+    const durOk = validateDurationNow(true);
 
     if (!titleOk) {
       announce(titleError!);
       return;
     }
     if (!datesOk) {
-      announce(dateError!);
+      announce(sgdbError ?? dueError ?? "Invalid date selection");
       return;
     }
     if (!durOk) {
@@ -440,297 +514,316 @@
     style="display: flex; flex-direction: column; gap: 1.25rem;"
     novalidate
   >
-    <div class="form-field">
-      <label for="entry-title">Task Title *</label>
-      <input
-        id="entry-title"
-        type="text"
-        bind:value={title}
-        required
-        onblur={() => {
-          titleTouched = true;
-          validateTitleNow();
-        }}
-        aria-invalid={titleError ? "true" : "false"}
-        aria-describedby={titleError ? "entry-title-err" : undefined}
-        placeholder="Concise summary of what needs to be done"
-      />
-      {#if titleError && titleTouched}
-        <span id="entry-title-err" class="field-error" role="alert">
-          {titleError}
-        </span>
-      {/if}
-    </div>
-
-    <div class="form-field">
-      <label for="entry-desc">Description</label>
-      <textarea
-        id="entry-desc"
-        rows="4"
-        bind:value={description}
-        onpaste={(e) => {
-          if (e.clipboardData?.files?.length) {
-            void handleFilesDropOrPaste(e.clipboardData.files, true);
-          }
-        }}
-        placeholder="Detailed acceptance criteria, notes, or context. Paste images directly with Cmd/Ctrl+V."
-      ></textarea>
-    </div>
-
-    <div class="form-grid">
+    {#key formResetKey}
       <div class="form-field">
-        <label for="entry-status">Initial Status</label>
-        <select id="entry-status" bind:value={status}>
-          {#each STATUS_ORDER as st}
-            <option value={st}>{STATUS_LABELS[st]}</option>
-          {/each}
-        </select>
-      </div>
-
-      <div>
-        <DateFieldPicker
-          id="entry-sgdb"
-          label="Should Get Done By (SGDB Date)"
-          bind:value={sgdbDate}
-          invalid={Boolean(dateError)}
-          describedBy={dateError ? "entry-date-err" : undefined}
-          onBlur={() => {
-            validateDatesNow();
+        <label for="entry-title">Task Title *</label>
+        <input
+          id="entry-title"
+          type="text"
+          bind:value={title}
+          required
+          onblur={() => {
+            titleTouched = true;
+            validateTitleNow();
           }}
+          aria-invalid={titleError ? "true" : "false"}
+          aria-describedby={titleError ? "entry-title-err" : undefined}
+          placeholder="Concise summary of what needs to be done"
         />
-        {#if dateError}
-          <span id="entry-date-err" class="field-error" role="alert">
-            {dateError}
+        {#if titleError && titleTouched}
+          <span id="entry-title-err" class="field-error" role="alert">
+            {titleError}
           </span>
         {/if}
       </div>
 
-      <div>
+      <div class="form-field">
+        <label for="entry-desc">Description</label>
+        <textarea
+          id="entry-desc"
+          rows="4"
+          bind:value={description}
+          onpaste={(e) => {
+            if (e.clipboardData?.files?.length) {
+              void handleFilesDropOrPaste(e.clipboardData.files, true);
+            }
+          }}
+          placeholder="Detailed acceptance criteria, notes, or context. Paste images directly with Cmd/Ctrl+V."
+        ></textarea>
+      </div>
+
+      <div class="form-grid-dates">
+        <DateFieldPicker
+          id="entry-sgdb"
+          label="SGDB Date (Soft Deadline)"
+          bind:value={sgdbDate}
+          bind:hasPartialInput={sgdbPartial}
+          invalid={Boolean(sgdbError)}
+          errorMessage={sgdbError}
+          onBlur={() => {
+            validateDatesNow();
+          }}
+        />
+
         <DateFieldPicker
           id="entry-due"
           label="Hard Due Date"
           bind:value={dueDate}
-          invalid={Boolean(dateError)}
+          bind:hasPartialInput={duePartial}
+          minDate={sgdbDate}
+          invalid={Boolean(dueError)}
+          errorMessage={dueError}
           onBlur={() => {
             validateDatesNow();
           }}
         />
       </div>
 
-      <div class="form-field">
-        <label for="entry-estimate">Time Estimate</label>
-        <input
-          id="entry-estimate"
-          type="text"
-          bind:value={estimateInput}
-          onblur={() => {
-            validateDurationNow();
-          }}
-          placeholder="e.g. 30m, 2h, 1h30m, 3d"
-          aria-invalid={durationError ? "true" : "false"}
-          aria-describedby={durationError ? "entry-dur-err" : undefined}
+      <div class="form-grid">
+        <div class="form-field">
+          <label for="entry-status">Initial Status</label>
+          <select id="entry-status" bind:value={status}>
+            {#each STATUS_ORDER as st}
+              <option value={st}>{STATUS_LABELS[st]}</option>
+            {/each}
+          </select>
+        </div>
+
+        <div class="form-field">
+          <div class="date-picker-label-row">
+            <label for="entry-estimate">Time Estimate</label>
+            {#if durationPreview && !durationError}
+              <span class="duration-preview-badge">{durationPreview}</span>
+            {/if}
+          </div>
+          <input
+            id="entry-estimate"
+            type="text"
+            bind:value={estimateInput}
+            onblur={() => {
+              validateDurationNow(true);
+            }}
+            placeholder="e.g. 1w 2d 3h 20m, 2h 30m, 45m"
+            aria-invalid={durationError ? "true" : "false"}
+            aria-describedby={durationError ? "entry-dur-err" : undefined}
+          />
+          {#if durationError}
+            <span id="entry-dur-err" class="field-error" role="alert">
+              {durationError}
+            </span>
+          {/if}
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <RatingSlider
+          id="entry-importance"
+          label="Importance (1–5)"
+          bind:value={importance}
+          min={1}
+          max={5}
+          step={1}
         />
-        {#if durationError}
-          <span id="entry-dur-err" class="field-error" role="alert">
-            {durationError}
-          </span>
+
+        <RatingSlider
+          id="entry-difficulty"
+          label="Difficulty (1–5)"
+          bind:value={difficulty}
+          min={1}
+          max={5}
+          step={1}
+        />
+
+        <RatingSlider
+          id="entry-manual-prio"
+          label="Manual Priority (1–5)"
+          bind:value={manualPriority}
+          min={1}
+          max={5}
+          step={1}
+        />
+
+        <div class="form-field" style="justify-content: center;">
+          <div class="control-inline" style="margin-top: 1.4rem;">
+            <input
+              id="entry-urgent"
+              type="checkbox"
+              bind:checked={urgentOverride}
+            />
+            <label for="entry-urgent">Urgent Override</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-field">
+          <label for="entry-reporter">Reporter User</label>
+          <input
+            id="entry-reporter"
+            type="text"
+            list="user-datalist"
+            bind:value={reporter}
+          />
+        </div>
+
+        <div class="form-field">
+          <label for="entry-assignee">Assignee User</label>
+          <input
+            id="entry-assignee"
+            type="text"
+            list="user-datalist"
+            bind:value={assignee}
+          />
+        </div>
+
+        <div class="form-field">
+          <label for="entry-evaluator">Evaluator User (Approver)</label>
+          <input
+            id="entry-evaluator"
+            type="text"
+            list="user-datalist"
+            bind:value={evaluator}
+          />
+        </div>
+      </div>
+
+      <datalist id="user-datalist">
+        {#each knownUsers as u}
+          <option value={u}></option>
+        {/each}
+      </datalist>
+
+      <TagChipsInput
+        id="entry-tags"
+        bind:tags
+        bind:inputText={tagInputText}
+        {knownTags}
+      />
+
+      <!-- Unified Fuzzy Relation Picker -->
+      <div class="form-field">
+        <span class="field-label">Task Relationships</span>
+        <RelationPicker
+          buttonLabel="Add Relation"
+          bind:searchQuery={relationSearchQuery}
+          onAdd={addStagedRelation}
+        />
+
+        {#if stagedRelations.length > 0}
+          <div class="staged-relations-list">
+            {#each stagedRelations as rel, idx (`${rel.relation}-${rel.target_id}`)}
+              <span class="tag-chip">
+                <span>
+                  <strong>{RELATION_LABELS[rel.relation]}</strong>: #{rel.target_id}
+                  {#if rel.target_title}
+                    ({rel.target_title})
+                  {/if}
+                </span>
+                <button
+                  type="button"
+                  class="tag-chip-remove"
+                  onclick={() => removeStagedRelation(idx)}
+                  aria-label={`Remove ${RELATION_LABELS[rel.relation]} ${rel.target_id}`}
+                >
+                  ×
+                </button>
+              </span>
+            {/each}
+          </div>
         {/if}
       </div>
 
-      <RatingSlider
-        id="entry-importance"
-        label="Importance (1–5)"
-        bind:value={importance}
-        min={1}
-        max={5}
-        step={1}
-      />
-
-      <RatingSlider
-        id="entry-difficulty"
-        label="Difficulty (1–5)"
-        bind:value={difficulty}
-        min={1}
-        max={5}
-        step={1}
-      />
-
-      <RatingSlider
-        id="entry-manual-prio"
-        label="Manual Priority (1–5)"
-        bind:value={manualPriority}
-        min={1}
-        max={5}
-        step={1}
-      />
-
-      <div class="form-field" style="justify-content: center;">
-        <div class="control-inline" style="margin-top: 1.4rem;">
-          <input
-            id="entry-urgent"
-            type="checkbox"
-            bind:checked={urgentOverride}
-          />
-          <label for="entry-urgent">Urgent Override</label>
-        </div>
-      </div>
-    </div>
-
-    <div class="form-grid">
+      <!-- File & Image Attachments -->
       <div class="form-field">
-        <label for="entry-reporter">Reporter User</label>
-        <input
-          id="entry-reporter"
-          type="text"
-          list="user-datalist"
-          bind:value={reporter}
-        />
-      </div>
+        <span class="field-label">
+          File & Image Attachments ({pendingAttachments.length})
+        </span>
 
-      <div class="form-field">
-        <label for="entry-assignee">Assignee User</label>
-        <input
-          id="entry-assignee"
-          type="text"
-          list="user-datalist"
-          bind:value={assignee}
-        />
-      </div>
-
-      <div class="form-field">
-        <label for="entry-evaluator">Evaluator User (Approver)</label>
-        <input
-          id="entry-evaluator"
-          type="text"
-          list="user-datalist"
-          bind:value={evaluator}
-        />
-      </div>
-    </div>
-
-    <datalist id="user-datalist">
-      {#each knownUsers as u}
-        <option value={u}></option>
-      {/each}
-    </datalist>
-
-    <TagChipsInput id="entry-tags" bind:tags {knownTags} />
-
-    <!-- Unified Fuzzy Relation Picker -->
-    <div class="form-field">
-      <span class="field-label">Task Relationships</span>
-      <RelationPicker buttonLabel="Add Relation" onAdd={addStagedRelation} />
-
-      {#if stagedRelations.length > 0}
-        <div class="staged-relations-list">
-          {#each stagedRelations as rel, idx (`${rel.relation}-${rel.target_id}`)}
-            <span class="tag-chip">
-              <span>
-                <strong>{RELATION_LABELS[rel.relation]}</strong>: #{rel.target_id}
-                {#if rel.target_title}
-                  ({rel.target_title})
-                {/if}
+        <div
+          class={`dropzone ${isDragging ? "dragging" : ""}`}
+          role="region"
+          aria-label="Drop or paste files to attach to this new task"
+          ondragover={(e) => {
+            e.preventDefault();
+            isDragging = true;
+          }}
+          ondragleave={() => (isDragging = false)}
+          ondrop={(e) => {
+            e.preventDefault();
+            isDragging = false;
+            if (e.dataTransfer?.files?.length) {
+              void handleFilesDropOrPaste(e.dataTransfer.files, false);
+            }
+          }}
+          onpaste={(e) => {
+            if (e.clipboardData?.files?.length) {
+              void handleFilesDropOrPaste(e.clipboardData.files, true);
+            }
+          }}
+        >
+          <div class="form-grid" style="align-items: end; text-align: left;">
+            <div class="form-field">
+              <label for="entry-att-desc">
+                Optional Alt Text / Description
+              </label>
+              <input
+                id="entry-att-desc"
+                type="text"
+                bind:value={nextAttachmentDesc}
+                placeholder="Defaults to filename"
+              />
+            </div>
+            <div class="actions-row">
+              <button
+                type="button"
+                class="btn-sm"
+                onclick={handlePickAttachment}
+              >
+                Choose File from Disk...
+              </button>
+              <span class="field-hint">
+                Or drag-and-drop / paste (Cmd/Ctrl+V) an image
               </span>
-              <button
-                type="button"
-                class="tag-chip-remove"
-                onclick={() => removeStagedRelation(idx)}
-                aria-label={`Remove ${RELATION_LABELS[rel.relation]} ${rel.target_id}`}
-              >
-                ×
-              </button>
-            </span>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- File & Image Attachments -->
-    <div class="form-field">
-      <span class="field-label">
-        File & Image Attachments ({pendingAttachments.length})
-      </span>
-
-      <div
-        class={`dropzone ${isDragging ? "dragging" : ""}`}
-        role="region"
-        aria-label="Drop or paste files to attach to this new task"
-        ondragover={(e) => {
-          e.preventDefault();
-          isDragging = true;
-        }}
-        ondragleave={() => (isDragging = false)}
-        ondrop={(e) => {
-          e.preventDefault();
-          isDragging = false;
-          if (e.dataTransfer?.files?.length) {
-            void handleFilesDropOrPaste(e.dataTransfer.files, false);
-          }
-        }}
-        onpaste={(e) => {
-          if (e.clipboardData?.files?.length) {
-            void handleFilesDropOrPaste(e.clipboardData.files, true);
-          }
-        }}
-      >
-        <div class="form-grid" style="align-items: end; text-align: left;">
-          <div class="form-field">
-            <label for="entry-att-desc">
-              Optional Alt Text / Description
-            </label>
-            <input
-              id="entry-att-desc"
-              type="text"
-              bind:value={nextAttachmentDesc}
-              placeholder="Defaults to filename"
-            />
-          </div>
-          <div class="actions-row">
-            <button type="button" class="btn-sm" onclick={handlePickAttachment}>
-              Choose File from Disk...
-            </button>
-            <span class="field-hint">
-              Or drag-and-drop / paste (Cmd/Ctrl+V) an image
-            </span>
+            </div>
           </div>
         </div>
-      </div>
 
-      {#if pendingAttachments.length > 0}
-        <ul class="draft-attachments-list">
-          {#each pendingAttachments as att (att.id)}
-            <li class="draft-attachment-item">
-              <div class="draft-attachment-info">
-                {#if att.previewUrl}
-                  <img
-                    src={att.previewUrl}
-                    alt={att.description ?? att.suggestedName}
-                    class="draft-attachment-thumb"
-                  />
-                {/if}
-                <div>
-                  <strong>{att.suggestedName}</strong>
-                  {#if att.description && att.description !== att.suggestedName}
-                    <span class="field-hint"> — "{att.description}"</span>
+        {#if pendingAttachments.length > 0}
+          <ul class="draft-attachments-list">
+            {#each pendingAttachments as att (att.id)}
+              <li class="draft-attachment-item">
+                <div class="draft-attachment-info">
+                  {#if att.previewUrl}
+                    <img
+                      src={att.previewUrl}
+                      alt={att.description ?? att.suggestedName}
+                      class="draft-attachment-thumb"
+                    />
                   {/if}
+                  <div>
+                    <strong>{att.suggestedName}</strong>
+                    {#if att.description && att.description !== att.suggestedName}
+                      <span class="field-hint"> — "{att.description}"</span>
+                    {/if}
+                  </div>
                 </div>
-              </div>
-              <button
-                type="button"
-                class="btn-sm btn-danger"
-                onclick={() => {
-                  pendingAttachments = pendingAttachments.filter(
-                    (a) => a.id !== att.id,
-                  );
-                }}
-              >
-                Remove
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </div>
+                <button
+                  type="button"
+                  class="btn-sm btn-danger"
+                  onclick={() => {
+                    pendingAttachments = pendingAttachments.filter(
+                      (a) => a.id !== att.id,
+                    );
+                  }}
+                >
+                  Remove
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/key}
 
     <div class="actions-row">
       <button
@@ -746,4 +839,19 @@
       </span>
     </div>
   </form>
+
+  <ConfirmModal
+    bind:open={showResetConfirmModal}
+    title="Reset New Task Form?"
+    description="This will clear all fields, tags, relationships, and staged attachments you have entered."
+    confirmLabel="Clear Form"
+    cancelLabel="Cancel"
+    onConfirm={() => {
+      resetForm();
+      announce("Form reset");
+    }}
+    onCancel={() => {
+      showResetConfirmModal = false;
+    }}
+  />
 </section>

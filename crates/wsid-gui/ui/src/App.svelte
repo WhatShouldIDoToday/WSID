@@ -33,6 +33,7 @@
   import TaskDetailDrawer from "./components/TaskDetailDrawer.svelte";
   import AboutModal from "./components/AboutModal.svelte";
   import UserSwitcherModal from "./components/UserSwitcherModal.svelte";
+  import ConfirmModal from "./components/ConfirmModal.svelte";
 
   type ViewTab =
     "focus" | "kanban" | "eisenhower" | "database" | "entry" | "settings";
@@ -51,6 +52,12 @@
   let loading = $state<boolean>(true);
   let refreshTrigger = $state<number>(0);
   let uiPreferences = $state<UiPreferences>(loadUiPreferences());
+  let entryFormDirty = $state<boolean>(false);
+  let pendingTabSwitch = $state<{
+    nextTab: ViewTab;
+    announcement?: string;
+  } | null>(null);
+  let confirmLeaveOpen = $state<boolean>(false);
 
   const tabs: { id: ViewTab; label: string; shortcut: string }[] = [
     { id: "focus", label: "Focus", shortcut: "1" },
@@ -62,6 +69,37 @@
 
   function announce(msg: string) {
     statusAnnouncement = msg;
+  }
+
+  function switchTab(nextTab: ViewTab, announcement?: string) {
+    if (nextTab === activeTab) return;
+    if (activeTab === "entry" && entryFormDirty) {
+      pendingTabSwitch = { nextTab, announcement };
+      confirmLeaveOpen = true;
+      return;
+    }
+    activeTab = nextTab;
+    if (announcement) {
+      announce(announcement);
+    }
+  }
+
+  function confirmLeaveNewTask() {
+    const pending = pendingTabSwitch;
+    pendingTabSwitch = null;
+    confirmLeaveOpen = false;
+    entryFormDirty = false;
+    if (pending) {
+      activeTab = pending.nextTab;
+      if (pending.announcement) {
+        announce(pending.announcement);
+      }
+    }
+  }
+
+  function cancelLeaveNewTask() {
+    pendingTabSwitch = null;
+    confirmLeaveOpen = false;
   }
 
   function handleUpdateUiPreferences(next: UiPreferences) {
@@ -170,15 +208,13 @@
     } else if (action === "switch_global_db") {
       void handleSwitchToGlobalDb();
     } else if (action === "open_settings") {
-      activeTab = "settings";
-      announce("Opened Settings.");
+      switchTab("settings", "Opened Settings.");
     } else if (action === "open_about") {
       aboutModalOpen = true;
       announce("Opened About and Third-Party Licenses dialog.");
     } else if (action.startsWith("view:")) {
       const view = action.slice("view:".length) as ViewTab;
-      activeTab = view;
-      announce(`Switched to ${view} view.`);
+      switchTab(view, `Switched to ${view} view.`);
     } else if (action.startsWith("switch_db:")) {
       const path = action.slice("switch_db:".length);
       void handleSwitchRecentDb(path);
@@ -223,8 +259,7 @@
   function handleGlobalKeydown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === ",") {
       e.preventDefault();
-      activeTab = "settings";
-      announce("Opened Settings.");
+      switchTab("settings", "Opened Settings.");
       return;
     }
 
@@ -236,13 +271,21 @@
         target.tagName === "SELECT" ||
         target.isContentEditable);
 
-    if (isInput || selectedTaskId || aboutModalOpen || userSwitcherOpen) return;
+    if (
+      isInput ||
+      selectedTaskId ||
+      aboutModalOpen ||
+      userSwitcherOpen ||
+      confirmLeaveOpen
+    )
+      return;
 
-    if (e.key === "1") activeTab = "focus";
-    else if (e.key === "2") activeTab = "kanban";
-    else if (e.key === "3") activeTab = "eisenhower";
-    else if (e.key === "4") activeTab = "database";
-    else if (e.key === "5" || e.key === "n") activeTab = "entry";
+    if (e.key === "1") switchTab("focus", "Switched to Focus.");
+    else if (e.key === "2") switchTab("kanban", "Switched to Kanban.");
+    else if (e.key === "3") switchTab("eisenhower", "Switched to Eisenhower.");
+    else if (e.key === "4") switchTab("database", "Switched to Database.");
+    else if (e.key === "5" || e.key === "n")
+      switchTab("entry", "Switched to New Task.");
     else if (e.key === "?") {
       aboutModalOpen = true;
       announce("Opened About and Third-Party Licenses dialog.");
@@ -281,8 +324,7 @@
           aria-keyshortcuts={tab.shortcut}
           title={`${tab.label} (Shortcut: ${tab.shortcut})`}
           onclick={() => {
-            activeTab = tab.id;
-            announce(`Switched to ${tab.label}.`);
+            switchTab(tab.id, `Switched to ${tab.label}.`);
           }}
         >
           {tab.label}
@@ -298,8 +340,7 @@
         aria-keyshortcuts="Meta+Comma Control+Comma"
         title="Settings (Cmd/Ctrl+,)"
         onclick={() => {
-          activeTab = "settings";
-          announce("Opened Settings.");
+          switchTab("settings", "Opened Settings.");
         }}
       >
         Settings
@@ -356,7 +397,9 @@
         activeUser={session?.active_user ?? "human"}
         knownUsers={session?.known_users ?? []}
         knownTags={session?.known_tags ?? []}
+        bind:isDirty={entryFormDirty}
         onCreated={async (createdId) => {
+          entryFormDirty = false;
           await refreshAllData();
           activeTab = "focus";
           openTaskDetail(createdId);
@@ -428,3 +471,14 @@
     }}
   />
 {/if}
+
+<ConfirmModal
+  bind:open={confirmLeaveOpen}
+  title="Discard Unsaved Task?"
+  description="You have unsaved data in the New Task form. Leaving this page will clear the form."
+  confirmLabel="Clear Form & Leave"
+  cancelLabel="Stay on Page"
+  danger={true}
+  onConfirm={confirmLeaveNewTask}
+  onCancel={cancelLeaveNewTask}
+/>
