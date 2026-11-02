@@ -28,14 +28,16 @@ pub struct TaskDetailResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 struct GetFocusQueueArgs {
-    pub persona: Option<String>,
+    #[serde(alias = "persona")]
+    pub user: Option<String>,
     pub preset: Option<FocusPreset>,
     pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct GetBlockedTasksArgs {
-    pub persona: Option<String>,
+    #[serde(alias = "persona")]
+    pub user: Option<String>,
     pub tag: Option<String>,
 }
 
@@ -97,7 +99,7 @@ struct UpdateTaskStatusArgs {
 struct AddTaskNoteArgs {
     #[serde(alias = "id")]
     pub task_id: String,
-    #[serde(alias = "author_persona")]
+    #[serde(alias = "author_user", alias = "author_persona")]
     pub author: Option<String>,
     pub body: String,
     pub spawn_subtasks: Option<bool>,
@@ -168,29 +170,28 @@ pub fn dispatch_tool(
     let outcome: Result<CallToolResult, WsidError> = match tool_name {
         "get_focus_queue" => {
             let args: GetFocusQueueArgs = parse_args(args_val)?;
-            let persona = args
-                .persona
+            let user = args
+                .user
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
-                .unwrap_or(&config.default_persona);
+                .unwrap_or(&config.default_user);
             let preset = args.preset.unwrap_or(config.focus_preset);
             let custom_weights = if args.preset.is_none() { config.custom_weights } else { None };
             let limit = args.limit.or(Some(config.focus_limit));
 
-            compute_focus_queue(db, persona, preset, custom_weights, limit, today, config.scoring)
-                .map(|resp| CallToolResult::ok_json(&resp))
+            compute_focus_queue(db, user, preset, custom_weights, limit, today, config.scoring).map(|resp| CallToolResult::ok_json(&resp))
         }
         "get_blocked_tasks" => {
             let args: GetBlockedTasksArgs = parse_args(args_val)?;
-            let persona = args
-                .persona
+            let user = args
+                .user
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
-                .unwrap_or(&config.default_persona);
+                .unwrap_or(&config.default_user);
 
-            get_blocked_tasks(db, persona, args.tag.as_deref()).map(|entries| {
+            get_blocked_tasks(db, user, args.tag.as_deref()).map(|entries| {
                 CallToolResult::ok_json(&json!({
-                    "persona": persona,
+                    "user": user,
                     "blocked_tasks": entries,
                 }))
             })
@@ -232,7 +233,7 @@ pub fn dispatch_tool(
                 .author
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
-                .unwrap_or(&config.default_persona);
+                .unwrap_or(&config.default_user);
             let spawn_subtasks = args.spawn_subtasks.unwrap_or(true);
 
             add_task_note(db, &args.task_id, author, &args.body, spawn_subtasks).and_then(|mut res| {
@@ -324,7 +325,7 @@ fn handle_create_task(db: &mut Database, config: &AppConfig, args: CreateTaskArg
             assignee: args.assignee,
             evaluator: args.evaluator,
         },
-        &config.default_persona,
+        &config.default_user,
     )?;
 
     let mut linked_relations = Vec::with_capacity(args.relations.len());

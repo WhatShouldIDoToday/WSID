@@ -1,10 +1,15 @@
 <script lang="ts">
+  import DateFieldPicker from "./DateFieldPicker.svelte";
+  import TagChipsInput from "./TagChipsInput.svelte";
+  import RelationPicker, {
+    type SelectedRelationEntry,
+  } from "./RelationPicker.svelte";
   import {
     type TaskStatus,
-    type RelationInputKind,
     type AttachmentInput,
     STATUS_LABELS,
     STATUS_ORDER,
+    RELATION_LABELS,
     createNewTask,
     pickAttachmentFileDialog,
     saveClipboardBytesForDraft,
@@ -12,15 +17,24 @@
     parseDurationInput,
   } from "../lib/ipc";
 
+  interface DraftAttachmentItem {
+    id: string;
+    path?: string;
+    base64Data?: string;
+    suggestedName: string;
+    description: string | null;
+    previewUrl?: string;
+  }
+
   interface Props {
-    activePersona: string;
-    knownPersonas: string[];
+    activeUser: string;
+    knownUsers: string[];
     knownTags: string[];
     onCreated: (createdId: string) => void;
     announce: (msg: string) => void;
   }
 
-  let { activePersona, knownPersonas, knownTags, onCreated, announce }: Props =
+  let { activeUser, knownUsers, knownTags, onCreated, announce }: Props =
     $props();
 
   let title = $state<string>("");
@@ -33,19 +47,13 @@
   let difficulty = $state<number>(3);
   let manualPriority = $state<number>(0);
   let urgentOverride = $state<boolean>(false);
-  let tagsInput = $state<string>("");
+  let tags = $state<string[]>([]);
   let reporter = $state<string>("");
   let assignee = $state<string>("");
   let evaluator = $state<string>("");
 
-  let blocksIds = $state<string>("");
-  let blockedByIds = $state<string>("");
-  let subTaskOfIds = $state<string>("");
-  let parentTaskOfIds = $state<string>("");
-  let parallelIds = $state<string>("");
-  let relatedIds = $state<string>("");
-
-  let pendingAttachments = $state<AttachmentInput[]>([]);
+  let stagedRelations = $state<SelectedRelationEntry[]>([]);
+  let pendingAttachments = $state<DraftAttachmentItem[]>([]);
   let nextAttachmentDesc = $state<string>("");
   let isDragging = $state<boolean>(false);
 
@@ -55,31 +63,50 @@
   let formError = $state<string | null>(null);
 
   $effect(() => {
-    if (!reporter) reporter = activePersona;
-    if (!assignee) assignee = activePersona;
-    if (!evaluator) evaluator = activePersona;
+    if (!reporter) reporter = activeUser;
+    if (!assignee) assignee = activeUser;
+    if (!evaluator) evaluator = activeUser;
   });
 
-  function splitShortIds(raw: string): string[] {
-    return raw
-      .split(/[,\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+  function basenameOfPath(rawPath: string): string {
+    const parts = rawPath.split(/[/\\]/);
+    return parts[parts.length - 1] || rawPath;
+  }
+
+  function addStagedRelation(entry: SelectedRelationEntry) {
+    const exists = stagedRelations.some(
+      (r) =>
+        r.relation === entry.relation &&
+        r.target_id.toUpperCase() === entry.target_id.toUpperCase(),
+    );
+    if (!exists) {
+      stagedRelations = [...stagedRelations, entry];
+      announce(
+        `Added ${RELATION_LABELS[entry.relation]} relation to ${entry.target_id}`,
+      );
+    }
+  }
+
+  function removeStagedRelation(index: number) {
+    stagedRelations = stagedRelations.filter((_, idx) => idx !== index);
   }
 
   async function handlePickAttachment() {
     try {
       const path = await pickAttachmentFileDialog();
       if (!path) return;
+      const fileName = basenameOfPath(path);
       pendingAttachments = [
         ...pendingAttachments,
         {
+          id: `${Date.now()}-${Math.random()}`,
           path,
+          suggestedName: fileName,
           description: nextAttachmentDesc.trim() || null,
         },
       ];
       nextAttachmentDesc = "";
-      announce(`Staged attachment ${path}`);
+      announce(`Staged attachment ${fileName}`);
     } catch (err) {
       formError = String(err);
     }
@@ -92,29 +119,34 @@
     for (const file of Array.from(files)) {
       try {
         const nativePath = (file as File & { path?: string }).path;
+        const friendlyName =
+          file.name ||
+          `pasted-image-${new Date().toISOString().slice(11, 19).replace(/:/g, "")}.png`;
         if (!fromClipboard && nativePath) {
           pendingAttachments = [
             ...pendingAttachments,
             {
+              id: `${Date.now()}-${Math.random()}`,
               path: nativePath,
-              description: nextAttachmentDesc.trim() || file.name,
+              suggestedName: basenameOfPath(nativePath),
+              description: nextAttachmentDesc.trim() || friendlyName,
             },
           ];
         } else {
+          // Hold pasted or in-memory file in memory until task creation
           const b64 = await fileToBase64(file);
-          const savedPath = await saveClipboardBytesForDraft(
-            b64,
-            file.name || "clipboard-attachment.png",
-          );
           pendingAttachments = [
             ...pendingAttachments,
             {
-              path: savedPath,
-              description: nextAttachmentDesc.trim() || file.name || null,
+              id: `${Date.now()}-${Math.random()}`,
+              base64Data: b64,
+              suggestedName: friendlyName,
+              description: nextAttachmentDesc.trim() || friendlyName,
+              previewUrl: file.type.startsWith("image/") ? b64 : undefined,
             },
           ];
         }
-        announce(`Staged attachment ${file.name || "clipboard file"}`);
+        announce(`Staged attachment ${friendlyName}`);
       } catch (err) {
         formError = String(err);
       }
@@ -133,16 +165,11 @@
     difficulty = 3;
     manualPriority = 0;
     urgentOverride = false;
-    tagsInput = "";
-    reporter = activePersona;
-    assignee = activePersona;
-    evaluator = activePersona;
-    blocksIds = "";
-    blockedByIds = "";
-    subTaskOfIds = "";
-    parentTaskOfIds = "";
-    parallelIds = "";
-    relatedIds = "";
+    tags = [];
+    reporter = activeUser;
+    assignee = activeUser;
+    evaluator = activeUser;
+    stagedRelations = [];
     pendingAttachments = [];
     nextAttachmentDesc = "";
     titleError = null;
@@ -178,30 +205,26 @@
       return;
     }
 
-    const tags = tagsInput
-      .split(/[,\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    const initial_relations: {
-      relation: RelationInputKind;
-      target_id: string;
-    }[] = [];
-
-    const pushRels = (kind: RelationInputKind, raw: string) => {
-      for (const id of splitShortIds(raw)) {
-        initial_relations.push({ relation: kind, target_id: id });
-      }
-    };
-
-    pushRels("blocks", blocksIds);
-    pushRels("blocked_by", blockedByIds);
-    pushRels("sub_task_of", subTaskOfIds);
-    pushRels("parent_task_of", parentTaskOfIds);
-    pushRels("parallel", parallelIds);
-    pushRels("related", relatedIds);
-
     try {
+      const attachmentsToSubmit: AttachmentInput[] = [];
+      for (const item of pendingAttachments) {
+        if (item.path) {
+          attachmentsToSubmit.push({
+            path: item.path,
+            description: item.description,
+          });
+        } else if (item.base64Data) {
+          const savedPath = await saveClipboardBytesForDraft(
+            item.base64Data,
+            item.suggestedName,
+          );
+          attachmentsToSubmit.push({
+            path: savedPath,
+            description: item.description,
+          });
+        }
+      }
+
       const created = await createNewTask({
         title: title.trim(),
         description: description.trim() || null,
@@ -214,11 +237,14 @@
         urgent_override: urgentOverride,
         manual_priority: Number(manualPriority),
         tags,
-        reporter: reporter.trim() || activePersona,
-        assignee: assignee.trim() || activePersona,
-        evaluator: evaluator.trim() || activePersona,
-        attachments: pendingAttachments,
-        initial_relations,
+        reporter: reporter.trim() || activeUser,
+        assignee: assignee.trim() || activeUser,
+        evaluator: evaluator.trim() || activeUser,
+        attachments: attachmentsToSubmit,
+        initial_relations: stagedRelations.map((r) => ({
+          relation: r.relation,
+          target_id: r.target_id,
+        })),
       });
 
       announce(`Created task ${created.id}: ${created.title}`);
@@ -234,14 +260,8 @@
 <section aria-labelledby="data-entry-heading">
   <div style="margin-bottom: 1rem;">
     <h2 id="data-entry-heading" style="margin: 0; font-size: 1.35rem;">
-      Task Data Entry
+      New Task
     </h2>
-    <p
-      style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;"
-    >
-      Create a task with full scheduling metadata, roles, graph dependencies,
-      and file/image attachments.
-    </p>
   </div>
 
   {#if formError}
@@ -302,31 +322,27 @@
         </select>
       </div>
 
-      <div class="form-field">
-        <label for="entry-sgdb">Should Get Done By (SGDB Date)</label>
-        <input
+      <div>
+        <DateFieldPicker
           id="entry-sgdb"
-          type="date"
+          label="Should Get Done By (SGDB Date)"
           bind:value={sgdbDate}
-          aria-invalid={dateError ? "true" : "false"}
-          aria-describedby="entry-date-hint"
+          invalid={Boolean(dateError)}
+          describedBy={dateError ? "entry-date-err" : undefined}
         />
-        <span id="entry-date-hint" class="field-hint">
-          Target internal completion date (must be &le; Due Date if both are
-          set).
-        </span>
         {#if dateError}
-          <span class="field-error" role="alert">{dateError}</span>
+          <span id="entry-date-err" class="field-error" role="alert">
+            {dateError}
+          </span>
         {/if}
       </div>
 
-      <div class="form-field">
-        <label for="entry-due">Hard Due Date</label>
-        <input
+      <div>
+        <DateFieldPicker
           id="entry-due"
-          type="date"
+          label="Hard Due Date"
           bind:value={dueDate}
-          aria-invalid={dateError ? "true" : "false"}
+          invalid={Boolean(dateError)}
         />
       </div>
 
@@ -338,12 +354,8 @@
           bind:value={estimateInput}
           placeholder="e.g. 30m, 2h, 1h30m, 3d"
           aria-invalid={durationError ? "true" : "false"}
-          aria-describedby={durationError ? "entry-dur-err" : "entry-dur-hint"}
+          aria-describedby={durationError ? "entry-dur-err" : undefined}
         />
-        <span id="entry-dur-hint" class="field-hint">
-          Supports <code>15m</code>, <code>2h</code>, <code>1d</code> (8h), or
-          <code>1w</code> (40h).
-        </span>
         {#if durationError}
           <span id="entry-dur-err" class="field-error" role="alert">
             {durationError}
@@ -398,135 +410,78 @@
 
     <div class="form-grid">
       <div class="form-field">
-        <label for="entry-reporter">Reporter Persona</label>
+        <label for="entry-reporter">Reporter User</label>
         <input
           id="entry-reporter"
           type="text"
-          list="persona-datalist"
+          list="user-datalist"
           bind:value={reporter}
         />
       </div>
 
       <div class="form-field">
-        <label for="entry-assignee">Assignee Persona</label>
+        <label for="entry-assignee">Assignee User</label>
         <input
           id="entry-assignee"
           type="text"
-          list="persona-datalist"
+          list="user-datalist"
           bind:value={assignee}
         />
       </div>
 
       <div class="form-field">
-        <label for="entry-evaluator">Evaluator Persona (Approver)</label>
+        <label for="entry-evaluator">Evaluator User (Approver)</label>
         <input
           id="entry-evaluator"
           type="text"
-          list="persona-datalist"
+          list="user-datalist"
           bind:value={evaluator}
         />
-        <span class="field-hint">
-          If Assignee &ne; Evaluator, completing this task moves it to In
-          Review.
-        </span>
       </div>
     </div>
 
-    <datalist id="persona-datalist">
-      {#each knownPersonas as p}
-        <option value={p}></option>
+    <datalist id="user-datalist">
+      {#each knownUsers as u}
+        <option value={u}></option>
       {/each}
     </datalist>
 
+    <TagChipsInput id="entry-tags" bind:tags {knownTags} />
+
+    <!-- Unified Fuzzy Relation Picker -->
     <div class="form-field">
-      <label for="entry-tags">
-        Tags (single-word tokens, comma or space separated)
-      </label>
-      <input
-        id="entry-tags"
-        type="text"
-        bind:value={tagsInput}
-        placeholder="e.g. project-a, backend, a11y"
-      />
-      {#if knownTags.length > 0}
-        <span class="field-hint">
-          Existing tags: {knownTags.map((t) => `#${t}`).join(", ")}
-        </span>
+      <span class="field-label">Task Relationships</span>
+      <RelationPicker buttonLabel="Add Relation" onAdd={addStagedRelation} />
+
+      {#if stagedRelations.length > 0}
+        <div class="staged-relations-list">
+          {#each stagedRelations as rel, idx (`${rel.relation}-${rel.target_id}`)}
+            <span class="tag-chip">
+              <span>
+                <strong>{RELATION_LABELS[rel.relation]}</strong>: #{rel.target_id}
+                {#if rel.target_title}
+                  ({rel.target_title})
+                {/if}
+              </span>
+              <button
+                type="button"
+                class="tag-chip-remove"
+                onclick={() => removeStagedRelation(idx)}
+                aria-label={`Remove ${RELATION_LABELS[rel.relation]} ${rel.target_id}`}
+              >
+                ×
+              </button>
+            </span>
+          {/each}
+        </div>
       {/if}
     </div>
 
-    <!-- Initial Graph Relations -->
-    <fieldset
-      style="border: 1px solid var(--border-subtle); border-radius: 0.5rem; padding: 1rem;"
-    >
-      <legend style="font-weight: 700; padding: 0 0.4rem;">
-        Initial Task Relations (Optional Short IDs, e.g. AB1234)
-      </legend>
-      <div class="form-grid">
-        <div class="form-field">
-          <label for="rel-blocks">Blocks Task ID(s)</label>
-          <input
-            id="rel-blocks"
-            type="text"
-            bind:value={blocksIds}
-            placeholder="AB1234, CD5678"
-          />
-        </div>
-        <div class="form-field">
-          <label for="rel-blocked-by">Blocked By Task ID(s)</label>
-          <input
-            id="rel-blocked-by"
-            type="text"
-            bind:value={blockedByIds}
-            placeholder="AB1234"
-          />
-        </div>
-        <div class="form-field">
-          <label for="rel-subtask-of">Sub-task Of (Parent ID)</label>
-          <input
-            id="rel-subtask-of"
-            type="text"
-            bind:value={subTaskOfIds}
-            placeholder="AB1234"
-          />
-        </div>
-        <div class="form-field">
-          <label for="rel-parent-of">Parent Task Of (Child IDs)</label>
-          <input
-            id="rel-parent-of"
-            type="text"
-            bind:value={parentTaskOfIds}
-            placeholder="AB1234"
-          />
-        </div>
-        <div class="form-field">
-          <label for="rel-parallel">Parallel With ID(s)</label>
-          <input
-            id="rel-parallel"
-            type="text"
-            bind:value={parallelIds}
-            placeholder="AB1234"
-          />
-        </div>
-        <div class="form-field">
-          <label for="rel-related">Related To ID(s)</label>
-          <input
-            id="rel-related"
-            type="text"
-            bind:value={relatedIds}
-            placeholder="AB1234"
-          />
-        </div>
-      </div>
-    </fieldset>
-
     <!-- File & Image Attachments -->
-    <fieldset
-      style="border: 1px solid var(--border-subtle); border-radius: 0.5rem; padding: 1rem;"
-    >
-      <legend style="font-weight: 700; padding: 0 0.4rem;">
+    <div class="form-field">
+      <span class="field-label">
         File & Image Attachments ({pendingAttachments.length})
-      </legend>
+      </span>
 
       <div
         class={`dropzone ${isDragging ? "dragging" : ""}`}
@@ -553,13 +508,13 @@
         <div class="form-grid" style="align-items: end; text-align: left;">
           <div class="form-field">
             <label for="entry-att-desc">
-              Optional Alt Text / Description for Next Attachment
+              Optional Alt Text / Description
             </label>
             <input
               id="entry-att-desc"
               type="text"
               bind:value={nextAttachmentDesc}
-              placeholder="Defaults to filename for screen readers"
+              placeholder="Defaults to filename"
             />
           </div>
           <div class="actions-row">
@@ -574,22 +529,30 @@
       </div>
 
       {#if pendingAttachments.length > 0}
-        <ul
-          style="margin: 0.75rem 0 0 0; padding-left: 1.2rem; font-size: 0.88rem;"
-        >
-          {#each pendingAttachments as att, idx}
-            <li style="margin-bottom: 0.3rem;">
-              <code>{att.path}</code>
-              {#if att.description}
-                — Alt: "{att.description}"
-              {/if}
+        <ul class="draft-attachments-list">
+          {#each pendingAttachments as att (att.id)}
+            <li class="draft-attachment-item">
+              <div class="draft-attachment-info">
+                {#if att.previewUrl}
+                  <img
+                    src={att.previewUrl}
+                    alt={att.description ?? att.suggestedName}
+                    class="draft-attachment-thumb"
+                  />
+                {/if}
+                <div>
+                  <strong>{att.suggestedName}</strong>
+                  {#if att.description && att.description !== att.suggestedName}
+                    <span class="field-hint"> — "{att.description}"</span>
+                  {/if}
+                </div>
+              </div>
               <button
                 type="button"
                 class="btn-sm btn-danger"
-                style="margin-left: 0.5rem;"
                 onclick={() => {
                   pendingAttachments = pendingAttachments.filter(
-                    (_, i) => i !== idx,
+                    (a) => a.id !== att.id,
                   );
                 }}
               >
@@ -599,7 +562,7 @@
           {/each}
         </ul>
       {/if}
-    </fieldset>
+    </div>
 
     <div class="actions-row">
       <button type="submit" class="btn-primary">Create Task</button>

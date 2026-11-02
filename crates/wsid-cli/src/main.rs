@@ -6,7 +6,7 @@ use std::io::{self, IsTerminal};
 
 use chrono::Utc;
 use clap::Parser;
-use wsid_core::{AppConfig, Database, compute_focus_queue, default_config_path, normalize_persona, resolve_active_db_path};
+use wsid_core::{AppConfig, Database, compute_focus_queue, default_config_path, normalize_user, resolve_active_db_path};
 
 use crate::args::{Cli, Commands};
 use crate::cli_runner::{OutputMode, execute_command, render_focus_queue};
@@ -28,9 +28,9 @@ fn try_main() -> wsid_core::Result<()> {
     config.record_recent_workspace(db_path.clone());
     let _ = config.save_to_path(&cfg_path);
 
-    let persona = match cli.persona.as_deref() {
-        Some(p) if !p.trim().is_empty() => normalize_persona(p)?,
-        _ => config.default_persona.clone(),
+    let user = match cli.user.as_deref() {
+        Some(u) if !u.trim().is_empty() => normalize_user(u)?,
+        _ => config.default_user.clone(),
     };
 
     let output_mode = OutputMode::from_flags(cli.accessible, cli.json);
@@ -38,13 +38,13 @@ fn try_main() -> wsid_core::Result<()> {
     match cli.command {
         None => {
             if io::stdout().is_terminal() && !cli.json {
-                tui::run_tui(&db_path, config, persona, cli.accessible)
+                tui::run_tui(&db_path, config, user, cli.accessible)
             } else {
                 let db = Database::open(&db_path)?;
                 let today = Utc::now().date_naive();
                 let focus = compute_focus_queue(
                     &db,
-                    &persona,
+                    &user,
                     config.focus_preset,
                     config.custom_weights,
                     Some(config.focus_limit),
@@ -55,7 +55,7 @@ fn try_main() -> wsid_core::Result<()> {
                 render_focus_queue(&focus, output_mode, &mut stdout)
             }
         }
-        Some(Commands::Tui) => tui::run_tui(&db_path, config, persona, cli.accessible),
+        Some(Commands::Tui) => tui::run_tui(&db_path, config, user, cli.accessible),
         Some(Commands::Mcp { verbose }) => {
             let db = Database::open(&db_path)?;
             let mut server = wsid_mcp::McpServer::new(db, config).with_stderr_logging(verbose);
@@ -64,7 +64,7 @@ fn try_main() -> wsid_core::Result<()> {
         }
         Some(cmd) => {
             let mut stdout = io::stdout();
-            execute_command(cmd, &db_path, &config, &persona, output_mode, &mut stdout)
+            execute_command(cmd, &db_path, &config, &user, output_mode, &mut stdout)
         }
     }
 }

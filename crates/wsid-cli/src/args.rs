@@ -16,9 +16,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub local: bool,
 
-    /// Active persona handle (defaults to configured `default_persona` or OS username)
-    #[arg(long, short = 'p', global = true)]
-    pub persona: Option<String>,
+    /// Active user handle (defaults to configured `default_user` or OS username)
+    #[arg(long, short = 'u', visible_alias = "persona", global = true)]
+    pub user: Option<String>,
 
     /// Enable linear screen-reader-friendly accessible output / single-column TUI layout
     #[arg(long, global = true)]
@@ -57,7 +57,7 @@ pub enum Commands {
         status: String,
     },
 
-    /// Append a note/comment to a task (supports `@persona`, `@takenote:<persona>`, and `#AB1234`)
+    /// Append a note/comment to a task (supports `@user`, `@takenote:<user>`, and `#AB1234`)
     Note(NoteArgs),
 
     /// Delete a task note (automatically cleaning up any managed app-data attachments on disk)
@@ -128,7 +128,7 @@ pub enum Commands {
     /// Search tasks using hybrid FTS5 trigram + fuzzy subsequence and typo-tolerant matching
     Search(SearchArgs),
 
-    /// List tasks assigned to the active persona that are currently blocked or awaiting review
+    /// List tasks assigned to the active user that are currently blocked or awaiting review
     Blocked {
         /// Optional tag filter
         #[arg(long, short = 't')]
@@ -137,7 +137,7 @@ pub enum Commands {
 
     /// Show tasks classified into the 4 Eisenhower Matrix quadrants
     Matrix {
-        /// Include all assignees instead of filtering to the active persona
+        /// Include all assignees instead of filtering to the active user
         #[arg(long)]
         all: bool,
     },
@@ -203,7 +203,7 @@ pub struct AddArgs {
     pub importance: Option<u8>,
 
     /// Force urgent classification regardless of date slack
-    #[arg(long, short = 'u')]
+    #[arg(long, short = 'U')]
     pub urgent: bool,
 
     /// Manual priority tie-breaker (`-5..=5`)
@@ -214,15 +214,15 @@ pub struct AddArgs {
     #[arg(long = "tag", short = 't')]
     pub tags: Vec<String>,
 
-    /// Reporter persona (defaults to active persona)
+    /// Reporter user (defaults to active user)
     #[arg(long)]
     pub reporter: Option<String>,
 
-    /// Assignee persona (defaults to active persona)
+    /// Assignee user (defaults to active user)
     #[arg(long, short = 'a')]
     pub assignee: Option<String>,
 
-    /// Evaluator persona (defaults to active persona)
+    /// Evaluator user (defaults to active user)
     #[arg(long)]
     pub evaluator: Option<String>,
 
@@ -264,14 +264,14 @@ pub struct NoteArgs {
     /// Task short ID (e.g. AB1234)
     pub id: String,
 
-    /// Comment body (supports `@persona`, `@takenote:<persona>`, and `#AB1234`)
+    /// Comment body (supports `@user`, `@takenote:<user>`, and `#AB1234`)
     pub body: String,
 
-    /// Override comment author persona (defaults to active persona)
+    /// Override comment author user (defaults to active user)
     #[arg(long)]
     pub author: Option<String>,
 
-    /// Disable automatic `@persona` / `@takenote:<persona>` subtask spawning
+    /// Disable automatic `@user` / `@takenote:<user>` subtask spawning
     #[arg(long)]
     pub no_spawn: bool,
 
@@ -308,7 +308,7 @@ pub struct AttachArgs {
 
 #[derive(Debug, Args)]
 pub struct SearchArgs {
-    /// Search query (short ID, title, tag, description, or persona; empty matches all)
+    /// Search query (short ID, title, tag, description, or user; empty matches all)
     #[arg(default_value = "")]
     pub query: String,
 

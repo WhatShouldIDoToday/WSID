@@ -14,8 +14,8 @@ use wsid_core::AppConfig;
 
 use crate::tui::app::TuiApp;
 
-pub fn run_tui(db_path: &Path, config: AppConfig, persona: String, accessible_mode: bool) -> wsid_core::Result<()> {
-    let mut app = TuiApp::new(db_path, config, persona, accessible_mode)?;
+pub fn run_tui(db_path: &Path, config: AppConfig, user: String, accessible_mode: bool) -> wsid_core::Result<()> {
+    let mut app = TuiApp::new(db_path, config, user, accessible_mode)?;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();

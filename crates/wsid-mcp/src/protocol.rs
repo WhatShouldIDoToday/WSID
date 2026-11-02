@@ -120,7 +120,7 @@ pub fn build_initialize_result(requested_protocol_version: Option<&str>) -> Valu
             "name": "wsid-mcp",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "WSID ('What Should I Do?') MCP server. Use `get_focus_queue` to see top prioritized actionable tasks and a summary of blocked tasks for a persona; use `get_blocked_tasks` to inspect blockers in detail; use `add_task_note` with `@persona`, `@takenote:<persona>`, or `#AB1234` to collaborate across human and AI personas."
+        "instructions": "WSID ('What Should I Do?') MCP server. Use `get_focus_queue` to see top prioritized actionable tasks and a summary of blocked tasks for a user; use `get_blocked_tasks` to inspect blockers in detail; use `add_task_note` with `@user`, `@takenote:<user>`, or `#AB1234` to collaborate across human and AI users."
     })
 }
 
@@ -128,13 +128,13 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "get_focus_queue".to_string(),
-            description: "Returns the top-K prioritized actionable tasks for a persona along with a grouped summary of tasks that are blocked or waiting on review.".to_string(),
+            description: "Returns the top-K prioritized actionable tasks for a user along with a grouped summary of tasks that are blocked or waiting on review.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "persona": {
+                    "user": {
                         "type": "string",
-                        "description": "Persona identifier (e.g. 'claude', 'human'). Defaults to the configured default persona when omitted."
+                        "description": "User identifier (e.g. 'claude', 'human'). Defaults to the configured default user when omitted."
                     },
                     "preset": {
                         "type": "string",
@@ -152,13 +152,13 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "get_blocked_tasks".to_string(),
-            description: "Returns incomplete tasks assigned to a persona that are currently blocked, waiting on subtasks, or in_review, annotated with who and what they are waiting on.".to_string(),
+            description: "Returns incomplete tasks assigned to a user that are currently blocked, waiting on subtasks, or in_review, annotated with who and what they are waiting on.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "persona": {
+                    "user": {
                         "type": "string",
-                        "description": "Persona identifier. Defaults to the configured default persona when omitted."
+                        "description": "User identifier. Defaults to the configured default user when omitted."
                     },
                     "tag": {
                         "type": "string",
@@ -183,7 +183,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "search_tasks".to_string(),
-            description: "Hybrid FTS5 trigram + fuzzy search across task IDs, titles, descriptions, tags, and personas with optional structured filters.".to_string(),
+            description: "Hybrid FTS5 trigram + fuzzy search across task IDs, titles, descriptions, tags, and users with optional structured filters.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -315,17 +315,17 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "add_task_note".to_string(),
-            description: "Appends a note to a task. Supports `@<persona>` (spawns an urgent blocking subtask), `@takenote:<persona>` (spawns an urgent non-blocking related task), and `#<TASK_ID>` (links via related).".to_string(),
+            description: "Appends a note to a task. Supports `@<user>` (spawns an urgent blocking subtask), `@takenote:<user>` (spawns an urgent non-blocking related task), and `#<TASK_ID>` (links via related).".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "task_id": { "type": "string", "description": "Target task ID (e.g. 'AB1234')." },
-                    "author": { "type": "string", "description": "Author persona name (defaults to configured default persona if omitted)." },
+                    "author": { "type": "string", "description": "Author user name (defaults to configured default user if omitted)." },
                     "body": { "type": "string", "description": "Comment markdown text." },
                     "spawn_subtasks": {
                         "type": "boolean",
                         "default": true,
-                        "description": "Whether `@persona` and `@takenote:<persona>` mentions should spawn subtasks."
+                        "description": "Whether `@user` and `@takenote:<user>` mentions should spawn subtasks."
                     },
                     "attachments": {
                         "type": "array",

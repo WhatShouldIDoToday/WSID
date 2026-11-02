@@ -24,7 +24,7 @@ mod tests {
 
     fn test_server() -> McpServer {
         let db = open_in_memory_db().unwrap();
-        let config = AppConfig { default_persona: "claude".to_string(), ..AppConfig::default() };
+        let config = AppConfig { default_user: "claude".to_string(), ..AppConfig::default() };
         let today = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
         McpServer::new(db, config).with_today_override(today)
     }
@@ -156,7 +156,7 @@ mod tests {
         let other_id = other_res["task"]["id"].as_str().unwrap().to_string();
 
         // 3. Query `get_focus_queue` for `claude` -> `task_id` is actionable
-        let focus_1 = call_tool(&mut server, 3, "get_focus_queue", json!({ "persona": "claude" }));
+        let focus_1 = call_tool(&mut server, 3, "get_focus_queue", json!({ "user": "claude" }));
         let actionable_1 = focus_1["actionable_tasks"].as_array().unwrap();
         assert_eq!(actionable_1.len(), 1);
         assert_eq!(actionable_1[0]["task"]["id"], task_id);
@@ -181,7 +181,7 @@ mod tests {
             .to_string();
 
         // 5. Now `get_focus_queue` for `claude` has 0 actionable tasks, and `blocked_summary` explains it's waiting on `bob`
-        let focus_blocked = call_tool(&mut server, 5, "get_focus_queue", json!({ "persona": "claude" }));
+        let focus_blocked = call_tool(&mut server, 5, "get_focus_queue", json!({ "user": "claude" }));
         assert!(
             focus_blocked["actionable_tasks"]
                 .as_array()
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(summary[0]["blocker_kind"], "mention");
 
         // `get_blocked_tasks` returns full blocker details
-        let blocked_detail = call_tool(&mut server, 6, "get_blocked_tasks", json!({ "persona": "claude", "tag": "backend" }));
+        let blocked_detail = call_tool(&mut server, 6, "get_blocked_tasks", json!({ "user": "claude", "tag": "backend" }));
         let blocked_list = blocked_detail["blocked_tasks"].as_array().unwrap();
         assert_eq!(blocked_list.len(), 1);
         assert_eq!(blocked_list[0]["task_id"], task_id);

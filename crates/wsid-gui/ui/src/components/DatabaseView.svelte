@@ -11,19 +11,14 @@
 
   interface Props {
     knownTags: string[];
-    knownPersonas: string[];
+    knownUsers: string[];
     refreshTrigger: number;
     onSelectTask: (id: string) => void;
     announce: (msg: string) => void;
   }
 
-  let {
-    knownTags,
-    knownPersonas,
-    refreshTrigger,
-    onSelectTask,
-    announce,
-  }: Props = $props();
+  let { knownTags, knownUsers, refreshTrigger, onSelectTask, announce }: Props =
+    $props();
 
   type SortCol =
     | "score"
@@ -126,14 +121,8 @@
 <section aria-labelledby="database-view-heading">
   <div style="margin-bottom: 1rem;">
     <h2 id="database-view-heading" style="margin: 0; font-size: 1.35rem;">
-      Full Database & Fuzzy Search
+      Database Search
     </h2>
-    <p
-      style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;"
-    >
-      Hybrid SQLite FTS5 trigram + Nucleo fuzzy matcher with typo tolerance
-      across short IDs, titles, descriptions, tags, and personas.
-    </p>
   </div>
 
   <div
@@ -176,8 +165,8 @@
       <label for="db-assignee-filter">Assignee</label>
       <select id="db-assignee-filter" bind:value={assigneeFilter}>
         <option value="">All Assignees</option>
-        {#each knownPersonas as p}
-          <option value={p}>@{p}</option>
+        {#each knownUsers as u}
+          <option value={u}>@{u}</option>
         {/each}
       </select>
     </div>

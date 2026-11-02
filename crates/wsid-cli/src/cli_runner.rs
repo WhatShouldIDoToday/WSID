@@ -42,7 +42,7 @@ pub fn execute_command<W: Write>(
     command: Commands,
     db_path: &Path,
     config: &AppConfig,
-    persona: &str,
+    user: &str,
     mode: OutputMode,
     out: &mut W,
 ) -> wsid_core::Result<()> {
@@ -54,11 +54,11 @@ pub fn execute_command<W: Write>(
             server.run_stdio()?;
             Ok(())
         }
-        Commands::Next(args) => run_next(db_path, config, persona, &args, mode, out),
-        Commands::Add(args) => run_add(db_path, persona, &args, mode, out),
+        Commands::Next(args) => run_next(db_path, config, user, &args, mode, out),
+        Commands::Add(args) => run_add(db_path, user, &args, mode, out),
         Commands::Show { id } => run_show(db_path, &id, mode, out),
         Commands::Status { id, status } => run_status(db_path, &id, &status, mode, out),
-        Commands::Note(args) => run_note(db_path, persona, &args, mode, out),
+        Commands::Note(args) => run_note(db_path, user, &args, mode, out),
         Commands::DeleteNote { note_id } => run_delete_note(db_path, note_id, mode, out),
         Commands::Delete { id } => run_delete(db_path, &id, mode, out),
         Commands::Attach(args) => run_attach(db_path, &args, mode, out),
@@ -69,8 +69,8 @@ pub fn execute_command<W: Write>(
         Commands::Unlink { source_id, relation, target_id } => run_unlink(db_path, &source_id, &relation, &target_id, mode, out),
         Commands::Unblock { subtask_id, keep_open } => run_unblock(db_path, &subtask_id, keep_open, mode, out),
         Commands::Search(args) => run_search(db_path, &args, mode, out),
-        Commands::Blocked { tag } => run_blocked(db_path, persona, tag.as_deref(), mode, out),
-        Commands::Matrix { all } => run_matrix(db_path, config, persona, all, mode, out),
+        Commands::Blocked { tag } => run_blocked(db_path, user, tag.as_deref(), mode, out),
+        Commands::Matrix { all } => run_matrix(db_path, config, user, all, mode, out),
         Commands::About { full } => run_about(full, mode, out),
     }
 }
@@ -78,7 +78,7 @@ pub fn execute_command<W: Write>(
 fn run_next<W: Write>(
     db_path: &Path,
     config: &AppConfig,
-    persona: &str,
+    user: &str,
     args: &NextArgs,
     mode: OutputMode,
     out: &mut W,
@@ -92,7 +92,7 @@ fn run_next<W: Write>(
     let limit = Some(args.limit.unwrap_or(config.focus_limit));
     let today = Utc::now().date_naive();
 
-    let focus = compute_focus_queue(&db, persona, preset, custom_weights, limit, today, config.scoring)?;
+    let focus = compute_focus_queue(&db, user, preset, custom_weights, limit, today, config.scoring)?;
     render_focus_queue(&focus, mode, out)
 }
 
@@ -104,13 +104,13 @@ pub fn render_focus_queue<W: Write>(focus: &FocusQueueResponse, mode: OutputMode
         OutputMode::Accessible => {
             writeln!(
                 out,
-                "Focus Queue for persona {} using preset {}. Actionable tasks count: {}.",
-                focus.persona,
+                "Focus Queue for user {} using preset {}. Actionable tasks count: {}.",
+                focus.user,
                 focus.preset,
                 focus.actionable_tasks.len()
             )?;
             if focus.actionable_tasks.is_empty() {
-                writeln!(out, "No immediately actionable tasks found for {}.", focus.persona)?;
+                writeln!(out, "No immediately actionable tasks found for {}.", focus.user)?;
             } else {
                 for (idx, item) in focus.actionable_tasks.iter().enumerate() {
                     let t = &item.task;
@@ -137,7 +137,7 @@ pub fn render_focus_queue<W: Write>(focus: &FocusQueueResponse, mode: OutputMode
                 }
             }
             if !focus.blocked_summary.is_empty() {
-                writeln!(out, "Blocked Summary for persona {}:", focus.persona)?;
+                writeln!(out, "Blocked Summary for user {}:", focus.user)?;
                 for grp in &focus.blocked_summary {
                     writeln!(
                         out,
@@ -152,7 +152,7 @@ pub fn render_focus_queue<W: Write>(focus: &FocusQueueResponse, mode: OutputMode
             }
         }
         OutputMode::Standard => {
-            writeln!(out, "Focus Queue (@{}, preset: {})", focus.persona, focus.preset)?;
+            writeln!(out, "Focus Queue (@{}, preset: {})", focus.user, focus.preset)?;
             if focus.actionable_tasks.is_empty() {
                 writeln!(out, "  (No actionable unblocked tasks)")?;
             } else {
@@ -201,7 +201,7 @@ pub fn render_focus_queue<W: Write>(focus: &FocusQueueResponse, mode: OutputMode
     Ok(())
 }
 
-fn run_add<W: Write>(db_path: &Path, persona: &str, args: &AddArgs, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
+fn run_add<W: Write>(db_path: &Path, user: &str, args: &AddArgs, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
     let mut db = Database::open(db_path)?;
 
     let status = match args.status.as_deref() {
@@ -234,7 +234,7 @@ fn run_add<W: Write>(db_path: &Path, persona: &str, args: &AddArgs, mode: Output
             evaluator: args.evaluator.clone(),
             ..Default::default()
         },
-        persona,
+        user,
     )?;
 
     for target in &args.blocks {
@@ -479,9 +479,9 @@ fn run_status<W: Write>(db_path: &Path, raw_id: &str, raw_status: &str, mode: Ou
     Ok(())
 }
 
-fn run_note<W: Write>(db_path: &Path, persona: &str, args: &NoteArgs, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
+fn run_note<W: Write>(db_path: &Path, user: &str, args: &NoteArgs, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
     let mut db = Database::open(db_path)?;
-    let author = args.author.as_deref().unwrap_or(persona);
+    let author = args.author.as_deref().unwrap_or(user);
     let mut outcome = add_task_note(&mut db, &args.id, author, &args.body, !args.no_spawn)?;
 
     for (idx, file_path) in args.attachments.iter().enumerate() {
@@ -746,16 +746,16 @@ fn run_search<W: Write>(db_path: &Path, args: &SearchArgs, mode: OutputMode, out
     Ok(())
 }
 
-fn run_blocked<W: Write>(db_path: &Path, persona: &str, tag_filter: Option<&str>, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
+fn run_blocked<W: Write>(db_path: &Path, user: &str, tag_filter: Option<&str>, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
     let db = Database::open(db_path)?;
-    let blocked = get_blocked_tasks(&db, persona, tag_filter)?;
+    let blocked = get_blocked_tasks(&db, user, tag_filter)?;
 
     match mode {
         OutputMode::Json => {
             writeln!(out, "{}", serde_json::to_string_pretty(&blocked).unwrap_or_default())?;
         }
         OutputMode::Accessible => {
-            writeln!(out, "Blocked tasks for persona {}: {} task(s).", persona, blocked.len())?;
+            writeln!(out, "Blocked tasks for user {}: {} task(s).", user, blocked.len())?;
             for entry in &blocked {
                 let waiting_str: Vec<String> = entry
                     .blocked_by
@@ -773,7 +773,7 @@ fn run_blocked<W: Write>(db_path: &Path, persona: &str, tag_filter: Option<&str>
             }
         }
         OutputMode::Standard => {
-            writeln!(out, "Blocked tasks for @{} ({}):", persona, blocked.len())?;
+            writeln!(out, "Blocked tasks for @{} ({}):", user, blocked.len())?;
             for entry in &blocked {
                 let waiting_str: Vec<String> = entry
                     .blocked_by
@@ -794,16 +794,9 @@ fn run_blocked<W: Write>(db_path: &Path, persona: &str, tag_filter: Option<&str>
     Ok(())
 }
 
-fn run_matrix<W: Write>(
-    db_path: &Path,
-    config: &AppConfig,
-    persona: &str,
-    all: bool,
-    mode: OutputMode,
-    out: &mut W,
-) -> wsid_core::Result<()> {
+fn run_matrix<W: Write>(db_path: &Path, config: &AppConfig, user: &str, all: bool, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
     let db = Database::open(db_path)?;
-    let filter = if all { None } else { Some(persona) };
+    let filter = if all { None } else { Some(user) };
     let today = Utc::now().date_naive();
     let items = list_eisenhower_matrix(&db, filter, today, config.scoring)?;
 

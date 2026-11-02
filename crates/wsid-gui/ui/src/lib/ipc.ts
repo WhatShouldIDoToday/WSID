@@ -102,7 +102,7 @@ export interface BlockedSummaryGroup {
 }
 
 export interface FocusQueueResponse {
-  persona: string;
+  user: string;
   preset: FocusPreset;
   actionable_tasks: ScoredTask[];
   blocked_summary: BlockedSummaryGroup[];
@@ -142,11 +142,11 @@ export interface AppSessionSnapshot {
   db_path: string;
   global_db_path: string;
   is_global_db: boolean;
-  active_persona: string;
+  active_user: string;
   active_preset: FocusPreset;
   focus_limit: number;
   recent_workspaces: string[];
-  known_personas: string[];
+  known_users: string[];
   known_tags: string[];
 }
 
@@ -246,6 +246,15 @@ export const PRESET_LABELS: Record<FocusPreset, string> = {
   unblock_others: "Unblock Others",
 };
 
+export const RELATION_LABELS: Record<RelationInputKind, string> = {
+  related: "Related to",
+  blocks: "Blocks",
+  blocked_by: "Is blocked by",
+  sub_task_of: "Sub-task of",
+  parent_task_of: "Parent task of",
+  parallel: "Parallel with",
+};
+
 export const QUADRANT_META: Record<
   EisenhowerQuadrant,
   { title: string; subtitle: string; badge: string }
@@ -334,16 +343,20 @@ export async function getSessionState(): Promise<AppSessionSnapshot> {
   return invoke<AppSessionSnapshot>("get_session_state");
 }
 
-export async function setActivePersona(
-  persona: string,
-): Promise<AppSessionSnapshot> {
-  return invoke<AppSessionSnapshot>("set_active_persona", { persona });
+export async function setActiveUser(user: string): Promise<AppSessionSnapshot> {
+  return invoke<AppSessionSnapshot>("set_active_user", { user });
 }
 
 export async function setFocusPreset(
   preset: FocusPreset,
 ): Promise<AppSessionSnapshot> {
   return invoke<AppSessionSnapshot>("set_focus_preset", { preset });
+}
+
+export async function setFocusLimit(
+  limit: number,
+): Promise<AppSessionSnapshot> {
+  return invoke<AppSessionSnapshot>("set_focus_limit", { limit });
 }
 
 export async function switchDatabase(
@@ -365,23 +378,23 @@ export async function pickAttachmentFileDialog(): Promise<string | null> {
 }
 
 export async function getFocusViewData(
-  persona?: string,
+  user?: string,
   preset?: FocusPreset,
   limit?: number,
 ): Promise<FocusQueueResponse> {
   return invoke<FocusQueueResponse>("get_focus_view_data", {
-    persona: persona ?? null,
+    user: user ?? null,
     preset: preset ?? null,
     limit: limit ?? null,
   });
 }
 
 export async function getBlockedTasksData(
-  persona?: string,
+  user?: string,
   tag?: string,
 ): Promise<BlockedTaskEntry[]> {
   return invoke<BlockedTaskEntry[]>("get_blocked_tasks_data", {
-    persona: persona ?? null,
+    user: user ?? null,
     tag: tag ?? null,
   });
 }
@@ -391,10 +404,10 @@ export async function getAllTasksData(): Promise<Task[]> {
 }
 
 export async function getEisenhowerData(
-  personaFilter?: string | null,
+  userFilter?: string | null,
 ): Promise<EisenhowerClassification[]> {
   return invoke<EisenhowerClassification[]>("get_eisenhower_data", {
-    personaFilter: personaFilter ?? null,
+    userFilter: userFilter ?? null,
   });
 }
 
@@ -621,6 +634,96 @@ export async function subscribeToExternalDbChanges(
   return listen("wsid://db-changed", () => {
     onChanged();
   });
+}
+
+export async function subscribeToMenuActions(
+  onAction: (action: string) => void,
+): Promise<UnlistenFn> {
+  return listen<string>("wsid://menu-action", (event) => {
+    if (typeof event.payload === "string") {
+      onAction(event.payload);
+    }
+  });
+}
+
+export type UiThemeMode = "system" | "dark" | "light";
+export type UiContrastMode = "system" | "more";
+export type UiColorPalette = "default" | "okabe-ito";
+
+export interface UiPreferences {
+  theme: UiThemeMode;
+  contrast: UiContrastMode;
+  palette: UiColorPalette;
+  fontScalePercent: number;
+}
+
+const UI_PREFS_STORAGE_KEY = "wsid.ui.preferences.v1";
+
+export const DEFAULT_UI_PREFERENCES: UiPreferences = {
+  theme: "system",
+  contrast: "system",
+  palette: "default",
+  fontScalePercent: 100,
+};
+
+export function loadUiPreferences(): UiPreferences {
+  if (typeof window === "undefined") {
+    return { ...DEFAULT_UI_PREFERENCES };
+  }
+  try {
+    const raw = window.localStorage.getItem(UI_PREFS_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_UI_PREFERENCES };
+    const parsed = JSON.parse(raw) as Partial<UiPreferences>;
+    return {
+      theme:
+        parsed.theme === "dark" || parsed.theme === "light"
+          ? parsed.theme
+          : "system",
+      contrast: parsed.contrast === "more" ? "more" : "system",
+      palette: parsed.palette === "okabe-ito" ? "okabe-ito" : "default",
+      fontScalePercent:
+        typeof parsed.fontScalePercent === "number" &&
+        parsed.fontScalePercent >= 85 &&
+        parsed.fontScalePercent <= 150
+          ? parsed.fontScalePercent
+          : 100,
+    };
+  } catch {
+    return { ...DEFAULT_UI_PREFERENCES };
+  }
+}
+
+export function saveUiPreferences(prefs: UiPreferences): void {
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(UI_PREFS_STORAGE_KEY, JSON.stringify(prefs));
+    } catch {
+      // Ignore storage write errors
+    }
+  }
+  applyUiPreferencesToDom(prefs);
+}
+
+export function applyUiPreferencesToDom(prefs: UiPreferences): void {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (prefs.theme === "system") {
+    root.removeAttribute("data-theme");
+  } else {
+    root.setAttribute("data-theme", prefs.theme);
+  }
+  if (prefs.contrast === "more") {
+    root.setAttribute("data-contrast", "more");
+  } else {
+    root.removeAttribute("data-contrast");
+  }
+  if (prefs.palette === "okabe-ito") {
+    root.setAttribute("data-palette", "okabe-ito");
+  } else {
+    root.removeAttribute("data-palette");
+  }
+  const scale = Math.max(85, Math.min(150, prefs.fontScalePercent)) / 100;
+  root.style.setProperty("--ui-font-scale", String(scale));
 }
 
 export function fileToBase64(file: Blob): Promise<string> {

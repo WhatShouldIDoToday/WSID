@@ -28,11 +28,11 @@ impl ActiveTab {
 
     pub const fn title(self) -> &'static str {
         match self {
-            Self::Focus => "1: Focus",
-            Self::Kanban => "2: Kanban",
-            Self::Eisenhower => "3: Eisenhower",
-            Self::Database => "4: Database",
-            Self::DataEntry => "5: Add Task",
+            Self::Focus => "Focus",
+            Self::Kanban => "Kanban",
+            Self::Eisenhower => "Eisenhower",
+            Self::Database => "Database",
+            Self::DataEntry => "Add Task",
         }
     }
 
@@ -140,7 +140,7 @@ impl DataEntryForm {
         "15. Evaluator",
     ];
 
-    pub fn new(default_persona: &str) -> Self {
+    pub fn new(default_user: &str) -> Self {
         Self {
             fields: [
                 String::new(),
@@ -155,9 +155,9 @@ impl DataEntryForm {
                 String::new(),
                 String::new(),
                 String::new(),
-                default_persona.to_string(),
-                default_persona.to_string(),
-                default_persona.to_string(),
+                default_user.to_string(),
+                default_user.to_string(),
+                default_user.to_string(),
             ],
             active_index: 0,
         }
@@ -168,7 +168,7 @@ pub struct TuiApp {
     pub db: Database,
     pub db_path: PathBuf,
     pub config: AppConfig,
-    pub persona: String,
+    pub user: String,
     pub preset: FocusPreset,
     pub accessible_mode: bool,
     pub should_quit: bool,
@@ -216,28 +216,27 @@ pub struct TuiApp {
 }
 
 impl TuiApp {
-    pub fn new(db_path: &Path, config: AppConfig, persona: String, accessible_mode: bool) -> wsid_core::Result<Self> {
+    pub fn new(db_path: &Path, config: AppConfig, user: String, accessible_mode: bool) -> wsid_core::Result<Self> {
         let db = Database::open(db_path)?;
         let change_detector = DbChangeDetector::new(&db)?;
         let preset = config.focus_preset;
         let today = Utc::now().date_naive();
-        let focus_queue =
-            compute_focus_queue(&db, &persona, preset, config.custom_weights, Some(config.focus_limit), today, config.scoring)?;
+        let focus_queue = compute_focus_queue(&db, &user, preset, config.custom_weights, Some(config.focus_limit), today, config.scoring)?;
         let all_tasks = list_tasks(&db)?;
-        let eisenhower_items = list_eisenhower_matrix(&db, Some(&persona), today, config.scoring)?;
+        let eisenhower_items = list_eisenhower_matrix(&db, Some(&user), today, config.scoring)?;
         let search_hits = search_tasks(&db, &SearchQuery::default())?;
-        let entry_form = DataEntryForm::new(&persona);
+        let entry_form = DataEntryForm::new(&user);
 
         let mut app = Self {
             db,
             db_path: db_path.to_path_buf(),
             config,
-            persona: persona.clone(),
+            user: user.clone(),
             preset,
             accessible_mode,
             should_quit: false,
             active_tab: ActiveTab::Focus,
-            status_message: format!("Ready (@{persona}) — Press 1-5 to switch views, Enter to inspect, a for accessible mode, q to quit"),
+            status_message: String::new(),
             change_detector,
             focus_queue,
             focus_selected: 0,
@@ -283,7 +282,7 @@ impl TuiApp {
         let custom_weights = if self.preset == self.config.focus_preset { self.config.custom_weights } else { None };
         self.focus_queue = compute_focus_queue(
             &self.db,
-            &self.persona,
+            &self.user,
             self.preset,
             custom_weights,
             Some(self.config.focus_limit),
@@ -297,7 +296,7 @@ impl TuiApp {
         self.all_tasks = list_tasks(&self.db)?;
         self.clamp_kanban_selection();
 
-        self.eisenhower_items = list_eisenhower_matrix(&self.db, Some(&self.persona), today, self.config.scoring)?;
+        self.eisenhower_items = list_eisenhower_matrix(&self.db, Some(&self.user), today, self.config.scoring)?;
         self.clamp_eisenhower_selection();
 
         self.refresh_search()?;
@@ -315,7 +314,7 @@ impl TuiApp {
     }
 
     pub fn refresh_search(&mut self) -> wsid_core::Result<()> {
-        let assignee = if self.search_only_mine { Some(self.persona.clone()) } else { None };
+        let assignee = if self.search_only_mine { Some(self.user.clone()) } else { None };
         let mut hits = search_tasks(
             &self.db,
             &SearchQuery {
@@ -942,7 +941,7 @@ impl TuiApp {
                 evaluator,
                 ..Default::default()
             },
-            &self.persona,
+            &self.user,
         ) {
             Ok(created) => {
                 for (kind, target_id) in parsed_relations {
@@ -962,7 +961,7 @@ impl TuiApp {
                     return;
                 }
 
-                self.entry_form = DataEntryForm::new(&self.persona);
+                self.entry_form = DataEntryForm::new(&self.user);
                 let _ = self.refresh_all();
                 self.status_message = format!("Created task [{}] {}", created.id, created.title);
             }
@@ -1041,8 +1040,7 @@ impl TuiApp {
             KeyCode::Char('c') => {
                 self.detail_prompt_kind = DetailPromptKind::AddComment;
                 self.detail_prompt_input.clear();
-                self.status_message =
-                    "Add comment (supports @persona, @takenote:persona, #AB1234) — Enter to post, Esc to cancel".to_string();
+                self.status_message = "Add comment (supports @user, @takenote:user, #AB1234) — Enter to post, Esc to cancel".to_string();
             }
             KeyCode::Char('f') => {
                 self.detail_prompt_kind = DetailPromptKind::AttachFile;
@@ -1141,7 +1139,7 @@ impl TuiApp {
                     self.status_message = "Comment cannot be empty".to_string();
                     return;
                 }
-                match add_task_note(&mut self.db, &snapshot.task.id, &self.persona, &input, true) {
+                match add_task_note(&mut self.db, &snapshot.task.id, &self.user, &input, true) {
                     Ok(outcome) => {
                         let _ = self.refresh_all();
                         self.status_message = format!(

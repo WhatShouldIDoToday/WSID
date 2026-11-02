@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::{FocusPreset, OriginKind, RelationType, Task, TaskStatus};
-use crate::tasks::{list_tasks, normalize_persona, normalize_tag};
+use crate::tasks::{list_tasks, normalize_tag, normalize_user};
 
 /// Default workday length in minutes (8 hours = 480 minutes) for converting estimates to days of slack.
 pub const DEFAULT_WORKDAY_MINUTES: f64 = 480.0;
@@ -190,7 +190,7 @@ pub struct BlockedSummaryGroup {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FocusQueueResponse {
-    pub persona: String,
+    pub user: String,
     pub preset: FocusPreset,
     pub actionable_tasks: Vec<ScoredTask>,
     pub blocked_summary: Vec<BlockedSummaryGroup>,
@@ -264,7 +264,7 @@ pub fn classify_task_eisenhower(
 /// Classifies all incomplete (or optionally all) tasks in the database for the Eisenhower Matrix View.
 pub fn list_eisenhower_matrix(
     db: &Database,
-    persona_filter: Option<&str>,
+    user_filter: Option<&str>,
     today: NaiveDate,
     config: ScoringConfig,
 ) -> Result<Vec<EisenhowerClassification>> {
@@ -276,8 +276,8 @@ pub fn list_eisenhower_matrix(
         .collect();
     let graph = RelationGraph::load(&db.conn)?;
 
-    let normalized_persona = match persona_filter {
-        Some(p) if !p.trim().is_empty() => Some(normalize_persona(p)?),
+    let normalized_user = match user_filter {
+        Some(u) if !u.trim().is_empty() => Some(normalize_user(u)?),
         _ => None,
     };
 
@@ -286,8 +286,8 @@ pub fn list_eisenhower_matrix(
         if task.status.is_completed() {
             continue;
         }
-        if let Some(ref p) = normalized_persona
-            && &task.assignee != p
+        if let Some(ref u) = normalized_user
+            && &task.assignee != u
         {
             continue;
         }
@@ -313,17 +313,17 @@ pub fn continuous_urgency_score(slack_days: Option<f64>, urgent_override: bool) 
     if urgent_override { base.max(1.15) } else { base }
 }
 
-/// Computes the ranked Focus Queue and Blocked Summary for `persona`.
+/// Computes the ranked Focus Queue and Blocked Summary for `user`.
 pub fn compute_focus_queue(
     db: &Database,
-    persona: &str,
+    user: &str,
     preset: FocusPreset,
     custom_weights: Option<FocusWeights>,
     limit: Option<usize>,
     today: NaiveDate,
     config: ScoringConfig,
 ) -> Result<FocusQueueResponse> {
-    let norm_persona = normalize_persona(persona)?;
+    let norm_user = normalize_user(user)?;
     let weights = custom_weights.unwrap_or_else(|| FocusWeights::for_preset(preset));
     let top_k = limit.unwrap_or(DEFAULT_FOCUS_LIMIT);
 
@@ -337,7 +337,7 @@ pub fn compute_focus_queue(
 
     let mut scored = Vec::new();
     for task in &all_tasks {
-        if task.assignee != norm_persona {
+        if task.assignee != norm_user {
             continue;
         }
         if !matches!(task.status, TaskStatus::Todo | TaskStatus::InProgress) {
@@ -425,15 +425,15 @@ pub fn compute_focus_queue(
     });
     scored.truncate(top_k);
 
-    let blocked_summary = summarize_blocked_tasks(db, &norm_persona)?;
+    let blocked_summary = summarize_blocked_tasks(db, &norm_user)?;
 
-    Ok(FocusQueueResponse { persona: norm_persona, preset, actionable_tasks: scored, blocked_summary })
+    Ok(FocusQueueResponse { user: norm_user, preset, actionable_tasks: scored, blocked_summary })
 }
 
-/// Returns all incomplete tasks assigned to `persona` that are currently excluded from their
+/// Returns all incomplete tasks assigned to `user` that are currently excluded from their
 /// actionable Focus View because of active blockers, incomplete subtasks, or `in_review` status.
-pub fn get_blocked_tasks(db: &Database, persona: &str, tag_filter: Option<&str>) -> Result<Vec<BlockedTaskEntry>> {
-    let norm_persona = normalize_persona(persona)?;
+pub fn get_blocked_tasks(db: &Database, user: &str, tag_filter: Option<&str>) -> Result<Vec<BlockedTaskEntry>> {
+    let norm_user = normalize_user(user)?;
     let norm_tag = match tag_filter {
         Some(t) if !t.trim().is_empty() => Some(normalize_tag(t)?),
         _ => None,
@@ -449,7 +449,7 @@ pub fn get_blocked_tasks(db: &Database, persona: &str, tag_filter: Option<&str>)
 
     let mut entries = Vec::new();
     for task in &all_tasks {
-        if task.assignee != norm_persona || task.status.is_completed() {
+        if task.assignee != norm_user || task.status.is_completed() {
             continue;
         }
         if let Some(ref tag) = norm_tag
@@ -475,10 +475,10 @@ pub fn get_blocked_tasks(db: &Database, persona: &str, tag_filter: Option<&str>)
     Ok(entries)
 }
 
-/// Groups blocked tasks for `persona` by tag/project (or `"untagged"`), blocker `origin_kind`,
+/// Groups blocked tasks for `user` by tag/project (or `"untagged"`), blocker `origin_kind`,
 /// and blocking `assignee` so AI agents can immediately summarize who/what they are waiting on.
-pub fn summarize_blocked_tasks(db: &Database, persona: &str) -> Result<Vec<BlockedSummaryGroup>> {
-    let blocked_entries = get_blocked_tasks(db, persona, None)?;
+pub fn summarize_blocked_tasks(db: &Database, user: &str) -> Result<Vec<BlockedSummaryGroup>> {
+    let blocked_entries = get_blocked_tasks(db, user, None)?;
     let mut grouped: BTreeMap<(String, String, String), (OriginKind, Vec<String>)> = BTreeMap::new();
 
     for entry in blocked_entries {

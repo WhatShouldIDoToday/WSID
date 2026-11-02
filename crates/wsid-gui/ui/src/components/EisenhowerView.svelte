@@ -9,17 +9,17 @@
 
   interface Props {
     items: EisenhowerClassification[];
-    activePersona: string;
-    filterByPersona: boolean;
-    onTogglePersonaFilter: (enabled: boolean) => void;
+    activeUser: string;
+    filterByUser: boolean;
+    onToggleUserFilter: (enabled: boolean) => void;
     onSelectTask: (id: string) => void;
   }
 
   let {
     items,
-    activePersona,
-    filterByPersona,
-    onTogglePersonaFilter,
+    activeUser,
+    filterByUser,
+    onToggleUserFilter,
     onSelectTask,
   }: Props = $props();
 
@@ -39,30 +39,20 @@
   <div
     style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem;"
   >
-    <div>
-      <h2 id="eisenhower-view-heading" style="margin: 0; font-size: 1.35rem;">
-        Eisenhower Matrix (Urgency × Importance)
-      </h2>
-      <p
-        style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;"
-      >
-        Urgency is computed automatically from effective slack
-        <code>(coalesce(SGDB, Due, Ancestor) - today) - estimate</code> or
-        <code>urgent_override</code>. Undated tasks default to Not Urgent
-        (Q2/Q4).
-      </p>
-    </div>
+    <h2 id="eisenhower-view-heading" style="margin: 0; font-size: 1.35rem;">
+      Eisenhower Matrix
+    </h2>
 
     <div class="control-inline">
       <input
-        id="matrix-persona-toggle"
+        id="matrix-user-toggle"
         type="checkbox"
-        checked={filterByPersona}
+        checked={filterByUser}
         onchange={(e) =>
-          onTogglePersonaFilter((e.currentTarget as HTMLInputElement).checked)}
+          onToggleUserFilter((e.currentTarget as HTMLInputElement).checked)}
       />
-      <label for="matrix-persona-toggle">
-        Only show tasks assigned to @{activePersona}
+      <label for="matrix-user-toggle">
+        Only show tasks assigned to @{activeUser}
       </label>
     </div>
   </div>

@@ -9,7 +9,7 @@ use crate::attachments::load_task_description_attachments;
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
-use crate::tasks::{load_task_tags, map_task_row, normalize_persona, normalize_tag};
+use crate::tasks::{load_task_tags, map_task_row, normalize_tag, normalize_user};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchQuery {
@@ -70,7 +70,7 @@ pub fn search_tasks(db: &Database, search: &SearchQuery) -> Result<Vec<SearchHit
             best_score = Some(best_score.unwrap_or(0).max(6_000));
         }
 
-        // 3. Nucleo fuzzy match across ID, title, tags, description, and personas.
+        // 3. Nucleo fuzzy match across ID, title, tags, description, and users.
         let composite = format!(
             "{} {} {} {} {} {} {}",
             task.id,
@@ -135,21 +135,21 @@ fn load_filtered_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Ta
     if let Some(ref raw_assignee) = search.assignee
         && !raw_assignee.trim().is_empty()
     {
-        bind_values.push(normalize_persona(raw_assignee)?);
+        bind_values.push(normalize_user(raw_assignee)?);
         sql.push_str(&format!(" AND t.assignee = ?{}", bind_values.len()));
     }
 
     if let Some(ref raw_reporter) = search.reporter
         && !raw_reporter.trim().is_empty()
     {
-        bind_values.push(normalize_persona(raw_reporter)?);
+        bind_values.push(normalize_user(raw_reporter)?);
         sql.push_str(&format!(" AND t.reporter = ?{}", bind_values.len()));
     }
 
     if let Some(ref raw_evaluator) = search.evaluator
         && !raw_evaluator.trim().is_empty()
     {
-        bind_values.push(normalize_persona(raw_evaluator)?);
+        bind_values.push(normalize_user(raw_evaluator)?);
         sql.push_str(&format!(" AND t.evaluator = ?{}", bind_values.len()));
     }
 

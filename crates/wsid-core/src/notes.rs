@@ -12,20 +12,20 @@ use crate::models::{
     AddTaskNoteOutcome, CreateTaskInput, OriginKind, RelationInputKind, StatusTransitionOutcome, Task, TaskNote, TaskStatus,
 };
 use crate::relations::{ensure_task_exists, link_tasks_in_tx};
-use crate::tasks::{create_task_in_tx, format_utc, get_task, get_task_conn, normalize_persona, parse_utc};
+use crate::tasks::{create_task_in_tx, format_utc, get_task, get_task_conn, normalize_user, parse_utc};
 
 /// Parsed tokens extracted from a task note body.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParsedNoteTokens {
-    /// Ordered, deduplicated `@<persona>` mentions that spawn blocking subtasks.
+    /// Ordered, deduplicated `@<user>` mentions that spawn blocking subtasks.
     pub blocking_mentions: Vec<String>,
-    /// Ordered, deduplicated `@takenote:<persona>` mentions that spawn non-blocking related tasks.
+    /// Ordered, deduplicated `@takenote:<user>` mentions that spawn non-blocking related tasks.
     pub takenote_mentions: Vec<String>,
     /// Ordered, deduplicated `#<TASK_ID>` references normalized to uppercase `AB1234`.
     pub task_references: Vec<String>,
 }
 
-/// Parses `@<persona>`, `@takenote:<persona>`, and `#<task_id>` tokens from a comment body.
+/// Parses `@<user>`, `@takenote:<user>`, and `#<task_id>` tokens from a comment body.
 pub fn parse_note_tokens(body: &str) -> ParsedNoteTokens {
     let bytes = body.as_bytes();
     let len = bytes.len();
@@ -58,17 +58,17 @@ pub fn parse_note_tokens(body: &str) -> ParsedNoteTokens {
                     p_end += 1;
                 }
                 if p_end > p_start {
-                    let persona = body[p_start..p_end].to_ascii_lowercase();
-                    if takenote_set.insert(persona.clone()) {
-                        takenote_mentions.push(persona);
+                    let user = body[p_start..p_end].to_ascii_lowercase();
+                    if takenote_set.insert(user.clone()) {
+                        takenote_mentions.push(user);
                     }
                     i = p_end;
                     continue;
                 }
             } else if !first_part.is_empty() {
-                let persona = first_part.to_ascii_lowercase();
-                if blocking_set.insert(persona.clone()) {
-                    blocking_mentions.push(persona);
+                let user = first_part.to_ascii_lowercase();
+                if blocking_set.insert(user.clone()) {
+                    blocking_mentions.push(user);
                 }
                 i = end;
                 continue;
@@ -102,8 +102,8 @@ const fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
 
-/// Appends a note to `raw_task_id` and optionally spawns `@persona` blocking subtasks,
-/// `@takenote:<persona>` non-blocking related tasks, and `#<task_id>` cross-links.
+/// Appends a note to `raw_task_id` and optionally spawns `@user` blocking subtasks,
+/// `@takenote:<user>` non-blocking related tasks, and `#<task_id>` cross-links.
 pub fn add_task_note(
     db: &mut Database,
     raw_task_id: &str,
@@ -112,7 +112,7 @@ pub fn add_task_note(
     spawn_subtasks: bool,
 ) -> Result<AddTaskNoteOutcome> {
     let task_id = normalize_task_id(raw_task_id)?;
-    let author = normalize_persona(raw_author)?;
+    let author = normalize_user(raw_author)?;
     let body = raw_body.trim().to_string();
     if body.is_empty() {
         return Err(WsidError::Validation("task note body cannot be empty".to_string()));
@@ -167,15 +167,15 @@ pub fn add_task_note(
     if spawn_subtasks {
         let mut any_blocking_spawned_or_reused = false;
 
-        // 1. Handle `@<persona>` blocking mentions
-        for mentioned_persona in &tokens.blocking_mentions {
-            if mentioned_persona.eq_ignore_ascii_case(&author) {
+        // 1. Handle `@<user>` blocking mentions
+        for mentioned_user in &tokens.blocking_mentions {
+            if mentioned_user.eq_ignore_ascii_case(&author) {
                 continue;
             }
 
             any_blocking_spawned_or_reused = true;
 
-            if let Some(existing_subtask_id) = find_open_mention_subtask(&tx, &effective_parent.id, mentioned_persona)? {
+            if let Some(existing_subtask_id) = find_open_mention_subtask(&tx, &effective_parent.id, mentioned_user)? {
                 append_note_to_existing_subtask(&tx, &existing_subtask_id, &author, note_id, &effective_parent.id, &body, &now_str)?;
                 for ref_id in &existing_ref_ids {
                     if *ref_id != existing_subtask_id {
@@ -200,8 +200,8 @@ pub fn add_task_note(
                         urgent_override: Some(true),
                         tags: effective_parent.tags.clone(),
                         reporter: Some(author.clone()),
-                        assignee: Some(mentioned_persona.clone()),
-                        evaluator: Some(mentioned_persona.clone()),
+                        assignee: Some(mentioned_user.clone()),
+                        evaluator: Some(mentioned_user.clone()),
                         ..Default::default()
                     },
                     &author,
@@ -231,9 +231,9 @@ pub fn add_task_note(
             set_task_status_raw(&tx, &effective_parent.id, TaskStatus::InProgress, &now_str)?;
         }
 
-        // 2. Handle `@takenote:<persona>` non-blocking mentions
-        for mentioned_persona in &tokens.takenote_mentions {
-            if mentioned_persona.eq_ignore_ascii_case(&author) {
+        // 2. Handle `@takenote:<user>` non-blocking mentions
+        for mentioned_user in &tokens.takenote_mentions {
+            if mentioned_user.eq_ignore_ascii_case(&author) {
                 continue;
             }
 
@@ -252,14 +252,14 @@ pub fn add_task_note(
                     urgent_override: Some(true),
                     tags: commented_task.tags.clone(),
                     reporter: Some(author.clone()),
-                    assignee: Some(mentioned_persona.clone()),
-                    evaluator: Some(mentioned_persona.clone()),
+                    assignee: Some(mentioned_user.clone()),
+                    evaluator: Some(mentioned_user.clone()),
                     ..Default::default()
                 },
                 &author,
             )?;
 
-            // Crucial: `@takenote:<persona>` links via `related` ONLY (never `blocks` or `sub_task_of`).
+            // Crucial: `@takenote:<user>` links via `related` ONLY (never `blocks` or `sub_task_of`).
             link_tasks_in_tx(&tx, &new_id, RelationInputKind::Related, &commented_task.id)?;
 
             for ref_id in &existing_ref_ids {

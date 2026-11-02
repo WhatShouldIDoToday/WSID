@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use tauri::menu::{HELP_SUBMENU_ID, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, State};
 use wsid_core::{
     AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, CreateTaskInput, Database, DbChangeDetector,
@@ -13,7 +14,7 @@ use wsid_core::{
     TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, add_task_note, attach_existing_file, compute_focus_queue,
     create_task, default_config_path, default_global_db_path, delete_task, delete_task_note, get_about_metadata, get_attachment,
     get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
-    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_task_notes, list_tasks, normalize_persona, open_file_in_os,
+    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_task_notes, list_tasks, normalize_user, open_file_in_os,
     remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
     unlink_tasks, update_attachment_description, update_task,
 };
@@ -22,7 +23,7 @@ pub struct GuiAppState {
     pub db_path: PathBuf,
     pub config_path: PathBuf,
     pub config: AppConfig,
-    pub active_persona: String,
+    pub active_user: String,
     pub active_preset: FocusPreset,
 }
 
@@ -31,9 +32,9 @@ impl GuiAppState {
         let config_path = default_config_path();
         let config = AppConfig::load_from_path(&config_path).unwrap_or_default();
         let db_path = resolve_active_db_path(None, false);
-        let active_persona = config.default_persona.clone();
+        let active_user = config.default_user.clone();
         let active_preset = config.focus_preset;
-        Self { db_path, config_path, config, active_persona, active_preset }
+        Self { db_path, config_path, config, active_user, active_preset }
     }
 
     pub fn open_db(&self) -> Result<Database, String> {
@@ -52,11 +53,11 @@ pub struct AppSessionSnapshot {
     pub db_path: String,
     pub global_db_path: String,
     pub is_global_db: bool,
-    pub active_persona: String,
+    pub active_user: String,
     pub active_preset: String,
     pub focus_limit: usize,
     pub recent_workspaces: Vec<String>,
-    pub known_personas: Vec<String>,
+    pub known_users: Vec<String>,
     pub known_tags: Vec<String>,
 }
 
@@ -121,15 +122,15 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
     let db = state.open_db()?;
     let tasks = list_tasks(&db).map_err(|e| e.to_string())?;
 
-    let mut personas = std::collections::BTreeSet::new();
-    personas.insert(state.active_persona.clone());
-    personas.insert(state.config.default_persona.clone());
+    let mut users = std::collections::BTreeSet::new();
+    users.insert(state.active_user.clone());
+    users.insert(state.config.default_user.clone());
     let mut tags = std::collections::BTreeSet::new();
 
     for t in &tasks {
-        personas.insert(t.assignee.clone());
-        personas.insert(t.reporter.clone());
-        personas.insert(t.evaluator.clone());
+        users.insert(t.assignee.clone());
+        users.insert(t.reporter.clone());
+        users.insert(t.evaluator.clone());
         for tg in &t.tags {
             tags.insert(tg.clone());
         }
@@ -142,7 +143,7 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
         db_path: state.db_path.to_string_lossy().to_string(),
         global_db_path: global_path.to_string_lossy().to_string(),
         is_global_db: is_global,
-        active_persona: state.active_persona.clone(),
+        active_user: state.active_user.clone(),
         active_preset: state.active_preset.as_str().to_string(),
         focus_limit: state.config.focus_limit,
         recent_workspaces: state
@@ -151,7 +152,7 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
             .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect(),
-        known_personas: personas.into_iter().collect(),
+        known_users: users.into_iter().collect(),
         known_tags: tags.into_iter().collect(),
     })
 }
@@ -193,7 +194,7 @@ pub fn create_task_from_payload(state: &GuiAppState, payload: GuiCreateTaskPaylo
             evaluator: payload.evaluator,
             ..Default::default()
         },
-        &state.active_persona,
+        &state.active_user,
     )
     .map_err(|e| e.to_string())?;
 
@@ -295,13 +296,13 @@ fn get_session_state(state: State<'_, SharedGuiState>) -> Result<AppSessionSnaps
 }
 
 #[tauri::command]
-fn set_active_persona(state: State<'_, SharedGuiState>, persona: String) -> Result<AppSessionSnapshot, String> {
-    let norm = normalize_persona(&persona).map_err(|e| e.to_string())?;
+fn set_active_user(state: State<'_, SharedGuiState>, user: String) -> Result<AppSessionSnapshot, String> {
+    let norm = normalize_user(&user).map_err(|e| e.to_string())?;
     let mut guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
-    guard.active_persona = norm.clone();
-    guard.config.default_persona = norm;
+    guard.active_user = norm.clone();
+    guard.config.default_user = norm;
     guard.save_config();
     build_session_snapshot(&guard)
 }
@@ -319,29 +320,55 @@ fn set_focus_preset(state: State<'_, SharedGuiState>, preset: String) -> Result<
 }
 
 #[tauri::command]
-fn switch_database(state: State<'_, SharedGuiState>, path: Option<String>, use_global: bool) -> Result<AppSessionSnapshot, String> {
+fn set_focus_limit(state: State<'_, SharedGuiState>, limit: usize) -> Result<AppSessionSnapshot, String> {
+    if !(1..=50).contains(&limit) {
+        return Err("focus limit must be between 1 and 50".to_string());
+    }
     let mut guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
-    let next_path = if use_global {
-        default_global_db_path()
-    } else {
-        let raw = path.unwrap_or_default();
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err("database path cannot be empty".to_string());
+    guard.config.focus_limit = limit;
+    guard.save_config();
+    build_session_snapshot(&guard)
+}
+
+#[tauri::command]
+fn switch_database(
+    app_handle: AppHandle,
+    state: State<'_, SharedGuiState>,
+    path: Option<String>,
+    use_global: bool,
+) -> Result<AppSessionSnapshot, String> {
+    let snapshot = {
+        let mut guard = state
+            .lock()
+            .map_err(|_| "state lock poisoned".to_string())?;
+        let next_path = if use_global {
+            default_global_db_path()
+        } else {
+            let raw = path.unwrap_or_default();
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err("database path cannot be empty".to_string());
+            }
+            let candidate = PathBuf::from(trimmed);
+            if candidate.is_dir() { candidate.join(".wsid.db") } else { candidate }
+        };
+
+        let _ = Database::open(&next_path).map_err(|e| e.to_string())?;
+        guard.db_path = next_path.clone();
+        if next_path != default_global_db_path() {
+            guard.config.record_recent_workspace(next_path);
+            guard.save_config();
         }
-        let candidate = PathBuf::from(trimmed);
-        if candidate.is_dir() { candidate.join(".wsid.db") } else { candidate }
+        build_session_snapshot(&guard)?
     };
 
-    let _ = Database::open(&next_path).map_err(|e| e.to_string())?;
-    guard.db_path = next_path.clone();
-    if next_path != default_global_db_path() {
-        guard.config.record_recent_workspace(next_path);
-        guard.save_config();
+    if let Ok(menu) = build_app_menu(&app_handle, state.inner()) {
+        let _ = app_handle.set_menu(menu);
     }
-    build_session_snapshot(&guard)
+
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -393,7 +420,7 @@ fn pick_attachment_file_dialog() -> Result<Option<String>, String> {
 #[tauri::command]
 fn get_focus_view_data(
     state: State<'_, SharedGuiState>,
-    persona: Option<String>,
+    user: Option<String>,
     preset: Option<String>,
     limit: Option<usize>,
 ) -> Result<FocusQueueResponse, String> {
@@ -401,10 +428,10 @@ fn get_focus_view_data(
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
     let db = guard.open_db()?;
-    let target_persona = persona
+    let target_user = user
         .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or(&guard.active_persona);
+        .unwrap_or(&guard.active_user);
     let target_preset = match preset.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(p) => FocusPreset::from_str(p).map_err(|e| e.to_string())?,
         None => guard.active_preset,
@@ -412,25 +439,25 @@ fn get_focus_view_data(
     let top_k = limit.unwrap_or(guard.config.focus_limit);
     let today = Utc::now().date_naive();
 
-    compute_focus_queue(&db, target_persona, target_preset, guard.config.custom_weights, Some(top_k), today, guard.config.scoring)
+    compute_focus_queue(&db, target_user, target_preset, guard.config.custom_weights, Some(top_k), today, guard.config.scoring)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_blocked_tasks_data(
     state: State<'_, SharedGuiState>,
-    persona: Option<String>,
+    user: Option<String>,
     tag: Option<String>,
 ) -> Result<Vec<BlockedTaskEntry>, String> {
     let guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
     let db = guard.open_db()?;
-    let target_persona = persona
+    let target_user = user
         .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or(&guard.active_persona);
-    get_blocked_tasks(&db, target_persona, tag.as_deref()).map_err(|e| e.to_string())
+        .unwrap_or(&guard.active_user);
+    get_blocked_tasks(&db, target_user, tag.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -443,13 +470,13 @@ fn get_all_tasks_data(state: State<'_, SharedGuiState>) -> Result<Vec<Task>, Str
 }
 
 #[tauri::command]
-fn get_eisenhower_data(state: State<'_, SharedGuiState>, persona_filter: Option<String>) -> Result<Vec<EisenhowerClassification>, String> {
+fn get_eisenhower_data(state: State<'_, SharedGuiState>, user_filter: Option<String>) -> Result<Vec<EisenhowerClassification>, String> {
     let guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
     let db = guard.open_db()?;
     let today = Utc::now().date_naive();
-    list_eisenhower_matrix(&db, persona_filter.as_deref(), today, guard.config.scoring).map_err(|e| e.to_string())
+    list_eisenhower_matrix(&db, user_filter.as_deref(), today, guard.config.scoring).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -572,12 +599,12 @@ fn add_comment_note(
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
     let mut db = guard.open_db()?;
-    let author_persona = author
+    let author_user = author
         .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or(&guard.active_persona);
+        .unwrap_or(&guard.active_user);
 
-    let outcome = add_task_note(&mut db, &task_id, author_persona, &body, spawn_subtasks).map_err(|e| e.to_string())?;
+    let outcome = add_task_note(&mut db, &task_id, author_user, &body, spawn_subtasks).map_err(|e| e.to_string())?;
 
     for att in attachments {
         attach_existing_file(&mut db, &task_id, Some(outcome.note.id), &att.path, att.description.as_deref()).map_err(|e| e.to_string())?;
@@ -762,23 +789,208 @@ pub fn spawn_db_change_watcher(app_handle: AppHandle, state: SharedGuiState) {
     });
 }
 
+fn build_app_menu(app_handle: &AppHandle, state: &SharedGuiState) -> tauri::Result<Menu<tauri::Wry>> {
+    let recent_workspaces = state
+        .lock()
+        .map(|g| {
+            g.config
+                .recent_workspaces
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut recent_items: Vec<MenuItem<tauri::Wry>> = Vec::new();
+    if recent_workspaces.is_empty() {
+        recent_items.push(MenuItem::with_id(app_handle, "menu:recent_db_empty", "(No Recent Workspaces)", false, None::<&str>)?);
+    } else {
+        for (idx, path) in recent_workspaces.iter().enumerate() {
+            let label = Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|name| format!("{name} — {path}"))
+                .unwrap_or_else(|| path.clone());
+            recent_items.push(MenuItem::with_id(app_handle, format!("menu:recent_db:{idx}"), label, true, None::<&str>)?);
+        }
+    }
+    let recent_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = recent_items
+        .iter()
+        .map(|item| item as &dyn IsMenuItem<tauri::Wry>)
+        .collect();
+    let recent_submenu = Submenu::with_items(app_handle, "Recent Workspaces", true, &recent_refs)?;
+
+    #[cfg(target_os = "macos")]
+    let app_submenu = Submenu::with_items(
+        app_handle,
+        "WSID",
+        true,
+        &[
+            &MenuItem::with_id(app_handle, "menu:about", "About WSID & Licenses...", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &MenuItem::with_id(app_handle, "menu:settings", "Settings...", true, Some("CmdOrCtrl+,"))?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::services(app_handle, None)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::hide(app_handle, None)?,
+            &PredefinedMenuItem::hide_others(app_handle, None)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::quit(app_handle, None)?,
+        ],
+    )?;
+
+    let file_submenu = Submenu::with_items(
+        app_handle,
+        "File",
+        true,
+        &[
+            &MenuItem::with_id(app_handle, "menu:open_workspace_db", "Open Workspace Database...", true, Some("CmdOrCtrl+O"))?,
+            &MenuItem::with_id(app_handle, "menu:switch_global_db", "Switch to Global Database", true, Some("CmdOrCtrl+Shift+G"))?,
+            &recent_submenu,
+            #[cfg(not(target_os = "macos"))]
+            &PredefinedMenuItem::separator(app_handle)?,
+            #[cfg(not(target_os = "macos"))]
+            &MenuItem::with_id(app_handle, "menu:settings", "Settings...", true, Some("CmdOrCtrl+,"))?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::close_window(app_handle, None)?,
+            #[cfg(not(target_os = "macos"))]
+            &PredefinedMenuItem::quit(app_handle, None)?,
+        ],
+    )?;
+
+    let edit_submenu = Submenu::with_items(
+        app_handle,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app_handle, None)?,
+            &PredefinedMenuItem::redo(app_handle, None)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::cut(app_handle, None)?,
+            &PredefinedMenuItem::copy(app_handle, None)?,
+            &PredefinedMenuItem::paste(app_handle, None)?,
+            &PredefinedMenuItem::select_all(app_handle, None)?,
+        ],
+    )?;
+
+    let view_submenu = Submenu::with_items(
+        app_handle,
+        "View",
+        true,
+        &[
+            &MenuItem::with_id(app_handle, "menu:view_focus", "Focus Queue", true, Some("CmdOrCtrl+1"))?,
+            &MenuItem::with_id(app_handle, "menu:view_kanban", "Kanban Board", true, Some("CmdOrCtrl+2"))?,
+            &MenuItem::with_id(app_handle, "menu:view_eisenhower", "Eisenhower Matrix", true, Some("CmdOrCtrl+3"))?,
+            &MenuItem::with_id(app_handle, "menu:view_database", "Database", true, Some("CmdOrCtrl+4"))?,
+            &MenuItem::with_id(app_handle, "menu:view_entry", "Add Task", true, Some("CmdOrCtrl+5"))?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &MenuItem::with_id(app_handle, "menu:view_settings", "Settings", true, None::<&str>)?,
+            #[cfg(target_os = "macos")]
+            &PredefinedMenuItem::separator(app_handle)?,
+            #[cfg(target_os = "macos")]
+            &PredefinedMenuItem::fullscreen(app_handle, None)?,
+        ],
+    )?;
+
+    let window_menu = Submenu::with_id_and_items(
+        app_handle,
+        WINDOW_SUBMENU_ID,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app_handle, None)?,
+            &PredefinedMenuItem::maximize(app_handle, None)?,
+            #[cfg(target_os = "macos")]
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::close_window(app_handle, None)?,
+        ],
+    )?;
+
+    let help_menu = Submenu::with_id_and_items(
+        app_handle,
+        HELP_SUBMENU_ID,
+        "Help",
+        true,
+        &[&MenuItem::with_id(app_handle, "menu:help_about", "About & Third-Party Licenses...", true, None::<&str>)?],
+    )?;
+
+    Menu::with_items(
+        app_handle,
+        &[
+            #[cfg(target_os = "macos")]
+            &app_submenu,
+            &file_submenu,
+            &edit_submenu,
+            &view_submenu,
+            &window_menu,
+            &help_menu,
+        ],
+    )
+}
+
 fn tauri_context() -> tauri::Context<tauri::Wry> {
     tauri::generate_context!()
 }
 
 pub fn run() {
     let shared_state: SharedGuiState = Arc::new(Mutex::new(GuiAppState::initialize()));
+    let menu_state = shared_state.clone();
 
     tauri::Builder::default()
         .manage(shared_state.clone())
         .setup(move |app| {
+            if let Ok(menu) = build_app_menu(app.handle(), &shared_state) {
+                let _ = app.set_menu(menu);
+            }
             spawn_db_change_watcher(app.handle().clone(), shared_state.clone());
             Ok(())
         })
+        .on_menu_event(move |app, event| {
+            let id = event.id().as_ref();
+            match id {
+                "menu:open_workspace_db" => {
+                    let _ = app.emit("wsid://menu-action", "open_workspace_db");
+                }
+                "menu:switch_global_db" => {
+                    let _ = app.emit("wsid://menu-action", "switch_global_db");
+                }
+                "menu:settings" | "menu:view_settings" => {
+                    let _ = app.emit("wsid://menu-action", "open_settings");
+                }
+                "menu:about" | "menu:help_about" => {
+                    let _ = app.emit("wsid://menu-action", "open_about");
+                }
+                "menu:view_focus" => {
+                    let _ = app.emit("wsid://menu-action", "view:focus");
+                }
+                "menu:view_kanban" => {
+                    let _ = app.emit("wsid://menu-action", "view:kanban");
+                }
+                "menu:view_eisenhower" => {
+                    let _ = app.emit("wsid://menu-action", "view:eisenhower");
+                }
+                "menu:view_database" => {
+                    let _ = app.emit("wsid://menu-action", "view:database");
+                }
+                "menu:view_entry" => {
+                    let _ = app.emit("wsid://menu-action", "view:entry");
+                }
+                other if other.starts_with("menu:recent_db:") => {
+                    if let Ok(idx) = other["menu:recent_db:".len()..].parse::<usize>()
+                        && let Ok(guard) = menu_state.lock()
+                        && let Some(path) = guard.config.recent_workspaces.get(idx)
+                    {
+                        let _ = app.emit("wsid://menu-action", format!("switch_db:{}", path.to_string_lossy()));
+                    }
+                }
+                _ => {}
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_session_state,
-            set_active_persona,
+            set_active_user,
             set_focus_preset,
+            set_focus_limit,
             switch_database,
             pick_workspace_database_dialog,
             pick_attachment_file_dialog,
@@ -826,7 +1038,7 @@ mod tests {
             db_path,
             config_path,
             config: AppConfig::default(),
-            active_persona: "alice".to_string(),
+            active_user: "alice".to_string(),
             active_preset: FocusPreset::Balanced,
         };
 

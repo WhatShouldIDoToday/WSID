@@ -11,7 +11,7 @@ use wsid_core::{TaskStatus, get_about_metadata};
 pub fn render(frame: &mut Frame, app: &TuiApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(2)])
+        .constraints([Constraint::Length(2), Constraint::Min(10), Constraint::Length(2)])
         .split(frame.area());
 
     render_header(frame, app, chunks[0]);
@@ -54,22 +54,20 @@ fn render_header(frame: &mut Frame, app: &TuiApp, area: Rect) {
         })
         .collect();
 
-    let title_bar = format!(
-        " WSID | Persona: @{} | Preset: {} | Mode: {} | DB: {} ",
-        app.persona,
-        app.preset.as_str(),
-        if app.accessible_mode { "Accessible" } else { "Standard" },
-        app.db_path.display()
-    );
-
     let tabs = Tabs::new(titles)
         .block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::BOTTOM)
                 .border_type(border_type(app.accessible_mode))
-                .title(title_bar),
+                .title(Span::styled(
+                    " WSID ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
         )
         .select(app.active_tab.index())
+        .divider("  ")
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -80,19 +78,20 @@ fn render_header(frame: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_focus_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
+    let show_secondary_pane =
+        !app.accessible_mode && (!app.focus_queue.actionable_tasks.is_empty() || !app.focus_queue.blocked_summary.is_empty());
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints(if app.accessible_mode {
-            [Constraint::Percentage(100), Constraint::Percentage(0)]
-        } else {
+        .constraints(if show_secondary_pane {
             [Constraint::Percentage(65), Constraint::Percentage(35)]
+        } else {
+            [Constraint::Percentage(100), Constraint::Percentage(0)]
         })
         .split(area);
 
     let items: Vec<ListItem> = if app.focus_queue.actionable_tasks.is_empty() {
-        vec![ListItem::new(Line::from(
-            "No actionable tasks in your Focus queue right now. Press [5] to create a task or check Blocked summary.",
-        ))]
+        vec![ListItem::new(Line::from(Span::styled("  All caught up. No pending tasks in focus.", Style::default().fg(Color::DarkGray))))]
     } else {
         app.focus_queue
             .actionable_tasks
@@ -139,19 +138,16 @@ fn render_focus_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
             .collect()
     };
 
+    let primary_borders = if show_secondary_pane { Borders::RIGHT } else { Borders::NONE };
     let list = List::new(items).block(
         Block::default()
-            .borders(Borders::ALL)
+            .borders(primary_borders)
             .border_type(border_type(app.accessible_mode))
-            .title(format!(
-                " Focus Queue (Top {}, [p] cycle preset: {}, [space] start/done, [Enter] details) ",
-                app.focus_queue.actionable_tasks.len(),
-                app.preset.as_str()
-            )),
+            .title(" Focus Queue "),
     );
     frame.render_widget(list, chunks[0]);
 
-    if !app.accessible_mode {
+    if show_secondary_pane {
         let mut right_lines = Vec::new();
         if let Some(st) = app.focus_queue.actionable_tasks.get(app.focus_selected) {
             right_lines.push(Line::from(Span::styled(
@@ -172,15 +168,13 @@ fn render_focus_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
             right_lines.push(Line::from(""));
         }
 
-        right_lines.push(Line::from(Span::styled(
-            "Blocked / Waiting Summary:",
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        )));
-        if app.focus_queue.blocked_summary.is_empty() {
-            right_lines.push(Line::from("  None! No blocked tasks."));
-        } else {
+        if !app.focus_queue.blocked_summary.is_empty() {
+            right_lines.push(Line::from(Span::styled(
+                "Blocked / Waiting Summary:",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            )));
             for grp in &app.focus_queue.blocked_summary {
                 right_lines.push(Line::from(format!(
                     "  • [{}] {} task(s) waiting on @{} ({})",
@@ -196,9 +190,8 @@ fn render_focus_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(border_type(app.accessible_mode))
-                    .title(" Score Breakdown & Situational Awareness "),
+                    .borders(Borders::NONE)
+                    .title(" Score Breakdown "),
             );
         frame.render_widget(breakdown_panel, chunks[1]);
     }
@@ -206,11 +199,10 @@ fn render_focus_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
 
 fn render_kanban_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
     if app.accessible_mode {
-        // Accessible linear single-column view of the active Kanban column
         let status = TaskStatus::ALL[app.kanban_col];
         let col_tasks = app.kanban_tasks_in_col(app.kanban_col);
         let items: Vec<ListItem> = if col_tasks.is_empty() {
-            vec![ListItem::new(Line::from("  (Empty column)"))]
+            vec![ListItem::new(Line::from(Span::styled("  No tasks in this column.", Style::default().fg(Color::DarkGray))))]
         } else {
             col_tasks
                 .iter()
@@ -232,18 +224,11 @@ fn render_kanban_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
                 .collect()
         };
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Plain)
-                .title(format!(
-                    " Kanban Column {}/{}: {} ({} tasks) — [h/l] switch column, [H/L] move card ",
-                    app.kanban_col + 1,
-                    TaskStatus::ALL.len(),
-                    status.as_str(),
-                    col_tasks.len()
-                )),
-        );
+        let list = List::new(items).block(Block::default().borders(Borders::NONE).title(format!(
+            " {} ({}) ",
+            status.as_str(),
+            col_tasks.len()
+        )));
         frame.render_widget(list, area);
         return;
     }
@@ -285,31 +270,26 @@ fn render_kanban_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
+            Style::default().fg(Color::DarkGray)
         };
 
+        let borders = if col_idx + 1 < TaskStatus::ALL.len() { Borders::RIGHT } else { Borders::NONE };
         let block = Block::default()
-            .borders(Borders::ALL)
+            .borders(borders)
             .border_type(border_type(app.accessible_mode))
-            .border_style(title_style)
-            .title(format!(" {} ({}) ", status.as_str(), col_tasks.len()));
+            .title(Span::styled(format!(" {} ({}) ", status.as_str(), col_tasks.len()), title_style));
 
         frame.render_widget(List::new(items).block(block), cols[col_idx]);
     }
 }
 
 fn render_eisenhower_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
-    let quadrant_titles = [
-        "Q1: Urgent & Important (Do First)",
-        "Q2: Not Urgent & Important (Schedule)",
-        "Q3: Urgent & Not Important (Delegate/Quick)",
-        "Q4: Not Urgent & Not Important (Later)",
-    ];
+    let quadrant_titles = ["Q1: Do First", "Q2: Schedule", "Q3: Delegate / Quick", "Q4: Later"];
 
     if app.accessible_mode {
         let q_tasks = app.eisenhower_tasks_in_quadrant(app.eisenhower_quadrant);
         let items: Vec<ListItem> = if q_tasks.is_empty() {
-            vec![ListItem::new(Line::from("  (No tasks in this quadrant)"))]
+            vec![ListItem::new(Line::from(Span::styled("  No tasks in this quadrant.", Style::default().fg(Color::DarkGray))))]
         } else {
             q_tasks
                 .iter()
@@ -335,16 +315,11 @@ fn render_eisenhower_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
                 .collect()
         };
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Plain)
-                .title(format!(
-                    " {} ({} tasks) — [h/l] switch quadrant, [+/-] importance, [u] urgent ",
-                    quadrant_titles[app.eisenhower_quadrant],
-                    q_tasks.len()
-                )),
-        );
+        let list = List::new(items).block(Block::default().borders(Borders::NONE).title(format!(
+            " {} ({}) ",
+            quadrant_titles[app.eisenhower_quadrant],
+            q_tasks.len()
+        )));
         frame.render_widget(list, area);
         return;
     }
@@ -362,6 +337,7 @@ fn render_eisenhower_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(rows[1]);
     let rects = [top_cols[0], top_cols[1], bot_cols[0], bot_cols[1]];
+    let quadrant_borders = [Borders::BOTTOM | Borders::RIGHT, Borders::BOTTOM, Borders::RIGHT, Borders::NONE];
 
     for q_idx in 0..4 {
         let is_active = q_idx == app.eisenhower_quadrant;
@@ -389,19 +365,18 @@ fn render_eisenhower_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
             })
             .collect();
 
-        let border_style = if is_active {
+        let title_style = if is_active {
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
+            Style::default().fg(Color::DarkGray)
         };
 
         let block = Block::default()
-            .borders(Borders::ALL)
+            .borders(quadrant_borders[q_idx])
             .border_type(border_type(app.accessible_mode))
-            .border_style(border_style)
-            .title(format!(" {} ({}) ", quadrant_titles[q_idx], q_tasks.len()));
+            .title(Span::styled(format!(" {} ({}) ", quadrant_titles[q_idx], q_tasks.len()), title_style));
 
         frame.render_widget(List::new(items).block(block), rects[q_idx]);
     }
@@ -410,18 +385,12 @@ fn render_eisenhower_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
 fn render_database_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(6)])
+        .constraints([Constraint::Length(2), Constraint::Min(6)])
         .split(area);
 
-    let search_title = if app.search_editing {
-        " Fuzzy Search Query (TYPING — press [Enter] or [Esc] to navigate results) "
-    } else {
-        " Fuzzy Search Query (press [/] to type query, [s] sort column, [S] reverse order) "
-    };
-
-    let query_box = Paragraph::new(format!("Query: {}", app.search_query)).block(
+    let query_box = Paragraph::new(format!(" Query: {}", app.search_query)).block(
         Block::default()
-            .borders(Borders::ALL)
+            .borders(Borders::BOTTOM)
             .border_type(border_type(app.accessible_mode))
             .border_style(if app.search_editing {
                 Style::default()
@@ -430,12 +399,12 @@ fn render_database_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
             } else {
                 Style::default()
             })
-            .title(search_title),
+            .title(" Search "),
     );
     frame.render_widget(query_box, chunks[0]);
 
     let items: Vec<ListItem> = if app.search_hits.is_empty() {
-        vec![ListItem::new(Line::from("  No matching tasks found."))]
+        vec![ListItem::new(Line::from(Span::styled("  No matching tasks found.", Style::default().fg(Color::DarkGray))))]
     } else {
         app.search_hits
             .iter()
@@ -480,17 +449,12 @@ fn render_database_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
 
     let sort_label = app.search_sort_col.label();
 
-    let results_list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(border_type(app.accessible_mode))
-            .title(format!(
-                " Database Results ({} tasks, sorted by {} {}) ",
-                app.search_hits.len(),
-                sort_label,
-                if app.search_sort_asc { "ASC" } else { "DESC" }
-            )),
-    );
+    let results_list = List::new(items).block(Block::default().borders(Borders::NONE).title(format!(
+        " Results ({} tasks, {} {}) ",
+        app.search_hits.len(),
+        sort_label,
+        if app.search_sort_asc { "ASC" } else { "DESC" }
+    )));
     frame.render_widget(results_list, chunks[1]);
 }
 
@@ -509,29 +473,48 @@ fn render_data_entry_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
         };
 
         let line = if idx == DataEntryForm::SUBMIT_INDEX {
-            format!("{prefix}[ SUBMIT NEW TASK (Press Enter or Ctrl+S) ]")
+            format!("{prefix}[ Submit New Task ]")
         } else {
             format!("{prefix}{:<34}: {}", DataEntryForm::LABELS[idx], app.entry_form.fields[idx])
         };
         items.push(ListItem::new(Line::from(line)).style(style));
     }
 
-    let form = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(border_type(app.accessible_mode))
-            .title(" Create New Task — [Tab/Down] next field, [Shift+Tab/Up] prev, [Ctrl+S] submit "),
-    );
+    let form = List::new(items).block(Block::default().borders(Borders::NONE).title(" Add Task "));
     frame.render_widget(form, area);
 }
 
 fn render_footer(frame: &mut Frame, app: &TuiApp, area: Rect) {
-    let status = if app.status_message.trim().is_empty() {
-        "Keys: [1-5] Views | [j/k] Navigate | [Enter] Task Details & Notes | [a] Toggle Accessible Mode | [?] About & Licenses | [q] Quit"
-    } else {
-        app.status_message.as_str()
+    let keymap = match app.active_tab {
+        ActiveTab::Focus => {
+            "[1-5] Views | [j/k] Navigate | [p] Preset | [s/d/x] Status | [Enter] Details | [a] Accessible | [?] Help/Status | [q] Quit"
+        }
+        ActiveTab::Kanban => {
+            "[1-5] Views | [h/l] Column | [j/k] Card | [H/L] Move Card | [Enter] Details | [a] Accessible | [?] Help/Status | [q] Quit"
+        }
+        ActiveTab::Eisenhower => {
+            "[1-5] Views | [h/l] Quadrant | [j/k] Task | [+/-] Importance | [u] Urgent | [Enter] Details | [?] Help/Status | [q] Quit"
+        }
+        ActiveTab::Database => {
+            "[1-5] Views | [/] Search | [j/k] Navigate | [f] Status | [m] Mine | [o/O] Sort | [Enter] Details | [?] Help/Status | [q] Quit"
+        }
+        ActiveTab::DataEntry => "[Tab/Down] Next Field | [Shift+Tab/Up] Prev Field | [Ctrl+S] Submit | [Esc] Cancel",
     };
-    let footer = Paragraph::new(Line::from(Span::styled(format!(" {status}"), Style::default().fg(Color::Cyan))));
+
+    let line1 = if app.status_message.trim().is_empty() {
+        Line::from(Span::styled(format!(" {keymap}"), Style::default().fg(Color::DarkGray)))
+    } else {
+        Line::from(vec![
+            Span::styled(format!(" {} ", app.status_message), Style::default().fg(Color::Cyan)),
+            Span::styled(format!("| {keymap}"), Style::default().fg(Color::DarkGray)),
+        ])
+    };
+
+    let footer = Paragraph::new(line1).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_type(border_type(app.accessible_mode)),
+    );
     frame.render_widget(footer, area);
 }
 
@@ -583,7 +566,7 @@ fn render_detail_modal(frame: &mut Frame, app: &TuiApp, detail: &TaskDetailSnaps
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(format!("Attachments ({}):", t.attachments.len()), Style::default().add_modifier(Modifier::BOLD))));
     if t.attachments.is_empty() {
-        lines.push(Line::from("  (none — press [f] to attach a file or [v] to paste clipboard)"));
+        lines.push(Line::from("  (none)"));
     } else {
         for att in &t.attachments {
             lines.push(Line::from(format!(
@@ -649,7 +632,7 @@ fn render_detail_modal(frame: &mut Frame, app: &TuiApp, detail: &TaskDetailSnaps
     match app.detail_prompt_kind {
         DetailPromptKind::None => {
             lines.push(Line::from(Span::styled(
-                "Actions: [c] Comment (@persona / @takenote:p / #ID) | [f] Attach File (path|alt) | [v] Paste Clipboard | [e] Edit Alt (id|alt) | [o] Open Attachment | [g] Jump to Task | [u] Unblock/Dismiss | [s] Start/Done | [Esc] Close",
+                "Actions: [c] Comment (@user / @takenote:user / #ID) | [f] Attach File (path|alt) | [v] Paste Clipboard | [e] Edit Alt (id:alt) | [o] Open Attachment | [g] Jump to Task | [u] Unblock/Dismiss | [s/d/x] Status | [Esc] Close",
                 Style::default().fg(Color::Green),
             )));
         }
@@ -679,7 +662,7 @@ fn render_detail_modal(frame: &mut Frame, app: &TuiApp, detail: &TaskDetailSnaps
         }
         DetailPromptKind::EditAttachmentDesc => {
             lines.push(Line::from(Span::styled(
-                format!("Edit Attachment Alt `attachment_id | alt text` (Enter to save, Esc to cancel): {}", app.detail_prompt_input),
+                format!("Edit Attachment Alt `attachment_id: alt text` (Enter to save, Esc to cancel): {}", app.detail_prompt_input),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -707,7 +690,7 @@ fn render_detail_modal(frame: &mut Frame, app: &TuiApp, detail: &TaskDetailSnaps
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 )
-                .title(" Task Detail & Collaboration Drawer "),
+                .title(" Task Detail "),
         );
     frame.render_widget(modal, popup_area);
 }
@@ -717,12 +700,26 @@ fn render_about_modal(frame: &mut Frame, app: &TuiApp, area: Rect) {
     frame.render_widget(Clear, popup_area);
 
     let about = get_about_metadata();
+    let db_moniker = app
+        .db_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("wsid.db");
+
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
         format!("{} v{}", about.app_full_name, about.version),
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(format!(
+        "Active User: @{}  |  Focus Preset: {}  |  Mode: {}  |  DB: [{}] ({})",
+        app.user,
+        app.preset.as_str(),
+        if app.accessible_mode { "Accessible" } else { "Standard" },
+        db_moniker,
+        app.db_path.display()
     )));
     lines.push(Line::from(format!("License: {}  |  Repository: {}", about.license_spdx, about.repository_url)));
     lines.push(Line::from(Span::styled(
@@ -786,7 +783,7 @@ fn render_about_modal(frame: &mut Frame, app: &TuiApp, area: Rect) {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 )
-                .title(" About WSID & Third-Party Licenses ([Esc/?/q] Close) "),
+                .title(" Status, Help & Licenses "),
         );
     frame.render_widget(modal, popup_area);
 }

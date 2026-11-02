@@ -10,13 +10,13 @@
 
   interface Props {
     tasks: Task[];
-    activePersona: string;
+    activeUser: string;
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
     announce: (msg: string) => void;
   }
 
-  let { tasks, activePersona, onSelectTask, onDataChanged, announce }: Props =
+  let { tasks, activeUser, onSelectTask, onDataChanged, announce }: Props =
     $props();
 
   let filterMyTasksOnly = $state<boolean>(false);
@@ -24,7 +24,7 @@
   let filteredTasks = $derived(
     filterMyTasksOnly
       ? tasks.filter(
-          (t) => t.assignee.toLowerCase() === activePersona.toLowerCase(),
+          (t) => t.assignee.toLowerCase() === activeUser.toLowerCase(),
         )
       : tasks,
   );
@@ -53,30 +53,22 @@
   }
 </script>
 
-<section aria-labelledby="kanban-view-heading">
+<section aria-labelledby="kanban-view-heading" class="kanban-view">
   <div
-    style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem;"
+    style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.85rem;"
   >
-    <div>
-      <h2 id="kanban-view-heading" style="margin: 0; font-size: 1.35rem;">
-        Kanban Board
-      </h2>
-      <p
-        style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;"
-      >
-        Every card includes a keyboard-accessible "Move to column" selector so
-        moving tasks never requires pointer drag-and-drop.
-      </p>
-    </div>
+    <h2 id="kanban-view-heading" style="margin: 0; font-size: 1.35rem;">
+      Kanban Board
+    </h2>
 
     <div class="control-inline">
       <input
-        id="kanban-persona-filter"
+        id="kanban-user-filter"
         type="checkbox"
         bind:checked={filterMyTasksOnly}
       />
-      <label for="kanban-persona-filter">
-        Only show tasks assigned to @{activePersona}
+      <label for="kanban-user-filter">
+        Only show tasks assigned to @{activeUser}
       </label>
     </div>
   </div>
@@ -94,13 +86,11 @@
         </h3>
 
         {#if colTasks.length === 0}
-          <p class="field-hint" style="margin: 0.25rem 0;">
-            No tasks in {STATUS_LABELS[colStatus]}.
+          <p class="empty-state-message" style="padding: 1.5rem 0.5rem;">
+            No tasks
           </p>
         {:else}
-          <ul
-            style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.65rem;"
-          >
+          <ul class="kanban-column-list">
             {#each colTasks as task (task.id)}
               <li>
                 <article

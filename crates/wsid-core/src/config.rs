@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, WsidError};
 use crate::models::FocusPreset;
 use crate::scoring::{DEFAULT_FOCUS_LIMIT, FocusWeights, ScoringConfig};
-use crate::tasks::normalize_persona;
+use crate::tasks::normalize_user;
 
 pub const LOCAL_DB_FILENAME: &str = ".wsid.db";
 pub const GLOBAL_DB_FILENAME: &str = "wsid.db";
@@ -16,7 +16,8 @@ pub const WSID_DB_ENV_VAR: &str = "WSID_DB";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub default_persona: String,
+    #[serde(alias = "default_persona")]
+    pub default_user: String,
     pub focus_preset: FocusPreset,
     pub custom_weights: Option<FocusWeights>,
     pub focus_limit: usize,
@@ -26,14 +27,14 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let default_persona = std::env::var("USER")
+        let default_user = std::env::var("USER")
             .or_else(|_| std::env::var("USERNAME"))
             .ok()
-            .and_then(|u| normalize_persona(&u).ok())
+            .and_then(|u| normalize_user(&u).ok())
             .unwrap_or_else(|| "human".to_string());
 
         Self {
-            default_persona,
+            default_user,
             focus_preset: FocusPreset::Balanced,
             custom_weights: None,
             focus_limit: DEFAULT_FOCUS_LIMIT,
@@ -198,7 +199,7 @@ mod tests {
         let cfg_path = temp_dir.join("config.toml");
 
         let mut cfg = AppConfig {
-            default_persona: "david".to_string(),
+            default_user: "david".to_string(),
             focus_preset: FocusPreset::UnblockOthers,
             custom_weights: Some(FocusWeights::for_preset(FocusPreset::QuickWins)),
             focus_limit: 7,

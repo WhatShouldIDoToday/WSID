@@ -2,8 +2,9 @@
   import { onMount } from "svelte";
   import {
     getSessionState,
-    setActivePersona,
+    setActiveUser,
     setFocusPreset,
+    setFocusLimit,
     switchDatabase,
     pickWorkspaceDatabaseDialog,
     getFocusViewData,
@@ -11,26 +12,33 @@
     getAllTasksData,
     getEisenhowerData,
     subscribeToExternalDbChanges,
+    subscribeToMenuActions,
+    loadUiPreferences,
+    saveUiPreferences,
+    applyUiPreferencesToDom,
     type AppSessionSnapshot,
     type FocusPreset,
     type FocusQueueResponse,
     type BlockedTaskEntry,
     type Task,
     type EisenhowerClassification,
+    type UiPreferences,
   } from "./lib/ipc";
   import FocusView from "./components/FocusView.svelte";
   import KanbanView from "./components/KanbanView.svelte";
   import EisenhowerView from "./components/EisenhowerView.svelte";
   import DatabaseView from "./components/DatabaseView.svelte";
   import DataEntryView from "./components/DataEntryView.svelte";
+  import SettingsView from "./components/SettingsView.svelte";
   import TaskDetailDrawer from "./components/TaskDetailDrawer.svelte";
   import AboutModal from "./components/AboutModal.svelte";
+  import UserSwitcherModal from "./components/UserSwitcherModal.svelte";
 
-  type ViewTab = "focus" | "kanban" | "eisenhower" | "database" | "entry";
+  type ViewTab =
+    "focus" | "kanban" | "eisenhower" | "database" | "entry" | "settings";
 
   let activeTab = $state<ViewTab>("focus");
   let session = $state<AppSessionSnapshot | null>(null);
-  let personaInput = $state<string>("");
   let filterMyTasksOnly = $state<boolean>(false);
   let focusQueue = $state<FocusQueueResponse | null>(null);
   let blockedTasks = $state<BlockedTaskEntry[]>([]);
@@ -38,15 +46,17 @@
   let eisenhowerItems = $state<EisenhowerClassification[]>([]);
   let selectedTaskId = $state<string | null>(null);
   let aboutModalOpen = $state<boolean>(false);
+  let userSwitcherOpen = $state<boolean>(false);
   let statusAnnouncement = $state<string>("Ready.");
   let loading = $state<boolean>(true);
   let refreshTrigger = $state<number>(0);
+  let uiPreferences = $state<UiPreferences>(loadUiPreferences());
 
   const tabs: { id: ViewTab; label: string; shortcut: string }[] = [
-    { id: "focus", label: "Focus View", shortcut: "1" },
-    { id: "kanban", label: "Kanban Board", shortcut: "2" },
-    { id: "eisenhower", label: "Eisenhower Matrix", shortcut: "3" },
-    { id: "database", label: "Database Search", shortcut: "4" },
+    { id: "focus", label: "Focus", shortcut: "1" },
+    { id: "kanban", label: "Kanban", shortcut: "2" },
+    { id: "eisenhower", label: "Eisenhower", shortcut: "3" },
+    { id: "database", label: "Database", shortcut: "4" },
     { id: "entry", label: "New Task", shortcut: "5" },
   ];
 
@@ -54,17 +64,26 @@
     statusAnnouncement = msg;
   }
 
+  function handleUpdateUiPreferences(next: UiPreferences) {
+    uiPreferences = next;
+    saveUiPreferences(next);
+    applyUiPreferencesToDom(next);
+  }
+
   async function refreshAllData() {
     try {
       const snap = await getSessionState();
       session = snap;
-      personaInput = snap.active_persona;
-      const personaFilter = filterMyTasksOnly ? snap.active_persona : null;
+      const userFilter = filterMyTasksOnly ? snap.active_user : null;
       const [fq, blocked, tasks, matrix] = await Promise.all([
-        getFocusViewData(snap.active_persona, snap.active_preset),
-        getBlockedTasksData(snap.active_persona),
+        getFocusViewData(
+          snap.active_user,
+          snap.active_preset,
+          snap.focus_limit,
+        ),
+        getBlockedTasksData(snap.active_user),
         getAllTasksData(),
-        getEisenhowerData(personaFilter),
+        getEisenhowerData(userFilter),
       ]);
       focusQueue = fq;
       blockedTasks = blocked;
@@ -78,30 +97,16 @@
     }
   }
 
-  onMount(() => {
-    refreshAllData();
-    let unlisten: (() => void) | null = null;
-    subscribeToExternalDbChanges(() => {
-      announce("Database updated externally; refreshing views.");
-      refreshAllData();
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      if (unlisten) unlisten();
-    };
-  });
-
-  async function handlePersonaApply(e: SubmitEvent) {
-    e.preventDefault();
-    const trimmed = personaInput.trim();
+  async function handleSelectUser(user: string) {
+    const trimmed = user.trim();
     if (!trimmed) return;
     try {
-      session = await setActivePersona(trimmed);
-      announce(`Switched active persona to @${session.active_persona}.`);
+      session = await setActiveUser(trimmed);
+      userSwitcherOpen = false;
+      announce(`Switched active user to @${session.active_user}.`);
       await refreshAllData();
     } catch (err) {
-      announce(`Failed to change persona: ${String(err)}`);
+      announce(`Failed to change user: ${String(err)}`);
     }
   }
 
@@ -112,6 +117,16 @@
       await refreshAllData();
     } catch (err) {
       announce(`Failed to change preset: ${String(err)}`);
+    }
+  }
+
+  async function handleFocusLimitChange(limit: number) {
+    try {
+      session = await setFocusLimit(limit);
+      announce(`Updated Focus queue limit to ${session.focus_limit}.`);
+      await refreshAllData();
+    } catch (err) {
+      announce(`Failed to update Focus limit: ${String(err)}`);
     }
   }
 
@@ -149,6 +164,52 @@
     }
   }
 
+  function handleMenuAction(action: string) {
+    if (action === "open_workspace_db") {
+      void handlePickWorkspaceDb();
+    } else if (action === "switch_global_db") {
+      void handleSwitchToGlobalDb();
+    } else if (action === "open_settings") {
+      activeTab = "settings";
+      announce("Opened Settings.");
+    } else if (action === "open_about") {
+      aboutModalOpen = true;
+      announce("Opened About and Third-Party Licenses dialog.");
+    } else if (action.startsWith("view:")) {
+      const view = action.slice("view:".length) as ViewTab;
+      activeTab = view;
+      announce(`Switched to ${view} view.`);
+    } else if (action.startsWith("switch_db:")) {
+      const path = action.slice("switch_db:".length);
+      void handleSwitchRecentDb(path);
+    }
+  }
+
+  onMount(() => {
+    applyUiPreferencesToDom(uiPreferences);
+    void refreshAllData();
+    let unlistenDb: (() => void) | null = null;
+    let unlistenMenu: (() => void) | null = null;
+
+    subscribeToExternalDbChanges(() => {
+      announce("Database updated externally; refreshing views.");
+      void refreshAllData();
+    }).then((fn) => {
+      unlistenDb = fn;
+    });
+
+    subscribeToMenuActions((action) => {
+      handleMenuAction(action);
+    }).then((fn) => {
+      unlistenMenu = fn;
+    });
+
+    return () => {
+      if (unlistenDb) unlistenDb();
+      if (unlistenMenu) unlistenMenu();
+    };
+  });
+
   function openTaskDetail(taskId: string) {
     selectedTaskId = taskId;
     announce(`Opened details for task ${taskId}.`);
@@ -160,6 +221,13 @@
   }
 
   function handleGlobalKeydown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+      e.preventDefault();
+      activeTab = "settings";
+      announce("Opened Settings.");
+      return;
+    }
+
     const target = e.target as HTMLElement | null;
     const isInput =
       target &&
@@ -168,7 +236,7 @@
         target.tagName === "SELECT" ||
         target.isContentEditable);
 
-    if (isInput || selectedTaskId || aboutModalOpen) return;
+    if (isInput || selectedTaskId || aboutModalOpen || userSwitcherOpen) return;
 
     if (e.key === "1") activeTab = "focus";
     else if (e.key === "2") activeTab = "kanban";
@@ -190,100 +258,61 @@
   {statusAnnouncement}
 </div>
 
+{#if session}
+  <div class="sr-only">
+    Active user: @{session.active_user}. Connected database: {session.is_global_db
+      ? "Global database"
+      : "Workspace database"} ({session.db_path}).
+  </div>
+{/if}
+
 <div class="app-shell">
   <header class="top-bar">
     <div class="brand">
       <span class="brand-badge">WSID</span>
-      <span>What Should I Do?</span>
     </div>
 
-    {#if session}
-      <div
-        class="db-switcher"
-        role="group"
-        aria-label="Database and Persona Switcher"
-      >
-        <span
-          class="badge"
-          class:badge-urgent={!session.is_global_db}
-          title={session.db_path}
-        >
-          {session.is_global_db ? "Global DB" : "Workspace DB"}:
-          <code>{session.db_path.split(/[\\/]/).pop()}</code>
-        </span>
-
-        <button type="button" class="btn-sm" onclick={handlePickWorkspaceDb}>
-          Open Workspace DB...
-        </button>
-
-        {#if !session.is_global_db}
-          <button type="button" class="btn-sm" onclick={handleSwitchToGlobalDb}>
-            Switch to Global DB
-          </button>
-        {/if}
-
-        {#if session.recent_workspaces.length > 0}
-          <label class="sr-only" for="recent-db-select">Recent Databases</label>
-          <select
-            id="recent-db-select"
-            aria-label="Recent Workspace Databases"
-            value=""
-            onchange={(e) => handleSwitchRecentDb(e.currentTarget.value)}
-          >
-            <option value="" disabled>Recent DBs...</option>
-            <option value={session.global_db_path}>
-              Global ({session.global_db_path})
-            </option>
-            {#each session.recent_workspaces as rw}
-              <option value={rw}>{rw}</option>
-            {/each}
-          </select>
-        {/if}
-
-        <form class="inline-actions" onsubmit={handlePersonaApply}>
-          <label for="persona-input" class="text-sm text-muted">Persona:</label>
-          <input
-            id="persona-input"
-            type="text"
-            style="width: 7.5rem;"
-            bind:value={personaInput}
-            aria-label="Active Persona"
-          />
-          <button type="submit" class="btn-sm">Set</button>
-        </form>
-
+    <nav class="nav-tabs" aria-label="Primary Views">
+      {#each tabs as tab}
         <button
           type="button"
-          class="btn-sm"
+          class="tab-btn"
+          aria-current={activeTab === tab.id ? "page" : undefined}
+          aria-keyshortcuts={tab.shortcut}
+          title={`${tab.label} (Shortcut: ${tab.shortcut})`}
           onclick={() => {
-            aboutModalOpen = true;
-            announce("Opened About and Third-Party Licenses dialog.");
+            activeTab = tab.id;
+            announce(`Switched to ${tab.label}.`);
           }}
-          aria-label="About WSID and Third-Party Licenses (Shortcut: ?)"
         >
-          About &amp; Licenses (?)
+          {tab.label}
         </button>
-      </div>
-    {/if}
-  </header>
+      {/each}
+    </nav>
 
-  <nav class="nav-tabs" aria-label="Primary Views">
-    {#each tabs as tab}
+    <div class="inline-actions">
       <button
         type="button"
         class="tab-btn"
-        aria-current={activeTab === tab.id ? "page" : undefined}
+        aria-current={activeTab === "settings" ? "page" : undefined}
+        aria-keyshortcuts="Meta+Comma Control+Comma"
+        title="Settings (Cmd/Ctrl+,)"
         onclick={() => {
-          activeTab = tab.id;
-          announce(`Switched to ${tab.label}.`);
+          activeTab = "settings";
+          announce("Opened Settings.");
         }}
       >
-        [{tab.shortcut}] {tab.label}
+        Settings
       </button>
-    {/each}
-  </nav>
+    </div>
+  </header>
 
-  <main id="main-content" class="main-content" tabindex="-1">
+  <main
+    id="main-content"
+    class="main-content"
+    class:main-content-kanban={activeTab === "kanban"}
+    tabindex="-1"
+  >
     {#if loading}
       <p role="status">Loading WSID workspace...</p>
     {:else if activeTab === "focus"}
@@ -298,7 +327,7 @@
     {:else if activeTab === "kanban"}
       <KanbanView
         tasks={allTasks}
-        activePersona={session?.active_persona ?? "human"}
+        activeUser={session?.active_user ?? "human"}
         onSelectTask={openTaskDetail}
         onDataChanged={refreshAllData}
         {announce}
@@ -306,9 +335,9 @@
     {:else if activeTab === "eisenhower"}
       <EisenhowerView
         items={eisenhowerItems}
-        activePersona={session?.active_persona ?? "human"}
-        filterByPersona={filterMyTasksOnly}
-        onTogglePersonaFilter={async (enabled) => {
+        activeUser={session?.active_user ?? "human"}
+        filterByUser={filterMyTasksOnly}
+        onToggleUserFilter={async (enabled) => {
           filterMyTasksOnly = enabled;
           await refreshAllData();
         }}
@@ -317,15 +346,15 @@
     {:else if activeTab === "database"}
       <DatabaseView
         knownTags={session?.known_tags ?? []}
-        knownPersonas={session?.known_personas ?? []}
+        knownUsers={session?.known_users ?? []}
         {refreshTrigger}
         onSelectTask={openTaskDetail}
         {announce}
       />
     {:else if activeTab === "entry"}
       <DataEntryView
-        activePersona={session?.active_persona ?? "human"}
-        knownPersonas={session?.known_personas ?? []}
+        activeUser={session?.active_user ?? "human"}
+        knownUsers={session?.known_users ?? []}
         knownTags={session?.known_tags ?? []}
         onCreated={async (createdId) => {
           await refreshAllData();
@@ -334,26 +363,60 @@
         }}
         {announce}
       />
+    {:else if activeTab === "settings" && session}
+      <SettingsView
+        {session}
+        uiPrefs={uiPreferences}
+        onUpdateUiPrefs={handleUpdateUiPreferences}
+        onOpenUserModal={() => (userSwitcherOpen = true)}
+        onPresetChange={handlePresetChange}
+        onFocusLimitChange={handleFocusLimitChange}
+        onPickWorkspaceDb={handlePickWorkspaceDb}
+        onSwitchGlobalDb={handleSwitchToGlobalDb}
+        onSwitchRecentDb={handleSwitchRecentDb}
+        onOpenAbout={() => {
+          aboutModalOpen = true;
+          announce("Opened About and Third-Party Licenses dialog.");
+        }}
+      />
     {/if}
   </main>
 
   <footer class="status-bar">
-    <span>
-      Active Persona: <strong>@{session?.active_persona ?? "human"}</strong> |
-      Total Tasks: <strong>{allTasks.length}</strong>
-    </span>
-    <span>{statusAnnouncement}</span>
+    <span class="status-announcement">{statusAnnouncement}</span>
+    <div class="status-right">
+      <span class="text-muted">Tasks: {allTasks.length}</span>
+      <button
+        type="button"
+        class="status-user-btn"
+        onclick={() => (userSwitcherOpen = true)}
+        title="Switch active user"
+        aria-label={`Active user @${session?.active_user ?? "human"}. Click to switch user.`}
+      >
+        @{session?.active_user ?? "human"}
+      </button>
+    </div>
   </footer>
 </div>
 
 {#if selectedTaskId && session}
   <TaskDetailDrawer
     taskId={selectedTaskId}
-    activePersona={session.active_persona}
+    activeUser={session.active_user}
+    knownTags={session.known_tags}
     onClose={closeTaskDetail}
     onSelectTask={openTaskDetail}
     onDataChanged={refreshAllData}
     {announce}
+  />
+{/if}
+
+{#if userSwitcherOpen && session}
+  <UserSwitcherModal
+    activeUser={session.active_user}
+    knownUsers={session.known_users}
+    onSelectUser={handleSelectUser}
+    onClose={() => (userSwitcherOpen = false)}
   />
 {/if}
 

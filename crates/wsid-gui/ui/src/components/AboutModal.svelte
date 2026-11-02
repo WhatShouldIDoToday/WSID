@@ -152,7 +152,7 @@
           <div>
             <p style="margin: 0 0 0.25rem 0; font-size: 0.9rem;">
               Offline-first, cross-platform desktop &amp; terminal task manager
-              with human + AI persona collaboration.
+              with human + AI user collaboration.
             </p>
             <p
               style="margin: 0; font-size: 0.82rem; color: var(--text-secondary);"

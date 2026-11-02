@@ -41,12 +41,12 @@ pub fn normalize_tags(raw_tags: &[String]) -> Result<Vec<String>> {
     Ok(normalized.into_iter().collect())
 }
 
-/// Normalizes a persona identifier (stripping an optional leading `@` and trimming whitespace).
-pub fn normalize_persona(raw: &str) -> Result<String> {
+/// Normalizes a user identifier (stripping an optional leading `@` and trimming whitespace).
+pub fn normalize_user(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     let stripped = trimmed.strip_prefix('@').unwrap_or(trimmed).trim();
     if stripped.is_empty() {
-        return Err(WsidError::Validation("persona name cannot be empty".to_string()));
+        return Err(WsidError::Validation("user name cannot be empty".to_string()));
     }
     Ok(stripped.to_string())
 }
@@ -90,15 +90,15 @@ pub fn validate_time_estimate(time_estimate_minutes: Option<i64>) -> Result<()> 
     Ok(())
 }
 
-pub fn create_task(db: &mut Database, input: CreateTaskInput, default_persona: &str) -> Result<Task> {
+pub fn create_task(db: &mut Database, input: CreateTaskInput, default_user: &str) -> Result<Task> {
     let tx = db.conn.transaction()?;
-    let id = create_task_in_tx(&tx, input, default_persona)?;
+    let id = create_task_in_tx(&tx, input, default_user)?;
     tx.commit()?;
 
     get_task(db, &id)
 }
 
-pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, default_persona: &str) -> Result<String> {
+pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, default_user: &str) -> Result<String> {
     let title = input.title.trim().to_string();
     if title.is_empty() {
         return Err(WsidError::Validation("task title cannot be empty".to_string()));
@@ -118,18 +118,18 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     validate_manual_priority(manual_priority)?;
     validate_time_estimate(input.time_estimate_minutes)?;
 
-    let fallback_persona = normalize_persona(default_persona)?;
+    let fallback_user = normalize_user(default_user)?;
     let reporter = match input.reporter.as_deref() {
-        Some(r) if !r.trim().is_empty() => normalize_persona(r)?,
-        _ => fallback_persona.clone(),
+        Some(r) if !r.trim().is_empty() => normalize_user(r)?,
+        _ => fallback_user.clone(),
     };
     let assignee = match input.assignee.as_deref() {
-        Some(a) if !a.trim().is_empty() => normalize_persona(a)?,
-        _ => fallback_persona.clone(),
+        Some(a) if !a.trim().is_empty() => normalize_user(a)?,
+        _ => fallback_user.clone(),
     };
     let evaluator = match input.evaluator.as_deref() {
-        Some(e) if !e.trim().is_empty() => normalize_persona(e)?,
-        _ => fallback_persona,
+        Some(e) if !e.trim().is_empty() => normalize_user(e)?,
+        _ => fallback_user,
     };
 
     let tags = normalize_tags(&input.tags)?;
@@ -261,15 +261,15 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
     let manual_priority = input.manual_priority.unwrap_or(current.manual_priority);
 
     let reporter = match input.reporter {
-        Some(r) => normalize_persona(&r)?,
+        Some(r) => normalize_user(&r)?,
         None => current.reporter,
     };
     let assignee = match input.assignee {
-        Some(a) => normalize_persona(&a)?,
+        Some(a) => normalize_user(&a)?,
         None => current.assignee,
     };
     let evaluator = match input.evaluator {
-        Some(e) => normalize_persona(&e)?,
+        Some(e) => normalize_user(&e)?,
         None => current.evaluator,
     };
 
@@ -506,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn populates_default_persona_and_normalizes_tags() {
+    fn populates_default_user_and_normalizes_tags() {
         let mut db = open_in_memory_db().unwrap();
 
         let task = create_task(

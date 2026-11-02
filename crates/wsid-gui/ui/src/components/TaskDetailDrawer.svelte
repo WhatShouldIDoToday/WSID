@@ -1,6 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import AttachmentGallery from "./AttachmentGallery.svelte";
+  import DateFieldPicker from "./DateFieldPicker.svelte";
+  import TagChipsInput from "./TagChipsInput.svelte";
+  import RelationPicker, {
+    type SelectedRelationEntry,
+  } from "./RelationPicker.svelte";
   import {
     type TaskFullDetail,
     type TaskStatus,
@@ -8,6 +13,7 @@
     type AttachmentInput,
     STATUS_LABELS,
     STATUS_ORDER,
+    RELATION_LABELS,
     getTaskDetailData,
     transitionStatus,
     updateExistingTask,
@@ -26,9 +32,19 @@
     formatDurationMinutes,
   } from "../lib/ipc";
 
+  interface DraftCommentAttachment {
+    id: string;
+    path?: string;
+    base64Data?: string;
+    suggestedName: string;
+    description: string | null;
+    previewUrl?: string;
+  }
+
   interface Props {
     taskId: string;
-    activePersona: string;
+    activeUser: string;
+    knownTags?: string[];
     onClose: () => void;
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
@@ -37,7 +53,8 @@
 
   let {
     taskId,
-    activePersona,
+    activeUser,
+    knownTags = [],
     onClose,
     onSelectTask,
     onDataChanged,
@@ -59,14 +76,10 @@
   let editImportance = $state<number>(3);
   let editUrgentOverride = $state<boolean>(false);
   let editManualPriority = $state<number>(0);
-  let editTagsInput = $state<string>("");
+  let editTags = $state<string[]>([]);
   let editAssignee = $state<string>("");
   let editEvaluator = $state<string>("");
   let editReporter = $state<string>("");
-
-  // Relation linker state
-  let newRelKind = $state<RelationInputKind>("blocks");
-  let newRelTargetId = $state<string>("");
 
   // Task-level attachment state
   let newTaskAttachmentDesc = $state<string>("");
@@ -75,10 +88,15 @@
   // Comment composer state
   let commentBody = $state<string>("");
   let commentSpawnSubtasks = $state<boolean>(true);
-  let pendingCommentAttachments = $state<AttachmentInput[]>([]);
+  let pendingCommentAttachments = $state<DraftCommentAttachment[]>([]);
   let pendingCommentDesc = $state<string>("");
 
   let drawerElement = $state<HTMLElement | null>(null);
+
+  function basenameOfPath(rawPath: string): string {
+    const parts = rawPath.split(/[/\\]/);
+    return parts[parts.length - 1] || rawPath;
+  }
 
   async function refreshDetail(targetId: string) {
     loading = true;
@@ -107,7 +125,7 @@
     editImportance = d.task.importance;
     editUrgentOverride = d.task.urgent_override;
     editManualPriority = d.task.manual_priority;
-    editTagsInput = d.task.tags.join(", ");
+    editTags = [...d.task.tags];
     editAssignee = d.task.assignee;
     editEvaluator = d.task.evaluator;
     editReporter = d.task.reporter;
@@ -172,11 +190,6 @@
       return;
     }
 
-    const tags = editTagsInput
-      .split(/[,\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-
     try {
       await updateExistingTask({
         id: detail.task.id,
@@ -189,7 +202,7 @@
         importance: Number(editImportance),
         urgent_override: editUrgentOverride,
         manual_priority: Number(editManualPriority),
-        tags,
+        tags: editTags,
         assignee: editAssignee,
         evaluator: editEvaluator,
         reporter: editReporter,
@@ -274,15 +287,13 @@
     onDataChanged();
   }
 
-  async function handleAddRelation(e: SubmitEvent) {
-    e.preventDefault();
-    if (!detail || !newRelTargetId.trim()) return;
+  async function handleAddRelationFromPicker(entry: SelectedRelationEntry) {
+    if (!detail) return;
     try {
-      await addRelation(detail.task.id, newRelKind, newRelTargetId.trim());
+      await addRelation(detail.task.id, entry.relation, entry.target_id);
       announce(
-        `Linked ${detail.task.id} (${newRelKind}) to ${newRelTargetId.trim().toUpperCase()}`,
+        `Linked ${detail.task.id} (${RELATION_LABELS[entry.relation]}) to ${entry.target_id}`,
       );
-      newRelTargetId = "";
       await refreshDetail(detail.task.id);
       onDataChanged();
     } catch (err) {
@@ -324,15 +335,18 @@
     try {
       const path = await pickAttachmentFileDialog();
       if (!path) return;
+      const fileName = basenameOfPath(path);
       pendingCommentAttachments = [
         ...pendingCommentAttachments,
         {
+          id: `${Date.now()}-${Math.random()}`,
           path,
+          suggestedName: fileName,
           description: pendingCommentDesc.trim() || null,
         },
       ];
       pendingCommentDesc = "";
-      announce(`Added file ${path} to pending comment`);
+      announce(`Added file ${fileName} to pending comment`);
     } catch (err) {
       errorMsg = String(err);
     }
@@ -344,16 +358,17 @@
     for (const file of Array.from(items)) {
       try {
         const b64 = await fileToBase64(file);
-        const savedPath = await saveClipboardBytesForDraft(
-          b64,
-          file.name || "comment-paste.png",
-        );
+        const friendlyName =
+          file.name ||
+          `comment-paste-${new Date().toISOString().slice(11, 19).replace(/:/g, "")}.png`;
         pendingCommentAttachments = [
           ...pendingCommentAttachments,
           {
-            path: savedPath,
-            description:
-              pendingCommentDesc.trim() || file.name || "Pasted image",
+            id: `${Date.now()}-${Math.random()}`,
+            base64Data: b64,
+            suggestedName: friendlyName,
+            description: pendingCommentDesc.trim() || friendlyName,
+            previewUrl: file.type.startsWith("image/") ? b64 : undefined,
           },
         ];
         announce(`Pasted image staged for comment`);
@@ -368,12 +383,31 @@
     if (!detail || !commentBody.trim()) return;
     errorMsg = null;
     try {
+      const attachmentsToSubmit: AttachmentInput[] = [];
+      for (const item of pendingCommentAttachments) {
+        if (item.path) {
+          attachmentsToSubmit.push({
+            path: item.path,
+            description: item.description,
+          });
+        } else if (item.base64Data) {
+          const savedPath = await saveClipboardBytesForDraft(
+            item.base64Data,
+            item.suggestedName,
+          );
+          attachmentsToSubmit.push({
+            path: savedPath,
+            description: item.description,
+          });
+        }
+      }
+
       const outcome = await addCommentNote({
         taskId: detail.task.id,
-        author: activePersona,
+        author: activeUser,
         body: commentBody.trim(),
         spawnSubtasks: commentSpawnSubtasks,
-        attachments: pendingCommentAttachments,
+        attachments: attachmentsToSubmit,
       });
       commentBody = "";
       pendingCommentAttachments = [];
@@ -539,14 +573,16 @@
           </div>
 
           <div class="form-grid">
-            <div class="form-field">
-              <label for="edit-sgdb">Should Get Done By (SGDB Date)</label>
-              <input id="edit-sgdb" type="date" bind:value={editSgdbDate} />
-            </div>
-            <div class="form-field">
-              <label for="edit-due">Hard Due Date</label>
-              <input id="edit-due" type="date" bind:value={editDueDate} />
-            </div>
+            <DateFieldPicker
+              id="edit-sgdb"
+              label="Should Get Done By (SGDB Date)"
+              bind:value={editSgdbDate}
+            />
+            <DateFieldPicker
+              id="edit-due"
+              label="Hard Due Date"
+              bind:value={editDueDate}
+            />
             <div class="form-field">
               <label for="edit-est">Time Estimate (e.g. 45m, 2h, 1d)</label>
               <input id="edit-est" type="text" bind:value={editEstimateInput} />
@@ -599,12 +635,7 @@
             </div>
           </div>
 
-          <div class="form-field">
-            <label for="edit-tags"
-              >Tags (single-word tokens, comma or space separated)</label
-            >
-            <input id="edit-tags" type="text" bind:value={editTagsInput} />
-          </div>
+          <TagChipsInput id="edit-tags" bind:tags={editTags} {knownTags} />
 
           <div class="control-inline">
             <input
@@ -899,31 +930,11 @@
           {/if}
         </div>
 
-        <form onsubmit={handleAddRelation} class="actions-row">
-          <label for="rel-kind-select" class="sr-only">Relation Type</label>
-          <select
-            id="rel-kind-select"
-            bind:value={newRelKind}
-            style="width: auto;"
-          >
-            <option value="blocks">Blocks</option>
-            <option value="blocked_by">Blocked By</option>
-            <option value="sub_task_of">Sub-task Of</option>
-            <option value="parent_task_of">Parent Task Of</option>
-            <option value="parallel">Parallel With</option>
-            <option value="related">Related To</option>
-          </select>
-
-          <label for="rel-target-id" class="sr-only">Target Task ID</label>
-          <input
-            id="rel-target-id"
-            type="text"
-            bind:value={newRelTargetId}
-            placeholder="Target ID (e.g. AB1234)"
-            style="width: 11rem;"
-          />
-          <button type="submit" class="btn-sm">Link Task</button>
-        </form>
+        <RelationPicker
+          excludeTaskId={detail.task.id}
+          buttonLabel="Link Task"
+          onAdd={(entry) => void handleAddRelationFromPicker(entry)}
+        />
       </section>
 
       <!-- Notes & Comment Mention Thread -->
@@ -937,8 +948,8 @@
 
         {#if detail.notes.length === 0}
           <p class="field-hint">
-            No comments yet. Mention <code>@persona</code> to spawn an urgent
-            blocking subtask, <code>@takenote:persona</code> for a non-blocking
+            No comments yet. Mention <code>@user</code> to spawn an urgent
+            blocking subtask, <code>@takenote:user</code> for a non-blocking
             related note, or <code>#AB1234</code> to cross-link another task.
           </p>
         {:else}
@@ -990,31 +1001,44 @@
         >
           <div class="form-field">
             <label for="new-comment-body">
-              Add Comment (as @{activePersona})
+              Add Comment (as @{activeUser})
             </label>
             <textarea
               id="new-comment-body"
               rows="3"
               bind:value={commentBody}
               onpaste={handleCommentPaste}
-              placeholder="Write a comment... Use @persona for blocking subtasks, @takenote:persona for non-blocking heads-up, or #AB1234 to link tasks. Paste images directly with Cmd/Ctrl+V."
+              placeholder="Write a comment... Use @user for blocking subtasks, @takenote:user for non-blocking heads-up, or #AB1234 to link tasks. Paste images directly with Cmd/Ctrl+V."
             ></textarea>
           </div>
 
           {#if pendingCommentAttachments.length > 0}
-            <ul style="margin: 0; padding-left: 1.2rem; font-size: 0.85rem;">
-              {#each pendingCommentAttachments as att, idx}
-                <li>
-                  <code>{att.path}</code>
-                  {#if att.description}
-                    — Alt: "{att.description}"
-                  {/if}
+            <ul class="draft-attachments-list">
+              {#each pendingCommentAttachments as att (att.id)}
+                <li class="draft-attachment-item">
+                  <div class="draft-attachment-info">
+                    {#if att.previewUrl}
+                      <img
+                        src={att.previewUrl}
+                        alt={att.description ?? att.suggestedName}
+                        class="draft-attachment-thumb"
+                      />
+                    {/if}
+                    <div>
+                      <strong>{att.suggestedName}</strong>
+                      {#if att.description && att.description !== att.suggestedName}
+                        <span class="field-hint"> — "{att.description}"</span>
+                      {/if}
+                    </div>
+                  </div>
                   <button
                     type="button"
                     class="btn-sm btn-danger"
                     onclick={() => {
                       pendingCommentAttachments =
-                        pendingCommentAttachments.filter((_, i) => i !== idx);
+                        pendingCommentAttachments.filter(
+                          (a) => a.id !== att.id,
+                        );
                     }}
                   >
                     Remove

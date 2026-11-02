@@ -50,25 +50,13 @@
   <div
     style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem;"
   >
-    <div>
-      <h2 id="focus-view-heading" style="margin: 0; font-size: 1.35rem;">
-        Focus Queue ("What Should I Do?")
-      </h2>
-      {#if focusData}
-        <p
-          style="margin: 0.2rem 0 0 0; color: var(--text-secondary); font-size: 0.9rem;"
-        >
-          Showing top actionable unblocked tasks for <strong
-            >@{focusData.persona}</strong
-          >
-          under preset <strong>{PRESET_LABELS[focusData.preset]}</strong>.
-        </p>
-      {/if}
-    </div>
+    <h2 id="focus-view-heading" style="margin: 0; font-size: 1.35rem;">
+      Focus Queue
+    </h2>
 
     {#if focusData}
       <div class="control-inline">
-        <label for="focus-preset-select">Prioritization Preset:</label>
+        <label for="focus-preset-select">Preset:</label>
         <select
           id="focus-preset-select"
           value={focusData.preset}
@@ -86,18 +74,9 @@
   </div>
 
   {#if !focusData}
-    <p>Loading focus queue...</p>
+    <p class="empty-state-message">Loading focus queue...</p>
   {:else if focusData.actionable_tasks.length === 0}
-    <div class="card" style="margin-bottom: 1.25rem;">
-      <h3 style="margin: 0 0 0.4rem 0;">No Actionable Unblocked Tasks</h3>
-      <p style="margin: 0; color: var(--text-secondary);">
-        @{focusData.persona} currently has no unblocked To Do or In Progress tasks.
-        {#if focusData.blocked_summary.length > 0}
-          See the Blocked Tasks & Review Queue summary below for what you are
-          waiting on.
-        {/if}
-      </p>
-    </div>
+    <p class="empty-state-message">All caught up. No pending tasks in focus.</p>
   {:else}
     <ol
       style="list-style: none; padding: 0; margin: 0 0 1.5rem 0; display: flex; flex-direction: column; gap: 0.85rem;"
@@ -213,73 +192,66 @@
     </ol>
   {/if}
 
-  <!-- Blocked Summary & Detailed Blocked Queue -->
-  <section class="card" aria-labelledby="blocked-summary-heading">
-    <h3
-      id="blocked-summary-heading"
-      style="margin: 0 0 0.65rem 0; font-size: 1.08rem;"
-    >
-      Blocked Tasks & Situational Awareness ({blockedTasks.length})
-    </h3>
+  <!-- Blocked Summary & Detailed Blocked Queue (collapsed when 0 items) -->
+  {#if blockedTasks.length > 0 || (focusData && focusData.blocked_summary.length > 0)}
+    <section class="card" aria-labelledby="blocked-summary-heading">
+      <h3
+        id="blocked-summary-heading"
+        style="margin: 0 0 0.65rem 0; font-size: 1.08rem;"
+      >
+        Blocked Tasks ({blockedTasks.length})
+      </h3>
 
-    {#if focusData && focusData.blocked_summary.length > 0}
-      <div style="margin-bottom: 0.85rem;">
-        <p
-          style="margin: 0 0 0.4rem 0; font-size: 0.88rem; color: var(--text-secondary);"
-        >
-          Grouped summary by project/tag and who is holding the blocker:
-        </p>
-        <ul style="margin: 0; padding-left: 1.2rem; font-size: 0.9rem;">
-          {#each focusData.blocked_summary as grp}
-            <li style="margin-bottom: 0.25rem;">
-              <strong>#{grp.project_or_tag}</strong>: {grp.count} task(s) ({grp.task_ids.join(
-                ", ",
-              )}) waiting on <strong>@{grp.waiting_on_assignee}</strong>
-              (blocker kind: <code>{grp.blocker_kind}</code>)
-            </li>
-          {/each}
-        </ul>
-      </div>
-    {/if}
+      {#if focusData && focusData.blocked_summary.length > 0}
+        <div style="margin-bottom: 0.85rem;">
+          <ul style="margin: 0; padding-left: 1.2rem; font-size: 0.9rem;">
+            {#each focusData.blocked_summary as grp}
+              <li style="margin-bottom: 0.25rem;">
+                <strong>#{grp.project_or_tag}</strong>: {grp.count} task(s) ({grp.task_ids.join(
+                  ", ",
+                )}) waiting on <strong>@{grp.waiting_on_assignee}</strong>
+                (<code>{grp.blocker_kind}</code>)
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
 
-    {#if blockedTasks.length === 0}
-      <p class="field-hint" style="margin: 0;">
-        No blocked or in-review tasks for this persona.
-      </p>
-    {:else}
-      <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-        {#each blockedTasks as bt (bt.task_id)}
-          <div
-            style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 0.375rem; padding: 0.65rem 0.85rem; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.5rem;"
-          >
-            <div>
-              <span class="task-id-badge">{bt.task_id}</span>
-              <strong style="margin-left: 0.4rem;">{bt.title}</strong>
-              <span class="badge" style="margin-left: 0.4rem;">
-                {STATUS_LABELS[bt.status]}
-              </span>
-              {#if bt.blocked_by.length > 0}
-                <div
-                  style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.25rem;"
-                >
-                  Waiting on:
-                  {#each bt.blocked_by as b, i}
-                    {i > 0 ? ", " : ""}
-                    <code>{b.blocker_id}</code> ({b.origin_kind} assigned to @{b.assignee})
-                  {/each}
-                </div>
-              {/if}
-            </div>
-            <button
-              type="button"
-              class="btn-sm"
-              onclick={() => onSelectTask(bt.task_id)}
+      {#if blockedTasks.length > 0}
+        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+          {#each blockedTasks as bt (bt.task_id)}
+            <div
+              style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 0.375rem; padding: 0.65rem 0.85rem; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.5rem;"
             >
-              Inspect Task
-            </button>
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </section>
+              <div>
+                <span class="task-id-badge">{bt.task_id}</span>
+                <strong style="margin-left: 0.4rem;">{bt.title}</strong>
+                <span class="badge" style="margin-left: 0.4rem;">
+                  {STATUS_LABELS[bt.status]}
+                </span>
+                {#if bt.blocked_by.length > 0}
+                  <div
+                    style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.25rem;"
+                  >
+                    Waiting on:
+                    {#each bt.blocked_by as b, i}
+                      {i > 0 ? ", " : ""}
+                      <code>{b.blocker_id}</code> ({b.origin_kind} assigned to @{b.assignee})
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+              <button
+                type="button"
+                class="btn-sm"
+                onclick={() => onSelectTask(bt.task_id)}
+              >
+                Inspect Task
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </section>
+  {/if}
 </section>
