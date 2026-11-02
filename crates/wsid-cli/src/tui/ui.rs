@@ -707,10 +707,10 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
 fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
     let hints = match app.active_tab {
         ActiveTab::Focus => {
-            "[1-5] Views | [j/k] Select | [Enter] Inspect | [p] Preset | [s] Start | [d] Done | [x] Stuck | [b] Blocked | [?] Help & Status | [q] Quit"
+            "[1-5] Views | [j/k] Select | [Enter] Inspect | [p] Preset | [s] Start | [d] Done | [x] Stuck | [b] Blocked | [U] User | [?] Help & Status | [q] Quit"
         }
         ActiveTab::Kanban => {
-            "[1-5] Views | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [Enter] Inspect | [q] Quit"
+            "[1-5] Views | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [U] User | [Enter] Inspect | [q] Quit"
         }
         ActiveTab::Eisenhower => {
             "[1-5] Views | [h/l/Tab] Quadrant | [j/k] Task | [+/-] Imp | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
@@ -828,8 +828,10 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     if detail.notes.is_empty() {
         lines.push(Line::from("  (No comments yet — press 'c' to add one)"));
     } else {
-        for n in &detail.notes {
-            lines.push(Line::from(format!("  • [{}] @{}: {}", n.created_at.format("%Y-%m-%d %H:%M"), n.author, n.body)));
+        let cursor = app.detail_note_cursor.min(detail.notes.len() - 1);
+        for (idx, n) in detail.notes.iter().enumerate() {
+            let marker = if idx == cursor { "▶" } else { "•" };
+            lines.push(Line::from(format!("  {marker} #{} [{}] @{}: {}", n.id, n.created_at.format("%Y-%m-%d %H:%M"), n.author, n.body)));
             for att in &n.attachments {
                 let alt = if att.description.is_empty() { "(no alt text)" } else { att.description.as_str() };
                 lines.push(Line::from(format!("      ↳ Attachment #{}: {} ({}) — Alt: {}", att.id, att.file_name, att.media_type, alt)));
@@ -861,7 +863,7 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     let (prompt_line, prompt_prefix_len) = match app.detail_prompt_kind {
         DetailPromptKind::None => (
             Line::from(Span::styled(
-                "[c] Comment | [f] Attach File | [v] Paste Clipboard | [e] Edit Alt | [o] Open Att | [g] Jump ID | [u] Unblock Subtask | [s/r/d/x] Status | [Esc] Close",
+                "[E] Edit | [D] Delete | [c] Comment | [N/X] Select/Delete Comment | [f] Attach | [v] Clipboard | [e] Alt | [o] Open | [g] Jump | [u] Unblock | [s/r/d/x] Status | [Esc] Close",
                 Style::default().fg(Color::Cyan),
             )),
             None,
@@ -904,6 +906,22 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         }
         DetailPromptKind::EditAttachmentDesc => {
             let prefix = "Edit Attachment Alt (attachment_id | new alt description): ";
+            (
+                Line::from(Span::styled(
+                    format!("{prefix}{}", app.detail_prompt_input),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Some(prefix.len()),
+            )
+        }
+        DetailPromptKind::EditField | DetailPromptKind::ConfirmDeleteTask | DetailPromptKind::ConfirmDeleteNote => {
+            let prefix = match app.detail_prompt_kind {
+                DetailPromptKind::EditField => "Edit (field: value): ",
+                DetailPromptKind::ConfirmDeleteTask => "Delete this task? Type yes: ",
+                _ => "Delete selected comment? Type yes: ",
+            };
             (
                 Line::from(Span::styled(
                     format!("{prefix}{}", app.detail_prompt_input),

@@ -771,7 +771,7 @@ mod tests {
             &mut db,
             CreateTaskInput {
                 title: "Overdue task".to_string(),
-                due_date: Some("2026-10-30".to_string()),
+                due_date: Some("2099-01-01".to_string()),
                 importance: Some(3),
                 difficulty: Some(3),
                 time_estimate_minutes: Some(60),
@@ -782,11 +782,16 @@ mod tests {
         )
         .unwrap();
 
+        // Past deadlines are rejected at creation, so backdate the row directly to simulate a task that became overdue.
+        db.conn
+            .execute("UPDATE tasks SET due_date = '2026-10-30' WHERE id = ?1", [&overdue.id])
+            .unwrap();
+
         let due_tomorrow = create_task(
             &mut db,
             CreateTaskInput {
                 title: "Due tomorrow".to_string(),
-                due_date: Some("2026-11-02".to_string()),
+                due_date: Some("2099-01-02".to_string()),
                 importance: Some(3),
                 difficulty: Some(3),
                 time_estimate_minutes: Some(60),
@@ -796,6 +801,9 @@ mod tests {
             "alice",
         )
         .unwrap();
+        db.conn
+            .execute("UPDATE tasks SET due_date = '2026-11-02' WHERE id = ?1", [&due_tomorrow.id])
+            .unwrap();
 
         let balanced = compute_focus_queue(&db, "alice", FocusPreset::Balanced, None, None, today, config).unwrap();
         let ids: Vec<&str> = balanced

@@ -454,4 +454,75 @@ mod tests {
                 .all(|t| t.importance == 5 && t.tags == vec!["batch".to_string()])
         );
     }
+
+    #[test]
+    fn tui_detail_edit_delete_comment_and_switch_user() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("tui_detail.db");
+        let config = AppConfig::default();
+        let id = {
+            let mut db = Database::open(&db_path).unwrap();
+            let t = wsid_core::create_task(
+                &mut db,
+                wsid_core::CreateTaskInput { title: "Original".to_string(), ..Default::default() },
+                "alice",
+            )
+            .unwrap();
+            wsid_core::add_task_note(&mut db, &t.id, "alice", "first comment", false).unwrap();
+            t.id
+        };
+        let mut app = TuiApp::new(&db_path, config, "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        let type_str = |app: &mut TuiApp, s: &str| {
+            for ch in s.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        };
+
+        // Switch active user (registers it and stays valid-only)
+        press(&mut app, KeyCode::Char('U'));
+        type_str(&mut app, "bad name");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.user, "alice");
+        press(&mut app, KeyCode::Char('U'));
+        type_str(&mut app, "Bob");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.user, "bob");
+
+        // Edit a field from the detail view
+        app.open_detail_for(&id);
+        press(&mut app, KeyCode::Char('E'));
+        for _ in 0.."title: Original".len() {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_str(&mut app, "importance: 5");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.detail_modal.as_ref().unwrap().task.importance, 5, "status: {}", app.status_message);
+
+        // Past deadlines are rejected via the shared core validation
+        press(&mut app, KeyCode::Char('E'));
+        for _ in 0.."title: Original".len() {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_str(&mut app, "due: 2000-01-01");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.status_message.contains("past"), "status: {}", app.status_message);
+
+        // Delete the selected comment (requires typing `yes`)
+        press(&mut app, KeyCode::Char('X'));
+        type_str(&mut app, "no");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.detail_modal.as_ref().unwrap().notes.len(), 1);
+        press(&mut app, KeyCode::Char('X'));
+        type_str(&mut app, "yes");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.detail_modal.as_ref().unwrap().notes.is_empty());
+
+        // Delete the task
+        press(&mut app, KeyCode::Char('D'));
+        type_str(&mut app, "yes");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.detail_modal.is_none());
+        assert!(app.all_tasks.is_empty());
+    }
 }

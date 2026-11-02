@@ -440,6 +440,16 @@ pub fn validate_dates(sgdb_date: Option<&str>, due_date: Option<&str>) -> Result
     Ok(())
 }
 
+/// Rejects deadlines that are already in the past (local time). Date-only values count as 20:00 that day.
+pub fn validate_not_past(field_name: &str, normalized: &str) -> Result<()> {
+    let (_, dt) = parse_deadline_datetime(field_name, normalized)?;
+    if dt < Local::now().naive_local() {
+        let label = if field_name == "sgdb_date" { "Should Get Done By (SGDB) date/time" } else { "Hard due date/time" };
+        return Err(WsidError::Validation(format!("{label} cannot be in the past ({normalized})")));
+    }
+    Ok(())
+}
+
 pub fn validate_difficulty(difficulty: u8) -> Result<()> {
     if !(1..=5).contains(&difficulty) {
         return Err(WsidError::Validation(format!("difficulty must be between 1 and 5 (got {difficulty})")));
@@ -502,6 +512,14 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     };
 
     validate_dates(sgdb_str.as_deref(), due_str.as_deref())?;
+    if !status.is_completed() {
+        if let Some(s) = sgdb_str.as_deref() {
+            validate_not_past("sgdb_date", s)?;
+        }
+        if let Some(d) = due_str.as_deref() {
+            validate_not_past("due_date", d)?;
+        }
+    }
     validate_difficulty(difficulty)?;
     validate_importance(importance)?;
     validate_manual_priority(manual_priority)?;
@@ -643,12 +661,12 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
     let due_str = match input.due_date {
         Some(Some(ref s)) if !s.trim().is_empty() => Some(parse_deadline_datetime("due_date", s)?.0),
         Some(_) => None,
-        None => current.due_date,
+        None => current.due_date.clone(),
     };
     let sgdb_str = match input.sgdb_date {
         Some(Some(ref s)) if !s.trim().is_empty() => Some(parse_deadline_datetime("sgdb_date", s)?.0),
         Some(_) => None,
-        None => current.sgdb_date,
+        None => current.sgdb_date.clone(),
     };
     let time_estimate_minutes = input
         .time_estimate_minutes
@@ -672,6 +690,19 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
     };
 
     validate_dates(sgdb_str.as_deref(), due_str.as_deref())?;
+    // Only newly set/changed deadlines are checked, so editing other fields of an overdue task still works.
+    if !status.is_completed() {
+        if let Some(s) = sgdb_str.as_deref()
+            && sgdb_str != current.sgdb_date
+        {
+            validate_not_past("sgdb_date", s)?;
+        }
+        if let Some(d) = due_str.as_deref()
+            && due_str != current.due_date
+        {
+            validate_not_past("due_date", d)?;
+        }
+    }
     validate_difficulty(difficulty)?;
     validate_importance(importance)?;
     validate_manual_priority(manual_priority)?;
@@ -1110,5 +1141,53 @@ mod tests {
                 .unwrap()
                 .contains(&"foobar".to_string())
         );
+    }
+
+    #[test]
+    fn rejects_past_deadlines_only_when_newly_set() {
+        let mut db = open_in_memory_db().unwrap();
+        let past = CreateTaskInput { title: "Past".to_string(), due_date: Some("2000-01-01".to_string()), ..Default::default() };
+        assert!(create_task(&mut db, past.clone(), "alice").is_err());
+        // Already-completed tasks may carry historical deadlines.
+        let done = CreateTaskInput { status: Some(TaskStatus::Completed), ..past };
+        let task = create_task(&mut db, done, "alice").unwrap();
+
+        // Unrelated edits and unchanged deadlines still work; changing to another past date does not.
+        let kept = update_task(&mut db, &task.id, UpdateTaskInput { title: Some("Renamed".to_string()), ..Default::default() }).unwrap();
+        assert_eq!(kept.due_date.as_deref(), Some("2000-01-01"));
+        let reopened = update_task(
+            &mut db,
+            &task.id,
+            UpdateTaskInput { status: Some(TaskStatus::Todo), due_date: Some(Some("2000-01-02".to_string())), ..Default::default() },
+        );
+        assert!(reopened.is_err());
+    }
+
+    /// Shared with the frontend (`ui/src/lib/validation.test.ts`) so both validators agree.
+    #[test]
+    fn matches_shared_validation_vectors() {
+        let v: serde_json::Value = serde_json::from_str(include_str!("../../../test-fixtures/validation.json")).unwrap();
+
+        for c in v["usernames"].as_array().unwrap() {
+            let input = c["input"].as_str().unwrap();
+            assert_eq!(normalize_user(input).ok().as_deref(), c["normalized"].as_str(), "username {input:?}");
+        }
+        for c in v["tags"].as_array().unwrap() {
+            let input = c["input"].as_str().unwrap();
+            assert_eq!(normalize_tag(input).ok().as_deref(), c["normalized"].as_str(), "tag {input:?}");
+        }
+        for c in v["durations"].as_array().unwrap() {
+            let input = c["input"].as_str().unwrap();
+            let expected = c["minutes"].as_u64().map(|m| m as u32);
+            assert_eq!(parse_duration_minutes(input).ok(), expected, "duration {input:?}");
+        }
+        for c in v["deadline_order"].as_array().unwrap() {
+            let (sgdb, due) = (c["sgdb"].as_str(), c["due"].as_str());
+            assert_eq!(validate_dates(sgdb, due).is_ok(), c["valid"].as_bool().unwrap(), "order {sgdb:?} {due:?}");
+        }
+        for c in v["past_deadlines"].as_array().unwrap() {
+            let value = c["value"].as_str().unwrap();
+            assert_eq!(validate_not_past("due_date", value).is_err(), c["past"].as_bool().unwrap(), "past {value:?}");
+        }
     }
 }

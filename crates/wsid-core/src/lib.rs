@@ -56,5 +56,5 @@ pub use tasks::{
     create_task, delete_task, delete_task_with_attachments_dir, delete_user_from_db, format_duration_minutes, get_task, list_known_users,
     list_tasks, normalize_tag, normalize_tags, normalize_user, parse_deadline_datetime, parse_deadline_naive_date, parse_duration_minutes,
     preview_user_deletion, register_user, update_task, validate_dates, validate_difficulty, validate_importance, validate_manual_priority,
-    validate_time_estimate,
+    validate_not_past, validate_time_estimate,
 };

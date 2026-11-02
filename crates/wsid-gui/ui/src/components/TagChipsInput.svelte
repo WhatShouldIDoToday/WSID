@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { validateTag } from "../lib/ipc";
+
   interface Props {
     tags?: string[];
     knownTags?: string[];
@@ -19,10 +21,8 @@
 
   let tagError = $state<string | null>(null);
 
-  const VALID_TAG_REGEX = /^[a-z0-9_-]+$/;
-
   function isValidTagToken(token: string): boolean {
-    return VALID_TAG_REGEX.test(token);
+    return validateTag(token).error === null;
   }
 
   function commitToken(raw: string): boolean {

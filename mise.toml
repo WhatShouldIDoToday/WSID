@@ -41,6 +41,12 @@ dir = "crates/wsid-gui/ui"
 depends = ["ui:install"]
 run = "bun run check"
 
+[tasks."ui:test"]
+description = "Run frontend unit tests (shared validation vectors)"
+dir = "crates/wsid-gui/ui"
+depends = ["ui:install"]
+run = "bun test"
+
 [tasks."ui:fmt"]
 description = "Format frontend files with Bun"
 dir = "crates/wsid-gui/ui"
@@ -112,7 +118,7 @@ run = "cargo about generate --workspace --offline --fail about.hbs -o /dev/null"
 
 [tasks.test]
 description = "Run all workspace tests"
-depends = ["ui:build"]
+depends = ["ui:build", "ui:test"]
 run = "cargo test --workspace"
 
 [tasks.pc]

@@ -6,10 +6,11 @@ use ratatui::widgets::{ListState, TableState};
 use wsid_core::{
     AppConfig, BulkTaskPatch, CreateTaskInput, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FocusPreset,
     FocusQueueResponse, RelationInputKind, SearchHit, SearchQuery, Task, TaskNote, TaskStatus, UpdateTaskInput, add_task_note,
-    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task, get_attachment, get_direct_blocked_tasks,
-    get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks,
-    list_eisenhower_matrix, list_task_notes, list_tasks, open_file_in_os, save_clipboard_attachment, search_tasks, transition_task_status,
-    unblock_or_dismiss_subtask, update_attachment_description, update_task,
+    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task, delete_task, delete_task_note,
+    get_attachment, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
+    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user,
+    open_file_in_os, register_user, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
+    update_attachment_description, update_task,
 };
 
 use crate::args::{parse_date_arg, parse_duration_estimate, parse_relation_arg};
@@ -112,6 +113,9 @@ pub enum DetailPromptKind {
     AttachClipboard,
     EditAttachmentDesc,
     JumpToTask,
+    EditField,
+    ConfirmDeleteTask,
+    ConfirmDeleteNote,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +237,11 @@ pub struct TuiApp {
     pub detail_modal: Option<TaskDetailSnapshot>,
     pub detail_prompt_kind: DetailPromptKind,
     pub detail_prompt_input: String,
+    pub detail_note_cursor: usize,
+
+    // Active-user switching prompt
+    pub user_switching: bool,
+    pub user_input: String,
 
     // About & Third-Party Licenses Modal state
     pub about_modal_open: bool,
@@ -293,6 +302,9 @@ impl TuiApp {
             detail_modal: None,
             detail_prompt_kind: DetailPromptKind::None,
             detail_prompt_input: String::new(),
+            detail_note_cursor: 0,
+            user_switching: false,
+            user_input: String::new(),
             about_modal_open: false,
             about_scroll: 0,
         };
@@ -427,10 +439,11 @@ impl TuiApp {
         match self.load_detail_snapshot(task_id, 0) {
             Ok(snapshot) => {
                 self.status_message = format!(
-                    "Inspecting [{}] — c:comment, f:attach file, v:paste clipboard, e:edit alt text, o:open file, u:unblock, Esc:close",
+                    "Inspecting [{}] — c:comment, E:edit, D:delete, N/X:select/delete comment, f:attach, o:open, u:unblock, Esc:close",
                     snapshot.task.id
                 );
                 self.detail_modal = Some(snapshot);
+                self.detail_note_cursor = 0;
                 self.detail_prompt_kind = DetailPromptKind::None;
                 self.detail_prompt_input.clear();
             }
@@ -462,6 +475,12 @@ impl TuiApp {
         // 2. If Database search bar is actively being edited, route typing to it
         if self.active_tab == ActiveTab::Database && self.search_editing {
             self.handle_search_input_key(key);
+            return;
+        }
+
+        // 2a. Active-user switch prompt captures typing
+        if self.user_switching {
+            self.handle_user_input_key(key);
             return;
         }
 
@@ -516,6 +535,12 @@ impl TuiApp {
             KeyCode::Char('5') | KeyCode::Char('n') => {
                 self.active_tab = ActiveTab::DataEntry;
                 self.status_message.clear();
+                return;
+            }
+            KeyCode::Char('U') => {
+                self.user_switching = true;
+                self.user_input.clear();
+                self.update_user_prompt_message();
                 return;
             }
             KeyCode::Char('r') => {
@@ -1289,6 +1314,38 @@ impl TuiApp {
             KeyCode::Char('s') => {
                 self.apply_status_transition(&snapshot.task.id, TaskStatus::InProgress);
             }
+            KeyCode::Char('E') => {
+                self.detail_prompt_kind = DetailPromptKind::EditField;
+                self.detail_prompt_input = format!("title: {}", snapshot.task.title);
+                self.status_message = "Edit field: `field: value` — title, description, status, due, sgdb, estimate, difficulty, importance, priority, urgent, tags, assignee, reporter, evaluator (empty due/sgdb/estimate clears)".to_string();
+            }
+            KeyCode::Char('D') => {
+                self.detail_prompt_kind = DetailPromptKind::ConfirmDeleteTask;
+                self.detail_prompt_input.clear();
+                self.status_message = format!("Delete [{}] {}? Type `yes` and press Enter", snapshot.task.id, snapshot.task.title);
+            }
+            KeyCode::Char('N') => {
+                if snapshot.notes.is_empty() {
+                    self.status_message = "No comments to select".to_string();
+                } else {
+                    self.detail_note_cursor = (self.detail_note_cursor + 1) % snapshot.notes.len();
+                    let n = &snapshot.notes[self.detail_note_cursor];
+                    self.status_message = format!("Selected comment #{} by @{} — press X to delete", n.id, n.author);
+                }
+            }
+            KeyCode::Char('X') => {
+                match snapshot.notes.get(
+                    self.detail_note_cursor
+                        .min(snapshot.notes.len().saturating_sub(1)),
+                ) {
+                    Some(n) => {
+                        self.detail_prompt_kind = DetailPromptKind::ConfirmDeleteNote;
+                        self.detail_prompt_input.clear();
+                        self.status_message = format!("Delete comment #{} by @{}? Type `yes` and press Enter", n.id, n.author);
+                    }
+                    None => self.status_message = "No comments to delete (select one with N)".to_string(),
+                }
+            }
             KeyCode::Char('r') => {
                 self.apply_status_transition(&snapshot.task.id, TaskStatus::InReview);
             }
@@ -1392,6 +1449,138 @@ impl TuiApp {
                     self.open_detail_for(&input);
                 }
             }
+            DetailPromptKind::EditField => self.apply_field_edit(&snapshot.task, &input),
+            DetailPromptKind::ConfirmDeleteTask => {
+                if !input.eq_ignore_ascii_case("yes") {
+                    self.status_message = "Task delete cancelled".to_string();
+                    return;
+                }
+                match delete_task(&mut self.db, &snapshot.task.id) {
+                    Ok(()) => {
+                        self.detail_modal = None;
+                        let _ = self.refresh_all();
+                        self.status_message = format!("Deleted task [{}] {}", snapshot.task.id, snapshot.task.title);
+                    }
+                    Err(err) => self.status_message = format!("Failed to delete task: {err}"),
+                }
+            }
+            DetailPromptKind::ConfirmDeleteNote => {
+                if !input.eq_ignore_ascii_case("yes") {
+                    self.status_message = "Comment delete cancelled".to_string();
+                    return;
+                }
+                let idx = self
+                    .detail_note_cursor
+                    .min(snapshot.notes.len().saturating_sub(1));
+                let Some(note) = snapshot.notes.get(idx) else {
+                    return;
+                };
+                match delete_task_note(&mut self.db, note.id) {
+                    Ok(()) => {
+                        let _ = self.refresh_all();
+                        self.detail_note_cursor = 0;
+                        self.status_message = format!("Deleted comment #{}", note.id);
+                    }
+                    Err(err) => self.status_message = format!("Failed to delete comment: {err}"),
+                }
+            }
+        }
+    }
+
+    /// Applies a single `field: value` edit to the task shown in the detail view.
+    fn apply_field_edit(&mut self, task: &Task, input: &str) {
+        let Some((field, value)) = input.split_once(':') else {
+            self.status_message = "Expected `field: value`".to_string();
+            return;
+        };
+        let (field, value) = (field.trim().to_ascii_lowercase(), value.trim());
+        let clear = value.is_empty() || value.eq_ignore_ascii_case("none");
+
+        let result: wsid_core::Result<String> = (|| {
+            if field == "status" {
+                let status: TaskStatus = value.parse()?;
+                let outcome = transition_task_status(&mut self.db, &task.id, status)?;
+                return Ok(format!("[{}] status -> {}", task.id, outcome.task.status));
+            }
+            let mut update = UpdateTaskInput::default();
+            match field.as_str() {
+                "title" => update.title = Some(value.to_string()),
+                "description" | "desc" => update.description = Some(value.to_string()),
+                "due" => update.due_date = Some(if clear { None } else { parse_date_arg("due", Some(value))? }),
+                "sgdb" => update.sgdb_date = Some(if clear { None } else { parse_date_arg("sgdb", Some(value))? }),
+                "estimate" => update.time_estimate_minutes = Some(if clear { None } else { Some(parse_duration_estimate(value)?) }),
+                "difficulty" => update.difficulty = Some(parse_u8_field("difficulty", value)?),
+                "importance" => update.importance = Some(parse_u8_field("importance", value)?),
+                "priority" => {
+                    update.manual_priority = Some(
+                        value
+                            .parse::<i8>()
+                            .map_err(|_| wsid_core::WsidError::Validation(format!("invalid priority '{value}'")))?,
+                    )
+                }
+                "urgent" => update.urgent_override = Some(matches!(value.to_ascii_lowercase().as_str(), "true" | "on" | "yes" | "1")),
+                "tags" => {
+                    update.tags = Some(
+                        value
+                            .split([',', ' '])
+                            .filter(|t| !t.is_empty())
+                            .map(str::to_string)
+                            .collect(),
+                    )
+                }
+                "assignee" => update.assignee = Some(value.to_string()),
+                "reporter" => update.reporter = Some(value.to_string()),
+                "evaluator" => update.evaluator = Some(value.to_string()),
+                other => return Err(wsid_core::WsidError::Validation(format!("unknown field '{other}'"))),
+            }
+            let updated = update_task(&mut self.db, &task.id, update)?;
+            Ok(format!("Updated [{}] {}", updated.id, field))
+        })();
+
+        match result {
+            Ok(msg) => {
+                let _ = self.refresh_all();
+                self.status_message = msg;
+            }
+            Err(err) => self.status_message = format!("Edit failed: {err}"),
+        }
+    }
+
+    fn update_user_prompt_message(&mut self) {
+        let known = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()])
+            .unwrap_or_default()
+            .join(", @");
+        self.status_message = format!("Switch user (known: @{known}) — active @{}: @{}_", self.user, self.user_input);
+    }
+
+    fn handle_user_input_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.user_switching = false;
+                self.user_input.clear();
+                self.status_message = "Cancelled user switch".to_string();
+            }
+            KeyCode::Backspace => {
+                self.user_input.pop();
+                self.update_user_prompt_message();
+            }
+            KeyCode::Enter => {
+                let input = std::mem::take(&mut self.user_input);
+                self.user_switching = false;
+                match normalize_user(&input).and_then(|u| register_user(&mut self.db, &u)) {
+                    Ok(user) => {
+                        self.user = user.clone();
+                        let _ = self.refresh_all();
+                        self.status_message = format!("Active user is now @{user}");
+                    }
+                    Err(err) => self.status_message = format!("Cannot switch user: {err}"),
+                }
+            }
+            KeyCode::Char(ch) => {
+                self.user_input.push(ch);
+                self.update_user_prompt_message();
+            }
+            _ => {}
         }
     }
 
@@ -1578,4 +1767,10 @@ impl TuiApp {
             }
         }
     }
+}
+
+fn parse_u8_field(name: &str, value: &str) -> wsid_core::Result<u8> {
+    value
+        .parse::<u8>()
+        .map_err(|_| wsid_core::WsidError::Validation(format!("invalid {name} '{value}'")))
 }

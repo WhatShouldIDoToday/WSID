@@ -547,7 +547,8 @@ export function validateUsername(raw: string): {
   normalized: string | null;
   error: string | null;
 } {
-  const trimmed = raw.trim().replace(/^@+/, "").trim().toLowerCase();
+  // Mirrors core `normalize_user`: strip exactly one leading `@`.
+  const trimmed = raw.trim().replace(/^@/, "").trim().toLowerCase();
   if (!trimmed) {
     return { normalized: null, error: "Username cannot be empty." };
   }
@@ -558,6 +559,33 @@ export function validateUsername(raw: string): {
     };
   }
   return { normalized: trimmed, error: null };
+}
+
+export const TAG_REGEX = /^[a-z0-9_-]+$/;
+
+/** Mirrors core `normalize_tag`: optional leading `#`, lowercase, `[a-z0-9_-]+`. */
+export function validateTag(raw: string): {
+  normalized: string | null;
+  error: string | null;
+} {
+  const trimmed = raw.trim().replace(/^#/, "").toLowerCase();
+  if (!trimmed) return { normalized: null, error: "Tag cannot be empty." };
+  if (!TAG_REGEX.test(trimmed)) {
+    return {
+      normalized: null,
+      error: `Invalid tag '${raw.trim()}': tags may only contain a-z, 0-9, '-', or '_'.`,
+    };
+  }
+  return { normalized: trimmed, error: null };
+}
+
+/** True when a deadline (date or date-time) is already in the past. */
+export function isPastDeadline(
+  raw: string | null | undefined,
+  nowMs: number = Date.now(),
+): boolean {
+  const ms = parseDeadlineToEpochMs(raw);
+  return ms !== null && ms < nowMs;
 }
 
 export interface ParsedCommentMention {
