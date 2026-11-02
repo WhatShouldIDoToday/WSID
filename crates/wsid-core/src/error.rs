@@ -11,6 +11,9 @@ pub enum WsidError {
     #[error("task not found: {0}")]
     TaskNotFound(String),
 
+    #[error("cycle detected: linking {source_id} -{relation}-> {target_id} would create a circular dependency")]
+    CycleDetected { source_id: String, target_id: String, relation: String },
+
     #[error("validation error: {0}")]
     Validation(String),
 

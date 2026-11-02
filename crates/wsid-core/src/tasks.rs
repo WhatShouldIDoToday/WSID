@@ -88,6 +88,14 @@ pub fn validate_time_estimate(time_estimate_minutes: Option<i64>) -> Result<()> 
 }
 
 pub fn create_task(conn: &mut Connection, input: CreateTaskInput, default_persona: &str) -> Result<Task> {
+    let tx = conn.transaction()?;
+    let id = create_task_in_tx(&tx, input, default_persona)?;
+    tx.commit()?;
+
+    get_task(conn, &id)
+}
+
+pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, default_persona: &str) -> Result<String> {
     let title = input.title.trim().to_string();
     if title.is_empty() {
         return Err(WsidError::Validation("task title cannot be empty".to_string()));
@@ -129,10 +137,9 @@ pub fn create_task(conn: &mut Connection, input: CreateTaskInput, default_person
     let due_str = input.due_date.map(|d| d.format("%Y-%m-%d").to_string());
     let sgdb_str = input.sgdb_date.map(|d| d.format("%Y-%m-%d").to_string());
 
-    let tx = conn.transaction()?;
-    let id = ShortIdGenerator::generate_unique(&tx)?;
+    let id = ShortIdGenerator::generate_unique(conn)?;
 
-    tx.execute(
+    conn.execute(
         "INSERT INTO tasks (
             id, title, description, status, origin_kind, origin_note_id,
             due_date, sgdb_date, time_estimate_minutes, difficulty, importance,
@@ -167,10 +174,8 @@ pub fn create_task(conn: &mut Connection, input: CreateTaskInput, default_person
         ],
     )?;
 
-    sync_task_tags(&tx, &id, &tags)?;
-    tx.commit()?;
-
-    get_task(conn, &id)
+    sync_task_tags(conn, &id, &tags)?;
+    Ok(id)
 }
 
 pub fn get_task(conn: &Connection, raw_id: &str) -> Result<Task> {

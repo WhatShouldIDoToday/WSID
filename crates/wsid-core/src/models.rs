@@ -115,6 +115,79 @@ impl RelationType {
             Self::Related => "related",
         }
     }
+
+    pub const fn is_directed_acyclic(self) -> bool {
+        matches!(self, Self::Blocks | Self::ParentOf)
+    }
+
+    pub const fn is_symmetric(self) -> bool {
+        matches!(self, Self::Parallel | Self::Related)
+    }
+}
+
+/// User-facing relation kind that normalizes to a canonical [`RelationType`] edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationInputKind {
+    Blocks,
+    BlockedBy,
+    ParentTaskOf,
+    SubTaskOf,
+    Parallel,
+    Related,
+}
+
+impl RelationInputKind {
+    /// Resolves `(source_id, input_kind, target_id)` into canonical `(canonical_source, canonical_target, RelationType)`.
+    pub fn canonicalize<'a>(self, source_id: &'a str, target_id: &'a str) -> (&'a str, &'a str, RelationType) {
+        match self {
+            Self::Blocks => (source_id, target_id, RelationType::Blocks),
+            Self::BlockedBy => (target_id, source_id, RelationType::Blocks),
+            Self::ParentTaskOf => (source_id, target_id, RelationType::ParentOf),
+            Self::SubTaskOf => (target_id, source_id, RelationType::ParentOf),
+            Self::Parallel => {
+                if source_id <= target_id {
+                    (source_id, target_id, RelationType::Parallel)
+                } else {
+                    (target_id, source_id, RelationType::Parallel)
+                }
+            }
+            Self::Related => {
+                if source_id <= target_id {
+                    (source_id, target_id, RelationType::Related)
+                } else {
+                    (target_id, source_id, RelationType::Related)
+                }
+            }
+        }
+    }
+}
+
+impl From<RelationType> for RelationInputKind {
+    fn from(value: RelationType) -> Self {
+        match value {
+            RelationType::Blocks => Self::Blocks,
+            RelationType::ParentOf => Self::ParentTaskOf,
+            RelationType::Parallel => Self::Parallel,
+            RelationType::Related => Self::Related,
+        }
+    }
+}
+
+impl FromStr for RelationInputKind {
+    type Err = WsidError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "blocks" | "block" => Ok(Self::Blocks),
+            "blocked_by" | "blocked-by" | "blockedby" => Ok(Self::BlockedBy),
+            "parent_of" | "parent-of" | "parent_task_of" | "parent-task-of" | "parent" => Ok(Self::ParentTaskOf),
+            "sub_task_of" | "sub-task-of" | "subtask_of" | "subtask-of" | "child_of" | "child-of" | "subtask" => Ok(Self::SubTaskOf),
+            "parallel" | "parallel_to" | "parallel-to" => Ok(Self::Parallel),
+            "related" | "related_to" | "related-to" => Ok(Self::Related),
+            other => Err(WsidError::Validation(format!("invalid relation kind '{other}'"))),
+        }
+    }
 }
 
 impl fmt::Display for RelationType {
@@ -161,6 +234,21 @@ pub struct TaskNote {
     pub author: String,
     pub body: String,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddTaskNoteOutcome {
+    pub note: TaskNote,
+    pub spawned_tasks: Vec<Task>,
+    pub reused_tasks: Vec<Task>,
+    pub completed_review_tasks: Vec<Task>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusTransitionOutcome {
+    pub task: Task,
+    pub spawned_review_task: Option<Task>,
+    pub auto_completed_parent_tasks: Vec<Task>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
