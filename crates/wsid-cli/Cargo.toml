@@ -19,5 +19,8 @@ thiserror.workspace = true
 wsid-core.workspace = true
 wsid-mcp.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

@@ -1351,6 +1351,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "wsid-core",
  "wsid-mcp",

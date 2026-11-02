@@ -18,6 +18,8 @@ pub enum TaskStatus {
 }
 
 impl TaskStatus {
+    pub const ALL: [Self; 6] = [Self::Backlog, Self::Todo, Self::InProgress, Self::InReview, Self::Stuck, Self::Completed];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Backlog => "backlog",
