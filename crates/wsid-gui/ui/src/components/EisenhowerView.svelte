@@ -4,14 +4,18 @@
     type EisenhowerQuadrant,
     QUADRANT_META,
     STATUS_LABELS,
-    updateExistingTask,
+    bulkEditTasks,
     formatDurationMinutes,
   } from "../lib/ipc";
+  import { Selection } from "../lib/selection.svelte";
+  import BulkActions from "./BulkActions.svelte";
 
   interface Props {
     items: EisenhowerClassification[];
     activeUser: string;
     filterByUser: boolean;
+    knownTags: string[];
+    knownUsers: string[];
     onToggleUserFilter: (enabled: boolean) => void;
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
@@ -22,6 +26,8 @@
     items,
     activeUser,
     filterByUser,
+    knownTags,
+    knownUsers,
     onToggleUserFilter,
     onSelectTask,
     onDataChanged,
@@ -35,7 +41,9 @@
     "q4_later",
   ];
 
-  let draggingTaskId = $state<string | null>(null);
+  const selection = new Selection();
+  /** Ids being dragged (the whole selection when the grabbed card is selected). */
+  let dragIds = $state<string[]>([]);
   let dropTargetQuadrant = $state<EisenhowerQuadrant | null>(null);
   let deadlineWarning = $state<string | null>(null);
   let pointerDrag = $state<{
@@ -44,6 +52,14 @@
     startY: number;
     active: boolean;
   } | null>(null);
+
+  $effect(() => {
+    selection.prune(items.map((i) => i.task.id));
+  });
+
+  function dragPayloadFor(entry: EisenhowerClassification): string[] {
+    return selection.has(entry.task.id) ? [...selection.ids] : [entry.task.id];
+  }
 
   function itemsForQuadrant(q: EisenhowerQuadrant): EisenhowerClassification[] {
     return items.filter((item) => item.quadrant === q);
@@ -54,50 +70,65 @@
     return Boolean(target.closest("button, select, input, textarea, a, label"));
   }
 
-  async function moveEntryToQuadrant(
-    entry: EisenhowerClassification,
+  async function moveIdsToQuadrant(
+    ids: string[],
     targetQuadrant: EisenhowerQuadrant,
   ) {
-    if (entry.quadrant === targetQuadrant) return;
+    const entries = ids
+      .map((id) => items.find((i) => i.task.id === id))
+      .filter((e): e is EisenhowerClassification => !!e)
+      .filter((e) => e.quadrant !== targetQuadrant);
+    if (entries.length === 0) return;
 
     const targetImportant =
       targetQuadrant === "q1_do_first" || targetQuadrant === "q2_schedule";
     const targetUrgent =
       targetQuadrant === "q1_do_first" ||
       targetQuadrant === "q3_delegate_quick";
+    const title = QUADRANT_META[targetQuadrant].title;
 
-    const nextImportance = targetImportant
-      ? Math.max(entry.task.importance, 3)
-      : Math.min(entry.task.importance, 2);
-    const nextUrgentOverride = targetUrgent;
-
-    const deadlineForcesUrgent =
-      !targetUrgent && entry.slack_days !== null && entry.slack_days <= 2.0;
+    // Deadline-driven urgency keeps tasks urgent regardless of the override.
+    const forced = entries.filter(
+      (e) => !targetUrgent && e.slack_days !== null && e.slack_days <= 2.0,
+    );
 
     try {
-      await updateExistingTask({
-        id: entry.task.id,
-        importance: nextImportance,
-        urgent_override: nextUrgentOverride,
-      });
-
-      if (deadlineForcesUrgent) {
-        const resultingQuadrant = targetImportant
-          ? QUADRANT_META.q1_do_first.title
-          : QUADRANT_META.q3_delegate_quick.title;
-        const msg = `Task ${entry.task.id} (${entry.task.title}) updated (Importance ${nextImportance}/5, Urgent Override cleared), but it remains in ${resultingQuadrant} because its deadline (${entry.effective_deadline ?? "upcoming"}, ${entry.slack_days?.toFixed(1)}d slack) is within the 2.0-day urgent horizon.`;
-        deadlineWarning = msg;
-        announce(msg);
+      const outcome = await bulkEditTasks(
+        entries.map((e) => e.task.id),
+        {
+          ...(targetImportant
+            ? { importance_at_least: 3 }
+            : { importance_at_most: 2 }),
+          urgent_override: targetUrgent,
+        },
+      );
+      const failed = outcome.failures.length;
+      const ok = outcome.updated.length;
+      let msg: string;
+      if (entries.length === 1 && failed === 0) {
+        const e = entries[0];
+        const t = outcome.updated[0];
+        msg = forced.length
+          ? `Task ${e.task.id} (${e.task.title}) updated (Importance ${t.importance}/5, Urgent Override cleared), but it remains in ${targetImportant ? QUADRANT_META.q1_do_first.title : QUADRANT_META.q3_delegate_quick.title} because its deadline (${e.effective_deadline ?? "upcoming"}, ${e.slack_days?.toFixed(1)}d slack) is within the 2.0-day urgent horizon.`
+          : `Moved ${e.task.id} (${e.task.title}) to ${title} (Importance ${t.importance}/5, Urgent Override ${targetUrgent ? "on" : "off"})`;
       } else {
-        deadlineWarning = null;
-        announce(
-          `Moved ${entry.task.id} (${entry.task.title}) to ${QUADRANT_META[targetQuadrant].title} (Importance ${nextImportance}/5, Urgent Override ${nextUrgentOverride ? "on" : "off"})`,
-        );
+        msg = `Moved ${ok} ${ok === 1 ? "task" : "tasks"} to ${title}`;
+        if (forced.length) {
+          msg += `; ${forced.length} remain urgent because their deadlines are within 2.0 days (${forced.map((e) => e.task.id).join(", ")})`;
+        }
+        if (failed) {
+          msg += `; ${failed} failed (${outcome.failures
+            .slice(0, 3)
+            .map((f) => `${f.id}: ${f.error}`)
+            .join("; ")})`;
+        }
       }
-
+      deadlineWarning = forced.length ? msg : null;
+      announce(msg);
+      if (failed === 0) selection.clear();
       onDataChanged();
     } catch (err) {
-      announce(`Cannot move task ${entry.task.id}: ${String(err)}`);
+      announce(`Cannot move tasks: ${String(err)}`);
     }
   }
 
@@ -107,15 +138,15 @@
       return;
     }
     pointerDrag = null;
-    draggingTaskId = entry.task.id;
+    dragIds = dragPayloadFor(entry);
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", entry.task.id);
+      e.dataTransfer.setData("text/plain", dragIds.join(","));
     }
   }
 
   function handleDragOver(e: DragEvent, q: EisenhowerQuadrant) {
-    if (!draggingTaskId) return;
+    if (dragIds.length === 0) return;
     e.preventDefault();
     if (e.dataTransfer) {
       e.dataTransfer.dropEffect = "move";
@@ -138,20 +169,20 @@
 
   async function handleDrop(e: DragEvent, q: EisenhowerQuadrant) {
     e.preventDefault();
-    const id =
-      draggingTaskId || e.dataTransfer?.getData("text/plain")?.trim() || null;
-    draggingTaskId = null;
+    const ids = dragIds.length
+      ? dragIds
+      : (e.dataTransfer?.getData("text/plain") ?? "")
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean);
+    dragIds = [];
     dropTargetQuadrant = null;
     pointerDrag = null;
-    if (!id) return;
-    const entry = items.find((item) => item.task.id === id);
-    if (entry && entry.quadrant !== q) {
-      await moveEntryToQuadrant(entry, q);
-    }
+    await moveIdsToQuadrant(ids, q);
   }
 
   function handleDragEnd() {
-    draggingTaskId = null;
+    dragIds = [];
     dropTargetQuadrant = null;
     pointerDrag = null;
   }
@@ -172,7 +203,7 @@
     const dy = e.clientY - pointerDrag.startY;
     if (!pointerDrag.active && Math.hypot(dx, dy) > 6) {
       pointerDrag.active = true;
-      draggingTaskId = pointerDrag.entry.task.id;
+      dragIds = dragPayloadFor(pointerDrag.entry);
     }
     if (pointerDrag.active) {
       e.preventDefault();
@@ -188,15 +219,12 @@
     if (!pointerDrag) return;
     const activeDrag = pointerDrag;
     const targetQuad = dropTargetQuadrant;
+    const ids = dragIds;
     pointerDrag = null;
-    draggingTaskId = null;
+    dragIds = [];
     dropTargetQuadrant = null;
-    if (
-      activeDrag.active &&
-      targetQuad &&
-      activeDrag.entry.quadrant !== targetQuad
-    ) {
-      await moveEntryToQuadrant(activeDrag.entry, targetQuad);
+    if (activeDrag.active && targetQuad) {
+      await moveIdsToQuadrant(ids, targetQuad);
     }
   }
 </script>
@@ -248,6 +276,35 @@
     </div>
   {/if}
 
+  {#if selection.count > 0}
+    <BulkActions
+      ids={selection.ids}
+      {knownTags}
+      {knownUsers}
+      {announce}
+      onClear={() => selection.clear()}
+      onDone={(outcome) => {
+        if (outcome.failures.length === 0) selection.clear();
+        onDataChanged();
+      }}
+    >
+      <select
+        aria-label="Move to quadrant"
+        onchange={(e) => {
+          const el = e.currentTarget as HTMLSelectElement;
+          const q = el.value as EisenhowerQuadrant;
+          el.value = "";
+          if (q) void moveIdsToQuadrant(selection.ids, q);
+        }}
+      >
+        <option value="">Quadrant…</option>
+        {#each QUADRANTS as q}
+          <option value={q}>{QUADRANT_META[q].title}</option>
+        {/each}
+      </select>
+    </BulkActions>
+  {/if}
+
   <div class="eisenhower-grid">
     {#each QUADRANTS as q (q)}
       {@const qItems = itemsForQuadrant(q)}
@@ -294,7 +351,8 @@
               <li>
                 <article
                   class="task-card draggable-card"
-                  class:is-dragging={draggingTaskId === entry.task.id}
+                  class:is-dragging={dragIds.includes(entry.task.id)}
+                  class:is-selected={selection.has(entry.task.id)}
                   style="padding: 0.75rem;"
                   draggable="true"
                   ondragstart={(e) => handleDragStart(e, entry)}
@@ -304,6 +362,18 @@
                   <div class="task-card-header">
                     <div>
                       <div class="meta-row" style="margin-bottom: 0.25rem;">
+                        <input
+                          type="checkbox"
+                          class="select-check"
+                          aria-label={`Select ${entry.task.id}`}
+                          checked={selection.has(entry.task.id)}
+                          onclick={(e) =>
+                            selection.click(
+                              e,
+                              entry.task.id,
+                              qItems.map((i) => i.task.id),
+                            )}
+                        />
                         <span class="task-id-badge">{entry.task.id}</span>
                         <span class="badge">
                           {STATUS_LABELS[entry.task.status]}
@@ -318,13 +388,31 @@
                       </h4>
                     </div>
 
-                    <button
-                      type="button"
-                      class="btn-sm"
-                      onclick={() => onSelectTask(entry.task.id)}
+                    <div
+                      style="display: flex; flex-direction: column; gap: 0.35rem; align-items: stretch;"
                     >
-                      Inspect
-                    </button>
+                      <button
+                        type="button"
+                        class="btn-sm"
+                        onclick={() => onSelectTask(entry.task.id)}
+                      >
+                        Inspect
+                      </button>
+                      <select
+                        aria-label={`Move ${entry.task.id} to quadrant`}
+                        onchange={(e) => {
+                          const el = e.currentTarget as HTMLSelectElement;
+                          const q = el.value as EisenhowerQuadrant;
+                          el.value = "";
+                          if (q) void moveIdsToQuadrant([entry.task.id], q);
+                        }}
+                      >
+                        <option value="">Move…</option>
+                        {#each QUADRANTS.filter((x) => x !== entry.quadrant) as q}
+                          <option value={q}>{QUADRANT_META[q].title}</option>
+                        {/each}
+                      </select>
+                    </div>
                   </div>
 
                   <div class="meta-row" style="font-size: 0.8rem;">

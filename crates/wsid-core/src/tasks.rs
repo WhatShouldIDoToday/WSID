@@ -180,28 +180,28 @@ pub fn delete_user_from_db(
         return Err(WsidError::Validation(format!("cannot delete the primary user '@{fallback}'")));
     }
 
-    let mut deleted_task_count = 0;
-    if delete_authored_tasks {
-        let authored_ids: Vec<String> = {
-            let mut stmt = db
-                .conn
-                .prepare("SELECT id FROM tasks WHERE LOWER(reporter) = ?1")?;
-            let rows = stmt.query_map([&target], |row| row.get::<_, String>(0))?;
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(row?);
-            }
-            ids
-        };
-
-        for id in authored_ids {
-            delete_task_with_attachments_dir(db, &id, managed_dir_override)?;
-            deleted_task_count += 1;
-        }
+    // Everything below runs in one transaction so a failure cannot leave a half-deleted user.
+    let authored_ids: Vec<String> = if delete_authored_tasks {
+        let mut stmt = db
+            .conn
+            .prepare("SELECT id FROM tasks WHERE LOWER(reporter) = ?1")?;
+        let rows = stmt.query_map([&target], |row| row.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    let mut doomed_attachments = Vec::new();
+    for id in &authored_ids {
+        doomed_attachments.extend(load_all_attachments_for_task(&db.conn, id).unwrap_or_default());
     }
 
     let now_str = format_utc(Utc::now());
     let tx = db.conn.transaction()?;
+
+    for id in &authored_ids {
+        tx.execute("DELETE FROM tasks WHERE id = ?1", [id])?;
+    }
+    let deleted_task_count = authored_ids.len();
 
     let reassigned_task_count: usize = {
         let count: i64 = tx.query_row(
@@ -223,10 +223,14 @@ pub fn delete_user_from_db(
         params![target, fallback, now_str],
     )?;
 
+    // Keep comment history but re-attribute it so the deleted user does not reappear in the known-users list.
+    tx.execute("UPDATE task_notes SET author = ?2 WHERE LOWER(author) = ?1", params![target, fallback])?;
+
     tx.execute("DELETE FROM users WHERE LOWER(username) = ?1", [&target])?;
     register_user_conn(&tx, &fallback)?;
 
     tx.commit()?;
+    cleanup_managed_files_after_delete(&db.conn, &doomed_attachments, managed_dir_override);
 
     Ok(UserDeletionOutcome { deleted_user: target, fallback_user: fallback, reassigned_task_count, deleted_task_count })
 }
@@ -1071,6 +1075,9 @@ mod tests {
         )
         .unwrap();
 
+        // A comment by `foobar` must be re-attributed (not left behind) when the user is deleted
+        crate::notes::add_task_note(&mut db, &t_assigned.id, "foobar", "hello there", false).unwrap();
+
         let preview = preview_user_deletion(&db, "foobar", "davidb").unwrap();
         assert_eq!(preview.username, "foobar");
         assert_eq!(preview.fallback_user, "davidb");
@@ -1088,6 +1095,11 @@ mod tests {
         assert_eq!(outcome.deleted_user, "foobar");
         assert_eq!(outcome.deleted_task_count, 1);
         assert_eq!(outcome.reassigned_task_count, 1);
+        assert!(
+            !list_known_users(&db, &[])
+                .unwrap()
+                .contains(&"foobar".to_string())
+        );
 
         assert!(get_task(&db, &t_authored.id).is_err());
         let reassigned = get_task(&db, &t_assigned.id).unwrap();

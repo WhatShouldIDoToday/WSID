@@ -4,12 +4,12 @@ use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
 use wsid_core::{
-    AppConfig, CreateTaskInput, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FocusPreset, FocusQueueResponse,
-    RelationInputKind, SearchHit, SearchQuery, Task, TaskNote, TaskStatus, UpdateTaskInput, add_task_note, attach_existing_file,
-    compute_focus_queue, create_task, get_attachment, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents,
-    get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_task_notes, list_tasks,
-    open_file_in_os, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
-    update_attachment_description, update_task,
+    AppConfig, BulkTaskPatch, CreateTaskInput, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FocusPreset,
+    FocusQueueResponse, RelationInputKind, SearchHit, SearchQuery, Task, TaskNote, TaskStatus, UpdateTaskInput, add_task_note,
+    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task, get_attachment, get_direct_blocked_tasks,
+    get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks,
+    list_eisenhower_matrix, list_task_notes, list_tasks, open_file_in_os, save_clipboard_attachment, search_tasks, transition_task_status,
+    unblock_or_dismiss_subtask, update_attachment_description, update_task,
 };
 
 use crate::args::{parse_date_arg, parse_duration_estimate, parse_relation_arg};
@@ -212,12 +212,19 @@ pub struct TuiApp {
     pub search_editing: bool,
     pub search_status_filter: Option<TaskStatus>,
     pub search_only_mine: bool,
+    pub search_tag_filter: Option<String>,
+    pub search_assignee_filter: Option<String>,
     pub search_sort_col: DatabaseSortColumn,
     pub search_sort_asc: bool,
     pub search_hits: Vec<SearchHit>,
     pub search_selected: usize,
     pub search_table_state: TableState,
     pub search_list_state: ListState,
+
+    // Multi-select + bulk edit (Kanban, Eisenhower, Database)
+    pub selected_ids: Vec<String>,
+    pub bulk_editing: bool,
+    pub bulk_input: String,
 
     // Data Entry View state
     pub entry_form: DataEntryForm,
@@ -271,12 +278,17 @@ impl TuiApp {
             search_editing: false,
             search_status_filter: None,
             search_only_mine: false,
+            search_tag_filter: None,
+            search_assignee_filter: None,
             search_sort_col: DatabaseSortColumn::Relevance,
             search_sort_asc: true,
             search_hits,
             search_selected: 0,
             search_table_state: TableState::default(),
             search_list_state: ListState::default(),
+            selected_ids: Vec::new(),
+            bulk_editing: false,
+            bulk_input: String::new(),
             entry_form,
             detail_modal: None,
             detail_prompt_kind: DetailPromptKind::None,
@@ -322,6 +334,11 @@ impl TuiApp {
         }
 
         self.all_tasks = list_tasks(&self.db)?;
+        {
+            let existing: std::collections::HashSet<&str> = self.all_tasks.iter().map(|t| t.id.as_str()).collect();
+            self.selected_ids
+                .retain(|id| existing.contains(id.as_str()));
+        }
         self.clamp_kanban_selection();
 
         self.eisenhower_items = list_eisenhower_matrix(&self.db, Some(&self.user), today, self.config.scoring)?;
@@ -342,13 +359,13 @@ impl TuiApp {
     }
 
     pub fn refresh_search(&mut self) -> wsid_core::Result<()> {
-        let assignee = if self.search_only_mine { Some(self.user.clone()) } else { None };
+        let assignee = if self.search_only_mine { Some(self.user.clone()) } else { self.search_assignee_filter.clone() };
         let mut hits = search_tasks(
             &self.db,
             &SearchQuery {
                 query: self.search_query.clone(),
                 status: self.search_status_filter,
-                tag: None,
+                tag: self.search_tag_filter.clone(),
                 assignee,
                 reporter: None,
                 evaluator: None,
@@ -448,6 +465,12 @@ impl TuiApp {
             return;
         }
 
+        // 2b. Bulk-edit prompt captures typing
+        if self.bulk_editing {
+            self.handle_bulk_input_key(key);
+            return;
+        }
+
         // 3. If on DataEntry tab, route typing to form unless switching tabs via Alt/F-keys or Esc
         if self.active_tab == ActiveTab::DataEntry {
             if key.code == KeyCode::Esc {
@@ -510,6 +533,10 @@ impl TuiApp {
                 return;
             }
             _ => {}
+        }
+
+        if matches!(self.active_tab, ActiveTab::Kanban | ActiveTab::Eisenhower | ActiveTab::Database) && self.handle_selection_key(key) {
+            return;
         }
 
         match self.active_tab {
@@ -871,6 +898,32 @@ impl TuiApp {
                     Some(TaskStatus::Stuck) => Some(TaskStatus::Backlog),
                     Some(TaskStatus::Backlog) => Some(TaskStatus::Completed),
                     Some(TaskStatus::Completed) => None,
+                };
+                let _ = self.refresh_search();
+            }
+            KeyCode::Char('t') => {
+                let mut tags: Vec<String> = self.all_tasks.iter().flat_map(|t| t.tags.clone()).collect();
+                tags.sort();
+                tags.dedup();
+                self.search_tag_filter = match &self.search_tag_filter {
+                    None => tags.first().cloned(),
+                    Some(cur) => tags
+                        .iter()
+                        .position(|t| t == cur)
+                        .and_then(|i| tags.get(i + 1).cloned()),
+                };
+                let _ = self.refresh_search();
+            }
+            KeyCode::Char('u') => {
+                let mut users: Vec<String> = self.all_tasks.iter().map(|t| t.assignee.clone()).collect();
+                users.sort();
+                users.dedup();
+                self.search_assignee_filter = match &self.search_assignee_filter {
+                    None => users.first().cloned(),
+                    Some(cur) => users
+                        .iter()
+                        .position(|u| u == cur)
+                        .and_then(|i| users.get(i + 1).cloned()),
                 };
                 let _ = self.refresh_search();
             }
@@ -1236,6 +1289,9 @@ impl TuiApp {
             KeyCode::Char('s') => {
                 self.apply_status_transition(&snapshot.task.id, TaskStatus::InProgress);
             }
+            KeyCode::Char('r') => {
+                self.apply_status_transition(&snapshot.task.id, TaskStatus::InReview);
+            }
             KeyCode::Char('d') => {
                 self.apply_status_transition(&snapshot.task.id, TaskStatus::Completed);
             }
@@ -1336,6 +1392,165 @@ impl TuiApp {
                     self.open_detail_for(&input);
                 }
             }
+        }
+    }
+
+    /// `✓ ` when `id` is part of the multi-selection, otherwise an empty string.
+    pub fn mark(&self, id: &str) -> &'static str {
+        if self.selected_ids.iter().any(|x| x == id) { "✓ " } else { "" }
+    }
+
+    fn highlighted_task_id(&self) -> Option<String> {
+        match self.active_tab {
+            ActiveTab::Kanban => self
+                .kanban_tasks_in_col(self.kanban_col)
+                .get(self.kanban_row)
+                .map(|t| t.id.clone()),
+            ActiveTab::Eisenhower => self
+                .eisenhower_tasks_in_quadrant(self.eisenhower_quadrant)
+                .get(self.eisenhower_row)
+                .map(|c| c.task.id.clone()),
+            ActiveTab::Database => self
+                .search_hits
+                .get(self.search_selected)
+                .map(|h| h.task.id.clone()),
+            _ => None,
+        }
+    }
+
+    /// Space toggles selection, `A` selects all Database results, Esc clears, `b` opens the bulk-edit prompt.
+    fn handle_selection_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Char(' ') => {
+                if let Some(id) = self.highlighted_task_id() {
+                    if let Some(pos) = self.selected_ids.iter().position(|x| *x == id) {
+                        self.selected_ids.remove(pos);
+                    } else {
+                        self.selected_ids.push(id);
+                    }
+                    self.status_message = format!("{} selected", self.selected_ids.len());
+                }
+                true
+            }
+            KeyCode::Char('A') if self.active_tab == ActiveTab::Database => {
+                self.selected_ids = self.search_hits.iter().map(|h| h.task.id.clone()).collect();
+                self.status_message = format!("{} selected", self.selected_ids.len());
+                true
+            }
+            KeyCode::Esc if !self.selected_ids.is_empty() => {
+                self.selected_ids.clear();
+                self.status_message = "Selection cleared".to_string();
+                true
+            }
+            KeyCode::Char('b') => {
+                if self.selected_ids.is_empty() && self.highlighted_task_id().is_none() {
+                    self.status_message = "Nothing to edit".to_string();
+                    return true;
+                }
+                self.bulk_editing = true;
+                self.bulk_input.clear();
+                self.update_bulk_prompt_message();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn update_bulk_prompt_message(&mut self) {
+        let n = self.selected_ids.len().max(1);
+        self.status_message = format!(
+            "Bulk edit {n} task(s): status=todo assignee=bob importance=4 difficulty=2 urgent=on +tag -tag delete | {}_",
+            self.bulk_input
+        );
+    }
+
+    fn handle_bulk_input_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.bulk_editing = false;
+                self.bulk_input.clear();
+                self.status_message = "Cancelled bulk edit".to_string();
+            }
+            KeyCode::Backspace => {
+                self.bulk_input.pop();
+                self.update_bulk_prompt_message();
+            }
+            KeyCode::Enter => {
+                let input = std::mem::take(&mut self.bulk_input);
+                self.bulk_editing = false;
+                self.apply_bulk_input(&input);
+            }
+            KeyCode::Char(ch) => {
+                self.bulk_input.push(ch);
+                self.update_bulk_prompt_message();
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_bulk_input(&mut self, input: &str) {
+        let ids: Vec<String> =
+            if self.selected_ids.is_empty() { self.highlighted_task_id().into_iter().collect() } else { self.selected_ids.clone() };
+        if ids.is_empty() {
+            return;
+        }
+
+        let mut patch = BulkTaskPatch::default();
+        let mut delete = false;
+        for token in input.split_whitespace() {
+            let parsed: Result<(), String> = (|| {
+                if token == "delete" {
+                    delete = true;
+                } else if let Some(tag) = token.strip_prefix('+') {
+                    patch.add_tags.push(tag.to_string());
+                } else if let Some(tag) = token.strip_prefix('-') {
+                    patch.remove_tags.push(tag.to_string());
+                } else if let Some((k, v)) = token.split_once('=') {
+                    match k {
+                        "status" | "s" => patch.status = Some(v.parse::<TaskStatus>().map_err(|e| e.to_string())?),
+                        "assignee" | "a" => patch.assignee = Some(v.to_string()),
+                        "importance" | "i" => patch.importance = Some(v.parse().map_err(|_| format!("bad importance '{v}'"))?),
+                        "difficulty" | "d" => patch.difficulty = Some(v.parse().map_err(|_| format!("bad difficulty '{v}'"))?),
+                        "urgent" | "u" => patch.urgent_override = Some(matches!(v, "on" | "true" | "yes" | "1")),
+                        _ => return Err(format!("unknown field '{k}'")),
+                    }
+                } else {
+                    return Err(format!("unrecognized '{token}'"));
+                }
+                Ok(())
+            })();
+            if let Err(msg) = parsed {
+                self.status_message = format!("Bulk edit: {msg}");
+                return;
+            }
+        }
+
+        let result = if delete { bulk_delete_tasks(&mut self.db, &ids) } else { bulk_update_tasks(&mut self.db, &ids, &patch) };
+        match result {
+            Ok(outcome) => {
+                let ok = outcome.updated.len() + outcome.deleted.len();
+                let failed = outcome.failures.len();
+                self.status_message = if failed == 0 {
+                    format!("{} {ok} task(s)", if delete { "Deleted" } else { "Updated" })
+                } else {
+                    format!(
+                        "{} {ok} task(s); {failed} failed ({})",
+                        if delete { "Deleted" } else { "Updated" },
+                        outcome
+                            .failures
+                            .iter()
+                            .take(2)
+                            .map(|f| format!("{}: {}", f.id, f.error))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    )
+                };
+                if failed == 0 {
+                    self.selected_ids.clear();
+                }
+                let _ = self.refresh_all();
+            }
+            Err(err) => self.status_message = format!("Bulk edit failed: {err}"),
         }
     }
 

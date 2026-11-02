@@ -4,10 +4,11 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use wsid_core::{
-    AppConfig, AttachmentInput, CreateTaskInput, Database, FocusPreset, RelationInputKind, SearchQuery, Task, TaskNote, TaskRelation,
-    TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, compute_focus_queue, create_task, delete_task,
-    delete_task_note, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks,
-    get_parallel_peers, get_related_tasks, get_task, link_tasks, list_task_notes, list_task_relations, parse_deadline_datetime,
+    AppConfig, AttachmentInput, BulkTaskPatch, CreateTaskInput, Database, FocusPreset, RelationInputKind, SearchQuery, Task, TaskNote,
+    TaskRelation, TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks,
+    compute_focus_queue, create_task, delete_task, delete_task_note, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
+    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
+    list_known_users, list_task_notes, list_task_relations, parse_deadline_datetime, parse_duration_minutes, register_user,
     remove_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description,
     update_task,
 };
@@ -27,9 +28,49 @@ pub struct TaskDetailResponse {
     pub notes: Vec<TaskNote>,
 }
 
+/// Accepts an integer number of minutes or a duration string such as `1h30m`.
+fn de_minutes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
+    use serde::de::Error;
+    match Option::<Value>::deserialize(d)? {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) => n
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| D::Error::custom("time_estimate_minutes must be an integer")),
+        Some(Value::String(s)) => parse_duration_minutes(&s)
+            .map(|m| Some(i64::from(m)))
+            .map_err(D::Error::custom),
+        Some(_) => Err(D::Error::custom("time_estimate_minutes must be an integer or duration string")),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ListUsersArgs {}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RegisterUserArgs {
+    pub user: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct EisenhowerArgs {
+    pub user: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BulkUpdateArgs {
+    pub ids: Vec<String>,
+    #[serde(flatten)]
+    pub patch: BulkTaskPatch,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BulkDeleteArgs {
+    pub ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct GetFocusQueueArgs {
-    #[serde(alias = "persona")]
     pub user: Option<String>,
     pub preset: Option<FocusPreset>,
     pub limit: Option<usize>,
@@ -37,7 +78,6 @@ struct GetFocusQueueArgs {
 
 #[derive(Debug, Clone, Deserialize)]
 struct GetBlockedTasksArgs {
-    #[serde(alias = "persona")]
     pub user: Option<String>,
     pub tag: Option<String>,
 }
@@ -73,6 +113,7 @@ struct CreateTaskArgs {
     pub status: Option<TaskStatus>,
     pub due_date: Option<String>,
     pub sgdb_date: Option<String>,
+    #[serde(default, deserialize_with = "de_minutes")]
     pub time_estimate_minutes: Option<i64>,
     pub difficulty: Option<u8>,
     pub importance: Option<u8>,
@@ -100,7 +141,7 @@ struct UpdateTaskStatusArgs {
 struct AddTaskNoteArgs {
     #[serde(alias = "id")]
     pub task_id: String,
-    #[serde(alias = "author_user", alias = "author_persona")]
+    #[serde(alias = "author_user")]
     pub author: Option<String>,
     pub body: String,
     pub spawn_subtasks: Option<bool>,
@@ -196,6 +237,38 @@ pub fn dispatch_tool(
                     "blocked_tasks": entries,
                 }))
             })
+        }
+        "list_users" => {
+            let _args: ListUsersArgs = parse_args(args_val)?;
+            list_known_users(db, &[config.primary_user.as_str(), config.default_user.as_str()]).map(|users| {
+                CallToolResult::ok_json(&json!({
+                    "default_user": config.default_user,
+                    "primary_user": config.primary_user,
+                    "users": users,
+                }))
+            })
+        }
+        "register_user" => {
+            let args: RegisterUserArgs = parse_args(args_val)?;
+            register_user(db, &args.user).map(|user| CallToolResult::ok_json(&json!({ "registered": user })))
+        }
+        "get_eisenhower_matrix" => {
+            let args: EisenhowerArgs = parse_args(args_val)?;
+            let filter = args.user.as_deref().filter(|s| !s.trim().is_empty());
+            list_eisenhower_matrix(db, filter, today, config.scoring).map(|items| {
+                CallToolResult::ok_json(&json!({
+                    "count": items.len(),
+                    "items": items,
+                }))
+            })
+        }
+        "bulk_update_tasks" => {
+            let args: BulkUpdateArgs = parse_args(args_val)?;
+            bulk_update_tasks(db, &args.ids, &args.patch).map(|res| CallToolResult::ok_json(&res))
+        }
+        "bulk_delete_tasks" => {
+            let args: BulkDeleteArgs = parse_args(args_val)?;
+            bulk_delete_tasks(db, &args.ids).map(|res| CallToolResult::ok_json(&res))
         }
         "get_task" => {
             let args: GetTaskArgs = parse_args(args_val)?;
@@ -431,7 +504,8 @@ fn parse_nullable_i64(obj: &Map<String, Value>, key: &str) -> Result<Option<Opti
             .as_i64()
             .map(|v| Some(Some(v)))
             .ok_or_else(|| WsidError::Validation(format!("field '{key}' must be an integer"))),
-        Some(_) => Err(WsidError::Validation(format!("field '{key}' must be an integer or null"))),
+        Some(Value::String(s)) => Ok(Some(Some(i64::from(parse_duration_minutes(s)?)))),
+        Some(_) => Err(WsidError::Validation(format!("field '{key}' must be an integer, duration string, or null"))),
     }
 }
 

@@ -168,6 +168,57 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "list_users".to_string(),
+            description: "Lists all known user handles (valid `@user` / `assignee` values) plus the default and primary (main) users.".to_string(),
+            input_schema: json!({ "type": "object", "properties": {} }),
+        },
+        ToolDefinition {
+            name: "register_user".to_string(),
+            description: "Registers a user handle (lowercase letters, digits, '_' or '-') so it appears in the known-users list.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "user": { "type": "string" } },
+                "required": ["user"]
+            }),
+        },
+        ToolDefinition {
+            name: "get_eisenhower_matrix".to_string(),
+            description: "Classifies incomplete tasks into Eisenhower quadrants (q1_do_first, q2_schedule, q3_delegate_quick, q4_later) with effective deadlines and slack days. Optionally filter to one assignee.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "user": { "type": "string", "description": "Only include tasks assigned to this user." } }
+            }),
+        },
+        ToolDefinition {
+            name: "bulk_update_tasks".to_string(),
+            description: "Applies the same changes to many tasks. Per-task failures are reported without aborting the rest. Status changes go through the normal transition (review handoff, parent auto-complete). `importance_at_least` / `importance_at_most` clamp importance.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "status": { "type": "string", "enum": ["backlog", "todo", "in_progress", "stuck", "in_review", "completed"] },
+                    "assignee": { "type": "string" },
+                    "importance": { "type": "integer", "minimum": 1, "maximum": 5 },
+                    "importance_at_least": { "type": "integer", "minimum": 1, "maximum": 5 },
+                    "importance_at_most": { "type": "integer", "minimum": 1, "maximum": 5 },
+                    "difficulty": { "type": "integer", "minimum": 1, "maximum": 5 },
+                    "urgent_override": { "type": "boolean" },
+                    "add_tags": { "type": "array", "items": { "type": "string" } },
+                    "remove_tags": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["ids"]
+            }),
+        },
+        ToolDefinition {
+            name: "bulk_delete_tasks".to_string(),
+            description: "Permanently deletes many tasks by short ID. Per-task failures are reported without aborting the rest.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 } },
+                "required": ["ids"]
+            }),
+        },
+        ToolDefinition {
             name: "get_task".to_string(),
             description: "Fetches full details for a task by short ID (e.g. 'AB1234'), including its tags, canonical relations, direct blockers, subtasks, and chronological task_notes.".to_string(),
             input_schema: json!({
@@ -229,7 +280,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                     },
                     "due_date": { "type": "string", "description": "Optional hard deadline in YYYY-MM-DD or ISO 8601 datetime format." },
                     "sgdb_date": { "type": "string", "description": "Optional 'Should Get Done By' date in YYYY-MM-DD or ISO 8601 datetime format (must be <= due_date if both are set)." },
-                    "time_estimate_minutes": { "type": "integer", "minimum": 0 },
+                    "time_estimate_minutes": { "type": ["integer", "string"], "minimum": 0, "description": "Minutes, or a duration string like '1h30m'." },
                     "difficulty": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "importance": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "urgent_override": { "type": "boolean" },
@@ -282,7 +333,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                     "description": { "type": "string" },
                     "due_date": { "type": ["string", "null"], "description": "YYYY-MM-DD or ISO 8601 datetime string, or null to clear." },
                     "sgdb_date": { "type": ["string", "null"], "description": "YYYY-MM-DD or ISO 8601 datetime string, or null to clear." },
-                    "time_estimate_minutes": { "type": ["integer", "null"], "minimum": 0 },
+                    "time_estimate_minutes": { "type": ["integer", "string", "null"], "minimum": 0, "description": "Minutes, a duration string like '1h30m', or null to clear." },
                     "difficulty": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "importance": { "type": "integer", "minimum": 1, "maximum": 5 },
                     "urgent_override": { "type": "boolean" },

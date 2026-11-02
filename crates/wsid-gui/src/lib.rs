@@ -9,15 +9,16 @@ use serde::{Deserialize, Serialize};
 use tauri::menu::{HELP_SUBMENU_ID, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, State};
 use wsid_core::{
-    AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, CreateTaskInput, Database, DbChangeDetector,
-    EisenhowerClassification, FocusPreset, FocusQueueResponse, RelationInputKind, SearchHit, SearchQuery, StatusTransitionOutcome, Task,
-    TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, UserDeletionOutcome, UserDeletionPreview, add_task_note,
-    attach_existing_file, compute_focus_queue, create_task, default_config_path, default_global_db_path, delete_task, delete_task_note,
-    delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
-    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
-    list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os, parse_deadline_datetime, preview_user_deletion,
-    register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status,
-    unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
+    AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, BulkEditOutcome, BulkTaskPatch, CreateTaskInput,
+    Database, DbChangeDetector, EisenhowerClassification, FocusPreset, FocusQueueResponse, RelationInputKind, SearchHit, SearchQuery,
+    StatusTransitionOutcome, Task, TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, UserDeletionOutcome,
+    UserDeletionPreview, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task,
+    default_config_path, default_global_db_path, delete_task, delete_task_note, delete_user_from_db, get_about_metadata, get_attachment,
+    get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
+    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user,
+    open_file_in_os, parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment, resolve_active_db_path,
+    save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
+    update_attachment_description, update_task,
 };
 
 pub struct GuiAppState {
@@ -306,9 +307,7 @@ fn set_active_user(state: State<'_, SharedGuiState>, user: String) -> Result<App
         .map_err(|_| "state lock poisoned".to_string())?;
     let mut db = guard.open_db()?;
     register_user(&mut db, &norm).map_err(|e| e.to_string())?;
-    guard.active_user = norm.clone();
-    guard.config.default_user = norm;
-    guard.save_config();
+    guard.active_user = norm;
     build_session_snapshot(&guard)
 }
 
@@ -609,6 +608,54 @@ fn transition_status(state: State<'_, SharedGuiState>, id: String, status: Strin
     let mut db = guard.open_db()?;
     let parsed = TaskStatus::from_str(status.trim()).map_err(|e| e.to_string())?;
     transition_task_status(&mut db, &id, parsed).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct GuiBulkPatch {
+    status: Option<String>,
+    assignee: Option<String>,
+    importance: Option<u8>,
+    importance_at_least: Option<u8>,
+    importance_at_most: Option<u8>,
+    difficulty: Option<u8>,
+    urgent_override: Option<bool>,
+    #[serde(default)]
+    add_tags: Vec<String>,
+    #[serde(default)]
+    remove_tags: Vec<String>,
+}
+
+#[tauri::command]
+fn bulk_edit_tasks(state: State<'_, SharedGuiState>, ids: Vec<String>, patch: GuiBulkPatch) -> Result<BulkEditOutcome, String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let mut db = guard.open_db()?;
+    let status = match patch.status.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => Some(TaskStatus::from_str(s).map_err(|e| e.to_string())?),
+        _ => None,
+    };
+    let core_patch = BulkTaskPatch {
+        status,
+        assignee: patch.assignee,
+        importance: patch.importance,
+        importance_at_least: patch.importance_at_least,
+        importance_at_most: patch.importance_at_most,
+        difficulty: patch.difficulty,
+        urgent_override: patch.urgent_override,
+        add_tags: patch.add_tags,
+        remove_tags: patch.remove_tags,
+    };
+    bulk_update_tasks(&mut db, &ids, &core_patch).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn bulk_remove_tasks(state: State<'_, SharedGuiState>, ids: Vec<String>) -> Result<BulkEditOutcome, String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let mut db = guard.open_db()?;
+    bulk_delete_tasks(&mut db, &ids).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1041,6 +1088,8 @@ pub fn run() {
             update_existing_task,
             transition_status,
             remove_task,
+            bulk_edit_tasks,
+            bulk_remove_tasks,
             add_comment_note,
             remove_comment_note,
             add_relation,

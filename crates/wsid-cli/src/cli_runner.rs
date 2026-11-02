@@ -5,18 +5,19 @@ use std::process::Command;
 use chrono::Utc;
 use serde_json::json;
 use wsid_core::{
-    AppConfig, CreateTaskInput, Database, EisenhowerClassification, EisenhowerQuadrant, FocusQueueResponse, RelationInputKind, SearchQuery,
-    THIRD_PARTY_NOTICES_TEXT, Task, TaskAttachment, add_task_note, attach_existing_file, compute_focus_queue, create_task, delete_task,
-    delete_task_note, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
-    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
-    list_task_notes, open_file_in_os, remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status,
+    AppConfig, BulkEditOutcome, BulkTaskPatch, CreateTaskInput, Database, EisenhowerClassification, EisenhowerQuadrant, FocusQueueResponse,
+    RelationInputKind, SearchQuery, THIRD_PARTY_NOTICES_TEXT, Task, TaskAttachment, add_task_note, attach_existing_file, bulk_delete_tasks,
+    bulk_update_tasks, compute_focus_queue, create_task, delete_task_note, delete_user_from_db, get_about_metadata, get_attachment,
+    get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
+    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, open_file_in_os,
+    preview_user_deletion, register_user, remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status,
     unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description,
 };
 use wsid_mcp::McpServer;
 
 use crate::args::{
-    AddArgs, AttachArgs, Commands, NextArgs, NoteArgs, SearchArgs, format_duration_estimate, parse_date_arg, parse_duration_estimate,
-    parse_preset_arg, parse_relation_arg, parse_status_arg,
+    AddArgs, AttachArgs, Commands, EditArgs, NextArgs, NoteArgs, SearchArgs, UsersAction, format_duration_estimate, parse_date_arg,
+    parse_duration_estimate, parse_preset_arg, parse_relation_arg, parse_status_arg,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +61,10 @@ pub fn execute_command<W: Write>(
         Commands::Status { id, status } => run_status(db_path, &id, &status, mode, out),
         Commands::Note(args) => run_note(db_path, user, &args, mode, out),
         Commands::DeleteNote { note_id } => run_delete_note(db_path, note_id, mode, out),
-        Commands::Delete { id } => run_delete(db_path, &id, mode, out),
+        Commands::Delete { ids } => run_delete(db_path, &ids, mode, out),
+        Commands::Edit(args) => run_edit(db_path, &args, mode, out),
+        Commands::Users { action } => run_users(db_path, config, user, action, mode, out),
+        Commands::Kanban { all } => run_kanban(db_path, user, all, mode, out),
         Commands::Attach(args) => run_attach(db_path, &args, mode, out),
         Commands::UpdateAttachment { attachment_id, desc } => run_update_attachment(db_path, attachment_id, desc, mode, out),
         Commands::RemoveAttachment { attachment_id } => run_remove_attachment(db_path, attachment_id, mode, out),
@@ -538,16 +542,163 @@ fn run_delete_note<W: Write>(db_path: &Path, note_id: i64, mode: OutputMode, out
     Ok(())
 }
 
-fn run_delete<W: Write>(db_path: &Path, raw_id: &str, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
+fn render_bulk<W: Write>(verb: &str, outcome: &BulkEditOutcome, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
+    match mode {
+        OutputMode::Json => writeln!(out, "{}", serde_json::to_string_pretty(outcome).unwrap_or_default())?,
+        OutputMode::Accessible | OutputMode::Standard => {
+            for t in &outcome.updated {
+                writeln!(out, "{verb} task {} — {} (status {}).", t.id, t.title, t.status)?;
+            }
+            for id in &outcome.deleted {
+                writeln!(out, "{verb} task {id}.")?;
+            }
+            for r in &outcome.spawned_review_tasks {
+                writeln!(out, "Spawned review subtask {} assigned to @{}.", r.id, r.assignee)?;
+            }
+            for f in &outcome.failures {
+                writeln!(out, "Failed {}: {}", f.id, f.error)?;
+            }
+        }
+    }
+    if outcome.failures.is_empty() {
+        Ok(())
+    } else {
+        Err(wsid_core::WsidError::Validation(format!("{} task(s) failed", outcome.failures.len())))
+    }
+}
+
+fn run_delete<W: Write>(db_path: &Path, ids: &[String], mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
     let mut db = Database::open(db_path)?;
-    let task = get_task(&db, raw_id)?;
-    delete_task(&mut db, &task.id)?;
+    let outcome = bulk_delete_tasks(&mut db, ids)?;
+    render_bulk("Deleted", &outcome, mode, out)
+}
+
+fn run_edit<W: Write>(db_path: &Path, args: &EditArgs, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
+    let mut db = Database::open(db_path)?;
+    let patch = BulkTaskPatch {
+        status: args.status.as_deref().map(parse_status_arg).transpose()?,
+        assignee: args.assignee.clone(),
+        importance: args.importance,
+        difficulty: args.difficulty,
+        urgent_override: if args.urgent {
+            Some(true)
+        } else if args.not_urgent {
+            Some(false)
+        } else {
+            None
+        },
+        add_tags: args.add_tags.clone(),
+        remove_tags: args.remove_tags.clone(),
+        ..BulkTaskPatch::default()
+    };
+    let outcome = bulk_update_tasks(&mut db, &args.ids, &patch)?;
+    render_bulk("Updated", &outcome, mode, out)
+}
+
+fn run_users<W: Write>(
+    db_path: &Path,
+    config: &AppConfig,
+    user: &str,
+    action: UsersAction,
+    mode: OutputMode,
+    out: &mut W,
+) -> wsid_core::Result<()> {
+    let mut db = Database::open(db_path)?;
+    match action {
+        UsersAction::List => {
+            let users = list_known_users(&db, &[config.primary_user.as_str(), config.default_user.as_str()])?;
+            match mode {
+                OutputMode::Json => writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&json!({ "primary_user": config.primary_user, "users": users })).unwrap_or_default()
+                )?,
+                OutputMode::Accessible | OutputMode::Standard => {
+                    for u in users {
+                        let tag = if u.eq_ignore_ascii_case(&config.primary_user) { " (main user)" } else { "" };
+                        writeln!(out, "@{u}{tag}")?;
+                    }
+                }
+            }
+        }
+        UsersAction::Add { user: new_user } => {
+            let registered = register_user(&mut db, &new_user)?;
+            match mode {
+                OutputMode::Json => {
+                    writeln!(out, "{}", serde_json::to_string_pretty(&json!({ "registered": registered })).unwrap_or_default())?
+                }
+                _ => writeln!(out, "Registered @{registered}.")?,
+            }
+        }
+        UsersAction::Delete { user: target, delete_authored, yes } => {
+            if !user.eq_ignore_ascii_case(&config.primary_user) {
+                return Err(wsid_core::WsidError::Validation(format!(
+                    "only the main user '@{}' can delete users (active user is '@{user}')",
+                    config.primary_user
+                )));
+            }
+            if !yes {
+                let preview = preview_user_deletion(&db, &target, &config.primary_user)?;
+                match mode {
+                    OutputMode::Json => writeln!(out, "{}", serde_json::to_string_pretty(&preview).unwrap_or_default())?,
+                    _ => {
+                        writeln!(
+                            out,
+                            "Deleting @{} would reassign {} task(s) to @{} ({} authored, {} assigned, {} validated).",
+                            preview.username,
+                            preview.affected_tasks.len(),
+                            preview.fallback_user,
+                            preview.authored_task_count,
+                            preview.assigned_task_count,
+                            preview.evaluator_task_count
+                        )?;
+                        for t in &preview.affected_tasks {
+                            writeln!(out, "  [{}] {} ({})", t.id, t.title, t.status)?;
+                        }
+                        writeln!(out, "Re-run with --yes to delete (add --delete-authored to also delete authored tasks).")?;
+                    }
+                }
+            } else {
+                let outcome = delete_user_from_db(&mut db, &target, &config.primary_user, delete_authored, None)?;
+                match mode {
+                    OutputMode::Json => writeln!(out, "{}", serde_json::to_string_pretty(&outcome).unwrap_or_default())?,
+                    _ => writeln!(
+                        out,
+                        "Deleted @{}: reassigned {} task(s) to @{}, deleted {} authored task(s).",
+                        outcome.deleted_user, outcome.reassigned_task_count, outcome.fallback_user, outcome.deleted_task_count
+                    )?,
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_kanban<W: Write>(db_path: &Path, user: &str, all: bool, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
+    let db = Database::open(db_path)?;
+    let tasks: Vec<Task> = list_tasks(&db)?
+        .into_iter()
+        .filter(|t| all || t.assignee.eq_ignore_ascii_case(user))
+        .collect();
     match mode {
         OutputMode::Json => {
-            writeln!(out, "{}", serde_json::to_string_pretty(&json!({ "deleted_task_id": task.id })).unwrap_or_default())?;
+            let columns: serde_json::Map<String, serde_json::Value> = wsid_core::TaskStatus::ALL
+                .iter()
+                .map(|s| {
+                    let col: Vec<&Task> = tasks.iter().filter(|t| t.status == *s).collect();
+                    (s.as_str().to_string(), serde_json::to_value(col).unwrap_or_default())
+                })
+                .collect();
+            writeln!(out, "{}", serde_json::to_string_pretty(&columns).unwrap_or_default())?;
         }
         OutputMode::Accessible | OutputMode::Standard => {
-            writeln!(out, "Deleted task {} — {}.", task.id, task.title)?;
+            for s in wsid_core::TaskStatus::ALL {
+                let col: Vec<&Task> = tasks.iter().filter(|t| t.status == s).collect();
+                writeln!(out, "{} ({} tasks):", s, col.len())?;
+                for t in col {
+                    writeln!(out, "  [{}] {} (@{}, imp {}/5)", t.id, t.title, t.assignee, t.importance)?;
+                }
+            }
         }
     }
     Ok(())

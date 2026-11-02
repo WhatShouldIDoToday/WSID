@@ -4,23 +4,45 @@
     type TaskStatus,
     STATUS_LABELS,
     STATUS_ORDER,
-    transitionStatus,
+    bulkEditTasks,
     formatDurationMinutes,
   } from "../lib/ipc";
+  import { Selection } from "../lib/selection.svelte";
+  import BulkActions from "./BulkActions.svelte";
 
   interface Props {
     tasks: Task[];
     activeUser: string;
+    knownTags: string[];
+    knownUsers: string[];
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
     announce: (msg: string) => void;
   }
 
-  let { tasks, activeUser, onSelectTask, onDataChanged, announce }: Props =
-    $props();
+  let {
+    tasks,
+    activeUser,
+    knownTags,
+    knownUsers,
+    onSelectTask,
+    onDataChanged,
+    announce,
+  }: Props = $props();
+
+  const selection = new Selection();
+  /** Ids being dragged (the whole selection when the grabbed card is selected). */
+  let dragIds = $state<string[]>([]);
+
+  $effect(() => {
+    selection.prune(tasks.map((t) => t.id));
+  });
+
+  function dragPayloadFor(task: Task): string[] {
+    return selection.has(task.id) ? [...selection.ids] : [task.id];
+  }
 
   let filterMyTasksOnly = $state<boolean>(false);
-  let draggingTaskId = $state<string | null>(null);
   let dropTargetStatus = $state<TaskStatus | null>(null);
   let pointerDrag = $state<{
     task: Task;
@@ -41,22 +63,38 @@
     return filteredTasks.filter((t) => t.status === status);
   }
 
-  async function moveTaskToStatus(task: Task, newStatus: TaskStatus) {
-    if (task.status === newStatus) return;
+  async function moveTasksToStatus(ids: string[], newStatus: TaskStatus) {
+    const moving = ids.filter(
+      (id) => tasks.find((t) => t.id === id)?.status !== newStatus,
+    );
+    if (moving.length === 0) return;
     try {
-      const outcome = await transitionStatus(task.id, newStatus);
-      if (outcome.spawned_review_task) {
+      const outcome = await bulkEditTasks(moving, { status: newStatus });
+      const failed = outcome.failures.length;
+      if (moving.length === 1 && failed === 0) {
+        const task = outcome.updated[0];
+        const spawned = outcome.spawned_review_tasks[0];
         announce(
-          `Task ${task.id} moved to In Review and spawned review subtask ${outcome.spawned_review_task.id} for @${outcome.spawned_review_task.assignee}`,
+          spawned
+            ? `Task ${task.id} moved to In Review and spawned review subtask ${spawned.id} for @${spawned.assignee}`
+            : `Moved ${task.id} (${task.title}) to ${STATUS_LABELS[task.status]} column`,
         );
       } else {
+        const ok = outcome.updated.length;
         announce(
-          `Moved ${task.id} (${task.title}) to ${STATUS_LABELS[outcome.task.status]} column`,
+          `Moved ${ok} ${ok === 1 ? "task" : "tasks"} to ${STATUS_LABELS[newStatus]}` +
+            (failed
+              ? `; ${failed} failed (${outcome.failures
+                  .slice(0, 3)
+                  .map((f) => `${f.id}: ${f.error}`)
+                  .join("; ")})`
+              : ""),
         );
       }
+      if (failed === 0) selection.clear();
       onDataChanged();
     } catch (err) {
-      announce(`Cannot move task ${task.id}: ${String(err)}`);
+      announce(`Cannot move tasks: ${String(err)}`);
     }
   }
 
@@ -71,15 +109,15 @@
       return;
     }
     pointerDrag = null;
-    draggingTaskId = task.id;
+    dragIds = dragPayloadFor(task);
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", task.id);
+      e.dataTransfer.setData("text/plain", dragIds.join(","));
     }
   }
 
   function handleDragOver(e: DragEvent, colStatus: TaskStatus) {
-    if (!draggingTaskId) return;
+    if (dragIds.length === 0) return;
     e.preventDefault();
     if (e.dataTransfer) {
       e.dataTransfer.dropEffect = "move";
@@ -102,20 +140,20 @@
 
   async function handleDrop(e: DragEvent, colStatus: TaskStatus) {
     e.preventDefault();
-    const id =
-      draggingTaskId || e.dataTransfer?.getData("text/plain")?.trim() || null;
-    draggingTaskId = null;
+    const ids = dragIds.length
+      ? dragIds
+      : (e.dataTransfer?.getData("text/plain") ?? "")
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean);
+    dragIds = [];
     dropTargetStatus = null;
     pointerDrag = null;
-    if (!id) return;
-    const task = tasks.find((t) => t.id === id);
-    if (task && task.status !== colStatus) {
-      await moveTaskToStatus(task, colStatus);
-    }
+    await moveTasksToStatus(ids, colStatus);
   }
 
   function handleDragEnd() {
-    draggingTaskId = null;
+    dragIds = [];
     dropTargetStatus = null;
     pointerDrag = null;
   }
@@ -136,7 +174,7 @@
     const dy = e.clientY - pointerDrag.startY;
     if (!pointerDrag.active && Math.hypot(dx, dy) > 6) {
       pointerDrag.active = true;
-      draggingTaskId = pointerDrag.task.id;
+      dragIds = dragPayloadFor(pointerDrag.task);
     }
     if (pointerDrag.active) {
       e.preventDefault();
@@ -151,15 +189,12 @@
     if (!pointerDrag) return;
     const activeDrag = pointerDrag;
     const targetCol = dropTargetStatus;
+    const ids = dragIds;
     pointerDrag = null;
-    draggingTaskId = null;
+    dragIds = [];
     dropTargetStatus = null;
-    if (
-      activeDrag.active &&
-      targetCol &&
-      activeDrag.task.status !== targetCol
-    ) {
-      await moveTaskToStatus(activeDrag.task, targetCol);
+    if (activeDrag.active && targetCol) {
+      await moveTasksToStatus(ids, targetCol);
     }
   }
 </script>
@@ -190,6 +225,20 @@
     </div>
   </div>
 
+  {#if selection.count > 0}
+    <BulkActions
+      ids={selection.ids}
+      {knownTags}
+      {knownUsers}
+      {announce}
+      onClear={() => selection.clear()}
+      onDone={(outcome) => {
+        if (outcome.failures.length === 0) selection.clear();
+        onDataChanged();
+      }}
+    />
+  {/if}
+
   <div class="kanban-board">
     {#each STATUS_ORDER as colStatus (colStatus)}
       {@const colTasks = tasksForColumn(colStatus)}
@@ -217,7 +266,8 @@
               <li>
                 <article
                   class="task-card draggable-card"
-                  class:is-dragging={draggingTaskId === task.id}
+                  class:is-dragging={dragIds.includes(task.id)}
+                  class:is-selected={selection.has(task.id)}
                   style="padding: 0.75rem;"
                   aria-labelledby={`kanban-card-${task.id}`}
                   draggable="true"
@@ -226,7 +276,23 @@
                   onpointerdown={(e) => handlePointerDown(e, task)}
                 >
                   <div class="meta-row" style="justify-content: space-between;">
-                    <span class="task-id-badge">{task.id}</span>
+                    <span
+                      style="display: inline-flex; align-items: center; gap: 0.5rem;"
+                    >
+                      <input
+                        type="checkbox"
+                        class="select-check"
+                        aria-label={`Select ${task.id}`}
+                        checked={selection.has(task.id)}
+                        onclick={(e) =>
+                          selection.click(
+                            e,
+                            task.id,
+                            colTasks.map((t) => t.id),
+                          )}
+                      />
+                      <span class="task-id-badge">{task.id}</span>
+                    </span>
                     <span style="font-size: 0.78rem;">@{task.assignee}</span>
                   </div>
 
@@ -276,8 +342,8 @@
                       id={`move-select-${task.id}`}
                       value={task.status}
                       onchange={(e) =>
-                        moveTaskToStatus(
-                          task,
+                        moveTasksToStatus(
+                          [task.id],
                           (e.currentTarget as HTMLSelectElement)
                             .value as TaskStatus,
                         )}

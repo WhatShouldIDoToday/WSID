@@ -369,6 +369,8 @@
       <KanbanView
         tasks={allTasks}
         activeUser={session?.active_user ?? "human"}
+        knownTags={session?.known_tags ?? []}
+        knownUsers={session?.known_users ?? []}
         onSelectTask={openTaskDetail}
         onDataChanged={refreshAllData}
         {announce}
@@ -382,6 +384,8 @@
           filterMyTasksOnly = enabled;
           await refreshAllData();
         }}
+        knownTags={session?.known_tags ?? []}
+        knownUsers={session?.known_users ?? []}
         onSelectTask={openTaskDetail}
         onDataChanged={refreshAllData}
         {announce}
@@ -392,6 +396,7 @@
         knownUsers={session?.known_users ?? []}
         {refreshTrigger}
         onSelectTask={openTaskDetail}
+        onDataChanged={refreshAllData}
         {announce}
       />
     {:else if activeTab === "entry"}

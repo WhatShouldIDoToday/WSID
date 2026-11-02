@@ -9,17 +9,28 @@
     formatDurationMinutes,
     formatDeadlineDisplay,
   } from "../lib/ipc";
+  import { Selection } from "../lib/selection.svelte";
+  import BulkActions from "./BulkActions.svelte";
 
   interface Props {
     knownTags: string[];
     knownUsers: string[];
     refreshTrigger: number;
     onSelectTask: (id: string) => void;
+    onDataChanged: () => void;
     announce: (msg: string) => void;
   }
 
-  let { knownTags, knownUsers, refreshTrigger, onSelectTask, announce }: Props =
-    $props();
+  let {
+    knownTags,
+    knownUsers,
+    refreshTrigger,
+    onSelectTask,
+    onDataChanged,
+    announce,
+  }: Props = $props();
+
+  const selection = new Selection();
 
   type SortCol =
     | "score"
@@ -48,6 +59,7 @@
         assignee: assigneeFilter || null,
       });
       hits = results;
+      selection.prune(results.map((h) => h.task.id));
     } catch (err) {
       announce(`Search error: ${String(err)}`);
     }
@@ -117,6 +129,17 @@
     });
     return copy;
   });
+
+  let orderedIds = $derived(sortedHits.map((h) => h.task.id));
+  let allSelected = $derived(
+    orderedIds.length > 0 && orderedIds.every((id) => selection.has(id)),
+  );
+  let someSelected = $derived(selection.count > 0 && !allSelected);
+
+  function toggleAll() {
+    if (allSelected) selection.clear();
+    else selection.set(orderedIds);
+  }
 </script>
 
 <section aria-labelledby="database-view-heading">
@@ -179,10 +202,36 @@
     Showing <strong>{sortedHits.length}</strong> matching task(s).
   </div>
 
+  {#if selection.count > 0}
+    <BulkActions
+      ids={selection.ids}
+      {knownTags}
+      {knownUsers}
+      {announce}
+      onClear={() => selection.clear()}
+      onDone={(outcome) => {
+        if (outcome.failures.length === 0) selection.clear();
+        onDataChanged();
+        void executeSearch();
+      }}
+    />
+  {/if}
+
   <div class="table-container">
     <table class="db-table" aria-label="Tasks Database Table">
       <thead>
         <tr>
+          <th scope="col">
+            <input
+              type="checkbox"
+              class="select-check"
+              aria-label="Select all shown tasks"
+              checked={allSelected}
+              indeterminate={someSelected}
+              disabled={orderedIds.length === 0}
+              onchange={toggleAll}
+            />
+          </th>
           <th scope="col" aria-sort={ariaSortFor("id")}>
             <button
               type="button"
@@ -255,7 +304,7 @@
         {#if sortedHits.length === 0}
           <tr>
             <td
-              colspan="10"
+              colspan="11"
               style="text-align: center; padding: 1.5rem; color: var(--text-muted);"
             >
               No tasks match the current search and filters.
@@ -263,7 +312,16 @@
           </tr>
         {:else}
           {#each sortedHits as hit (hit.task.id)}
-            <tr>
+            <tr class:is-selected={selection.has(hit.task.id)}>
+              <td>
+                <input
+                  type="checkbox"
+                  class="select-check"
+                  aria-label={`Select ${hit.task.id}`}
+                  checked={selection.has(hit.task.id)}
+                  onclick={(e) => selection.click(e, hit.task.id, orderedIds)}
+                />
+              </td>
               <td>
                 <span class="task-id-badge">{hit.task.id}</span>
               </td>

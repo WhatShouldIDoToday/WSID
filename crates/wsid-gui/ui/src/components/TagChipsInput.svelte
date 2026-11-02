@@ -19,7 +19,7 @@
 
   let tagError = $state<string | null>(null);
 
-  const VALID_TAG_REGEX = /^[\p{L}\p{N}_-]+$/u;
+  const VALID_TAG_REGEX = /^[a-z0-9_-]+$/;
 
   function isValidTagToken(token: string): boolean {
     return VALID_TAG_REGEX.test(token);
@@ -47,7 +47,7 @@
     tags = next;
 
     if (invalidTokens.length > 0) {
-      tagError = `Invalid tag '${invalidTokens[0]}': tags must contain only letters, digits, '-', or '_'.`;
+      tagError = `Invalid tag '${invalidTokens[0]}': tags may only contain a-z, 0-9, '-', or '_'.`;
       inputText = invalidTokens.join(" ");
       return false;
     }

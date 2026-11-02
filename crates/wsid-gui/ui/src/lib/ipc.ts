@@ -850,6 +850,50 @@ export async function transitionStatus(
   return invoke<StatusTransitionOutcome>("transition_status", { id, status });
 }
 
+export interface BulkTaskPatch {
+  status?: TaskStatus;
+  assignee?: string;
+  importance?: number;
+  importance_at_least?: number;
+  importance_at_most?: number;
+  difficulty?: number;
+  urgent_override?: boolean;
+  add_tags?: string[];
+  remove_tags?: string[];
+}
+
+export interface BulkEditOutcome {
+  updated: Task[];
+  deleted: string[];
+  spawned_review_tasks: Task[];
+  auto_completed_parent_tasks: Task[];
+  failures: { id: string; error: string }[];
+}
+
+export async function bulkEditTasks(
+  ids: string[],
+  patch: BulkTaskPatch,
+): Promise<BulkEditOutcome> {
+  return invoke<BulkEditOutcome>("bulk_edit_tasks", { ids, patch });
+}
+
+export async function bulkRemoveTasks(ids: string[]): Promise<BulkEditOutcome> {
+  return invoke<BulkEditOutcome>("bulk_remove_tasks", { ids });
+}
+
+/** Human-readable one-line summary of a bulk outcome for announcements. */
+export function summarizeBulk(verb: string, outcome: BulkEditOutcome): string {
+  const done = outcome.deleted.length || outcome.updated.length;
+  const failed = outcome.failures.length;
+  const base = `${verb} ${done} ${done === 1 ? "task" : "tasks"}`;
+  return failed > 0
+    ? `${base}; ${failed} failed (${outcome.failures
+        .slice(0, 3)
+        .map((f) => `${f.id}: ${f.error}`)
+        .join("; ")})`
+    : base;
+}
+
 export async function removeTask(id: string): Promise<boolean> {
   return invoke<boolean>("remove_task", { id });
 }

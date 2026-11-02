@@ -130,6 +130,8 @@
   .detail-drawer,
   .drawer-panel,
   .user-modal-dialog,
+  .user-modal-card,
+  .confirm-modal-dialog,
   .date-picker-popover,
   .relation-combobox-content {
     background-color: Canvas;
@@ -635,8 +637,14 @@ select[aria-invalid="true"] {
 /* Eisenhower 2x2 Matrix */
 .eisenhower-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(26rem, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
+}
+
+@media (max-width: 52rem) {
+  .eisenhower-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .quadrant-panel {
@@ -738,6 +746,7 @@ table.db-table th {
   padding: 1.5rem;
 }
 
+.user-modal-card,
 .user-modal-dialog {
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
@@ -1577,6 +1586,7 @@ input[type="text"].tag-compact-input {
 .user-delete-modal-card {
   width: min(40rem, 94vw);
   max-height: 86vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
@@ -1650,4 +1660,55 @@ input[type="text"].tag-compact-input {
 
 .user-delete-authored-toggle input[type="checkbox"] {
   margin-top: 0.2rem;
+}
+
+/* Bulk selection */
+.bulk-bar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-surface);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.bulk-bar select {
+  width: auto;
+  min-width: 0;
+}
+
+.bulk-spacer {
+  flex: 1;
+}
+
+.task-card.is-selected,
+.db-table tr.is-selected {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.select-check {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  cursor: pointer;
+}
+
+@media (forced-colors: active) {
+  .bulk-bar {
+    background-color: Canvas;
+    color: CanvasText;
+    border: 2px solid CanvasText;
+  }
+
+  .task-card.is-selected,
+  .db-table tr.is-selected {
+    outline: 3px solid Highlight;
+  }
 }

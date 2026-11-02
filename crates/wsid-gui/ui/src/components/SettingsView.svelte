@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Dialog } from "bits-ui";
   import {
     type AppSessionSnapshot,
     type FocusPreset,
@@ -426,145 +427,137 @@
 </section>
 
 {#if deletePreview}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div
-    class="confirm-modal-backdrop"
-    role="presentation"
-    onclick={(e) => {
-      if (e.target === e.currentTarget) closeDeleteUserDialog();
-    }}
-    onkeydown={(e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeDeleteUserDialog();
-      }
+  <Dialog.Root
+    open={true}
+    onOpenChange={(next) => {
+      if (!next) closeDeleteUserDialog();
     }}
   >
-    <div
-      class="confirm-modal-card user-delete-modal-card"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="delete-user-modal-title"
-      tabindex="-1"
-    >
-      <h2 id="delete-user-modal-title" class="confirm-modal-title">
-        Delete User @{deletePreview.username}?
-      </h2>
+    <Dialog.Portal>
+      <Dialog.Overlay class="confirm-modal-backdrop" />
+      <Dialog.Content
+        class="confirm-modal-dialog user-delete-modal-card"
+        role="alertdialog"
+      >
+        <Dialog.Title class="confirm-modal-title">
+          Delete User @{deletePreview.username}?
+        </Dialog.Title>
 
-      <p class="confirm-modal-desc">
-        Hey — by deleting <strong>@{deletePreview.username}</strong>, you (<strong
-          >@{deletePreview.fallback_user}</strong
-        >) are taking on all these tasks where
-        <strong>@{deletePreview.username}</strong> was the author (reporter), assignee,
-        or validator (evaluator):
-      </p>
+        <Dialog.Description class="confirm-modal-desc">
+          By deleting <strong>@{deletePreview.username}</strong>, you (<strong
+            >@{deletePreview.fallback_user}</strong
+          >) take over all tasks where
+          <strong>@{deletePreview.username}</strong> was the author (reporter), assignee,
+          or validator (evaluator):
+        </Dialog.Description>
 
-      <div class="meta-row" style="margin-bottom: 0.65rem;">
-        <span class="badge">
-          Affected tasks: {deletePreview.affected_tasks.length}
-        </span>
-        <span class="badge">
-          Author: {deletePreview.authored_task_count}
-        </span>
-        <span class="badge">
-          Assignee: {deletePreview.assigned_task_count}
-        </span>
-        <span class="badge">
-          Validator: {deletePreview.evaluator_task_count}
-        </span>
-      </div>
-
-      {#if deletePreview.affected_tasks.length === 0}
-        <div class="user-delete-empty-box">
-          No tasks in this database reference @{deletePreview.username}.
+        <div class="meta-row" style="margin-bottom: 0.65rem;">
+          <span class="badge">
+            Affected tasks: {deletePreview.affected_tasks.length}
+          </span>
+          <span class="badge">
+            Author: {deletePreview.authored_task_count}
+          </span>
+          <span class="badge">
+            Assignee: {deletePreview.assigned_task_count}
+          </span>
+          <span class="badge">
+            Validator: {deletePreview.evaluator_task_count}
+          </span>
         </div>
-      {:else}
-        <div
-          class="user-delete-task-scroll"
-          role="region"
-          aria-label={`Tasks affected by deleting @${deletePreview.username}`}
-        >
-          {#each deletePreview.affected_tasks as task (task.id)}
-            <div
-              class="user-delete-task-item"
-              class:will-be-deleted={deleteAuthoredTasks && task.is_reporter}
-            >
+
+        {#if deletePreview.affected_tasks.length === 0}
+          <div class="user-delete-empty-box">
+            No tasks in this database reference @{deletePreview.username}.
+          </div>
+        {:else}
+          <div
+            class="user-delete-task-scroll"
+            role="region"
+            aria-label={`Tasks affected by deleting @${deletePreview.username}`}
+          >
+            {#each deletePreview.affected_tasks as task (task.id)}
               <div
-                style="display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex: 1;"
+                class="user-delete-task-item"
+                class:will-be-deleted={deleteAuthoredTasks && task.is_reporter}
               >
-                {#if onSelectTask}
-                  <button
-                    type="button"
-                    class="task-id-badge"
-                    style="cursor: pointer;"
-                    onclick={() => {
-                      const id = task.id;
-                      closeDeleteUserDialog();
-                      onSelectTask(id);
-                    }}
-                  >
-                    {task.id}
-                  </button>
-                {:else}
-                  <span class="task-id-badge">{task.id}</span>
-                {/if}
-                <span class="user-delete-task-title" title={task.title}>
-                  {task.title}
-                </span>
-              </div>
+                <div
+                  style="display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex: 1;"
+                >
+                  {#if onSelectTask}
+                    <button
+                      type="button"
+                      class="task-id-badge"
+                      style="cursor: pointer;"
+                      onclick={() => {
+                        const id = task.id;
+                        closeDeleteUserDialog();
+                        onSelectTask(id);
+                      }}
+                    >
+                      {task.id}
+                    </button>
+                  {:else}
+                    <span class="task-id-badge">{task.id}</span>
+                  {/if}
+                  <span class="user-delete-task-title" title={task.title}>
+                    {task.title}
+                  </span>
+                </div>
 
-              <div class="user-delete-role-badges">
-                <span class="badge">{STATUS_LABELS[task.status]}</span>
-                {#if task.is_reporter}
-                  <span class="badge">Author</span>
-                {/if}
-                {#if task.is_assignee}
-                  <span class="badge">Assignee</span>
-                {/if}
-                {#if task.is_evaluator}
-                  <span class="badge">Validator</span>
-                {/if}
-                {#if deleteAuthoredTasks && task.is_reporter}
-                  <span class="badge badge-urgent">Will be deleted</span>
-                {:else}
-                  <span class="badge">→ @{deletePreview.fallback_user}</span>
-                {/if}
+                <div class="user-delete-role-badges">
+                  <span class="badge">{STATUS_LABELS[task.status]}</span>
+                  {#if task.is_reporter}
+                    <span class="badge">Author</span>
+                  {/if}
+                  {#if task.is_assignee}
+                    <span class="badge">Assignee</span>
+                  {/if}
+                  {#if task.is_evaluator}
+                    <span class="badge">Validator</span>
+                  {/if}
+                  {#if deleteAuthoredTasks && task.is_reporter}
+                    <span class="badge badge-urgent">Will be deleted</span>
+                  {:else}
+                    <span class="badge">→ @{deletePreview.fallback_user}</span>
+                  {/if}
+                </div>
               </div>
-            </div>
-          {/each}
+            {/each}
+          </div>
+        {/if}
+
+        <label class="user-delete-authored-toggle">
+          <input type="checkbox" bind:checked={deleteAuthoredTasks} />
+          <span>
+            Also permanently delete all tasks where
+            <strong>@{deletePreview.username}</strong> was the author ({deletePreview.authored_task_count}
+            {deletePreview.authored_task_count === 1 ? "task" : "tasks"})
+          </span>
+        </label>
+
+        <div class="confirm-modal-actions">
+          <button
+            type="button"
+            onclick={closeDeleteUserDialog}
+            disabled={deleteBusy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-danger"
+            onclick={() => void confirmDeleteUser()}
+            disabled={deleteBusy}
+          >
+            {deleteBusy
+              ? "Deleting..."
+              : deleteAuthoredTasks && deletePreview.authored_task_count > 0
+                ? `Delete @${deletePreview.username} & ${deletePreview.authored_task_count} Authored Task(s)`
+                : `Delete @${deletePreview.username} & Reassign Tasks`}
+          </button>
         </div>
-      {/if}
-
-      <label class="user-delete-authored-toggle">
-        <input type="checkbox" bind:checked={deleteAuthoredTasks} />
-        <span>
-          Also permanently delete all tasks where
-          <strong>@{deletePreview.username}</strong> was the author ({deletePreview.authored_task_count}
-          {deletePreview.authored_task_count === 1 ? "task" : "tasks"})
-        </span>
-      </label>
-
-      <div class="confirm-modal-actions">
-        <button
-          type="button"
-          onclick={closeDeleteUserDialog}
-          disabled={deleteBusy}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          class="btn-danger"
-          onclick={() => void confirmDeleteUser()}
-          disabled={deleteBusy}
-        >
-          {deleteBusy
-            ? "Deleting..."
-            : deleteAuthoredTasks && deletePreview.authored_task_count > 0
-              ? `Delete @${deletePreview.username} & ${deletePreview.authored_task_count} Authored Task(s)`
-              : `Delete @${deletePreview.username} & Reassign Tasks`}
-        </button>
-      </div>
-    </div>
-  </div>
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>
 {/if}

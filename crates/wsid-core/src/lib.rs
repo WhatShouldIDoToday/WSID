@@ -1,5 +1,6 @@
 pub mod about;
 pub mod attachments;
+pub mod bulk;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -21,6 +22,7 @@ pub use attachments::{
     remove_attachment, remove_attachment_with_dir, save_clipboard_attachment, save_clipboard_attachment_with_dir,
     update_attachment_description,
 };
+pub use bulk::{BulkEditOutcome, BulkTaskFailure, BulkTaskPatch, bulk_delete_tasks, bulk_update_tasks};
 pub use config::{
     ATTACHMENTS_DIRNAME, AppConfig, CONFIG_FILENAME, GLOBAL_DB_FILENAME, LOCAL_DB_FILENAME, WSID_DB_ENV_VAR, default_app_data_dir,
     default_attachments_dir, default_config_path, default_global_db_path, resolve_active_db_path, resolve_db_path,

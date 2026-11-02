@@ -16,7 +16,7 @@ pub struct Cli {
     pub local: bool,
 
     /// Active user handle (defaults to configured `default_user` or OS username)
-    #[arg(long, short = 'u', visible_alias = "persona", global = true)]
+    #[arg(long, short = 'u', global = true)]
     pub user: Option<String>,
 
     /// Enable linear screen-reader-friendly accessible output / single-column TUI layout
@@ -65,10 +65,27 @@ pub enum Commands {
         note_id: i64,
     },
 
-    /// Delete a task (automatically cleaning up any managed app-data attachments on disk)
+    /// Delete one or more tasks (automatically cleaning up any managed app-data attachments on disk)
     Delete {
-        /// Task short ID (e.g. AB1234)
-        id: String,
+        /// Task short ID(s) (e.g. AB1234 CD5678)
+        #[arg(required = true, num_args = 1..)]
+        ids: Vec<String>,
+    },
+
+    /// Edit one or more tasks at once (status, assignee, importance, difficulty, urgency, tags)
+    Edit(EditArgs),
+
+    /// Manage users (list, add, or — as the main user — delete)
+    Users {
+        #[command(subcommand)]
+        action: UsersAction,
+    },
+
+    /// Show tasks grouped into Kanban status columns
+    Kanban {
+        /// Include all assignees instead of filtering to the active user
+        #[arg(long)]
+        all: bool,
     },
 
     /// Attach a file on disk or clipboard data to a task or comment
@@ -155,6 +172,63 @@ pub enum Commands {
         #[arg(long)]
         full: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersAction {
+    /// List all known users
+    List,
+    /// Register a user handle (lowercase letters, digits, `_`, `-`)
+    Add { user: String },
+    /// Delete a user, reassigning their tasks to the main user (previews unless `--yes` is given)
+    Delete {
+        user: String,
+        /// Also permanently delete every task this user authored (reporter)
+        #[arg(long)]
+        delete_authored: bool,
+        /// Perform the deletion instead of only previewing it
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct EditArgs {
+    /// Task short ID(s) to edit (e.g. AB1234 CD5678)
+    #[arg(required = true, num_args = 1..)]
+    pub ids: Vec<String>,
+
+    /// New status (`backlog`, `todo`, `in_progress`, `in_review`, `stuck`, `completed`)
+    #[arg(long)]
+    pub status: Option<String>,
+
+    /// New assignee
+    #[arg(long, short = 'a')]
+    pub assignee: Option<String>,
+
+    /// Importance rating (`1..=5`)
+    #[arg(long, short = 'i')]
+    pub importance: Option<u8>,
+
+    /// Difficulty rating (`1..=5`)
+    #[arg(long)]
+    pub difficulty: Option<u8>,
+
+    /// Force urgent classification on
+    #[arg(long, short = 'U', conflicts_with = "not_urgent")]
+    pub urgent: bool,
+
+    /// Clear the urgent override
+    #[arg(long)]
+    pub not_urgent: bool,
+
+    /// Tag(s) to add (can be specified multiple times)
+    #[arg(long = "add-tag")]
+    pub add_tags: Vec<String>,
+
+    /// Tag(s) to remove (can be specified multiple times)
+    #[arg(long = "remove-tag")]
+    pub remove_tags: Vec<String>,
 }
 
 #[derive(Debug, Args)]

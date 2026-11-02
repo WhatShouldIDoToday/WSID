@@ -259,7 +259,15 @@ fn render_kanban_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 .iter()
                 .map(|t| {
                     let due = t.due_date.as_deref().unwrap_or("-");
-                    ListItem::new(Line::from(format!("[{}] {} (@{}, Imp:{}/5, Due:{})", t.id, t.title, t.assignee, t.importance, due)))
+                    ListItem::new(Line::from(format!(
+                        "{}[{}] {} (@{}, Imp:{}/5, Due:{})",
+                        app.mark(&t.id),
+                        t.id,
+                        t.title,
+                        t.assignee,
+                        t.importance,
+                        due
+                    )))
                 })
                 .collect();
 
@@ -304,7 +312,7 @@ fn render_kanban_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         let items: Vec<ListItem> = tasks
             .iter()
             .map(|t| {
-                let line1 = format!("[{}] {}", t.id, t.title);
+                let line1 = format!("{}[{}] {}", app.mark(&t.id), t.id, t.title);
                 let line2 = format!("  @{} I:{} D:{}", t.assignee, t.importance, t.difficulty);
                 ListItem::new(vec![Line::from(line1), Line::from(line2)])
             })
@@ -349,8 +357,15 @@ fn render_eisenhower_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                         .map(|s| format!("{s:.1}d"))
                         .unwrap_or_else(|| "-".to_string());
                     ListItem::new(Line::from(format!(
-                        "[{}] {} ({}) — Imp:{}/5, Diff:{}/5, Urgent:{}, Slack:{}",
-                        t.id, t.title, t.status, t.importance, t.difficulty, c.is_urgent, slack
+                        "{}[{}] {} ({}) — Imp:{}/5, Diff:{}/5, Urgent:{}, Slack:{}",
+                        app.mark(&t.id),
+                        t.id,
+                        t.title,
+                        t.status,
+                        t.importance,
+                        t.difficulty,
+                        c.is_urgent,
+                        slack
                     )))
                 })
                 .collect();
@@ -406,7 +421,15 @@ fn render_eisenhower_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                     .slack_days
                     .map(|s| format!("slack:{s:.1}d"))
                     .unwrap_or_else(|| "no-deadline".to_string());
-                ListItem::new(Line::from(format!("[{}] {} (I:{}/5 D:{}/5 {})", t.id, t.title, t.importance, t.difficulty, slack)))
+                ListItem::new(Line::from(format!(
+                    "{}[{}] {} (I:{}/5 D:{}/5 {})",
+                    app.mark(&t.id),
+                    t.id,
+                    t.title,
+                    t.importance,
+                    t.difficulty,
+                    slack
+                )))
             })
             .collect();
 
@@ -437,7 +460,17 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     let status_filter_label = app
         .search_status_filter
         .map_or_else(|| "All".to_string(), |s| s.to_string());
-    let mine_label = if app.search_only_mine { format!("@{}", app.user) } else { "All".to_string() };
+    let mine_label = if app.search_only_mine {
+        format!("@{}", app.user)
+    } else {
+        app.search_assignee_filter
+            .as_ref()
+            .map_or_else(|| "All".to_string(), |u| format!("@{u}"))
+    };
+    let tag_label = app
+        .search_tag_filter
+        .as_ref()
+        .map_or_else(String::new, |t| format!(" | Tag: #{t}"));
     let sort_dir = if app.search_sort_asc { "ASC" } else { "DESC" };
 
     let query_prefix = " Search: ";
@@ -445,18 +478,20 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         format!("{}{} ", query_prefix, app.search_query)
     } else if app.search_query.is_empty() {
         format!(
-            " Search: <All tasks> | Status: {} | Assignee: {} | Sort: {} ({})",
+            " Search: <All tasks> | Status: {} | Assignee: {}{} | Sort: {} ({})",
             status_filter_label,
             mine_label,
+            tag_label,
             app.search_sort_col.label(),
             sort_dir
         )
     } else {
         format!(
-            " Search: '{}' | Status: {} | Assignee: {} | Sort: {} ({})",
+            " Search: '{}' | Status: {} | Assignee: {}{} | Sort: {} ({})",
             app.search_query,
             status_filter_label,
             mine_label,
+            tag_label,
             app.search_sort_col.label(),
             sort_dir
         )
@@ -495,8 +530,18 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 let sgdb = t.sgdb_date.as_deref().unwrap_or("-");
                 let tags = if t.tags.is_empty() { "-".to_string() } else { t.tags.join(",") };
                 ListItem::new(Line::from(format!(
-                    "[{}] {} ({}) Assignee:@{} Imp:{} Diff:{} Prio:{} SGDB:{} Due:{} Tags:{}",
-                    t.id, t.title, t.status, t.assignee, t.importance, t.difficulty, t.manual_priority, sgdb, due, tags
+                    "{}[{}] {} ({}) Assignee:@{} Imp:{} Diff:{} Prio:{} SGDB:{} Due:{} Tags:{}",
+                    app.mark(&t.id),
+                    t.id,
+                    t.title,
+                    t.status,
+                    t.assignee,
+                    t.importance,
+                    t.difficulty,
+                    t.manual_priority,
+                    sgdb,
+                    due,
+                    tags
                 )))
             })
             .collect();
@@ -561,7 +606,7 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 .unwrap_or("-");
             let tags = if t.tags.is_empty() { "-".to_string() } else { t.tags.join(",") };
             Row::new(vec![
-                Cell::from(t.id.clone()),
+                Cell::from(format!("{}{}", app.mark(&t.id), t.id)),
                 Cell::from(t.title.clone()),
                 Cell::from(t.status.to_string()),
                 Cell::from(format!("@{}", t.assignee)),
@@ -664,12 +709,14 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
         ActiveTab::Focus => {
             "[1-5] Views | [j/k] Select | [Enter] Inspect | [p] Preset | [s] Start | [d] Done | [x] Stuck | [b] Blocked | [?] Help & Status | [q] Quit"
         }
-        ActiveTab::Kanban => "[1-5] Views | [h/l] Column | [j/k] Task | [</>] Move Status | [Enter] Inspect | [?] Help & Status | [q] Quit",
+        ActiveTab::Kanban => {
+            "[1-5] Views | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [Enter] Inspect | [q] Quit"
+        }
         ActiveTab::Eisenhower => {
-            "[1-5] Views | [h/l/Tab] Quadrant | [j/k] Task | [+/-] Imp | [u] Urgent | [s] Start | [d] Done | [Enter] Inspect | [?] Help"
+            "[1-5] Views | [h/l/Tab] Quadrant | [j/k] Task | [+/-] Imp | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
         }
         ActiveTab::Database => {
-            "[1-5] Views | [/] Search | [f] Status | [m] Mine | [o/O] Sort | [j/k] Select | [Enter] Inspect | [?] Help & Status | [q] Quit"
+            "[1-5] Views | [/] Search | [f] Status | [t] Tag | [u] User | [m] Mine | [o/O] Sort | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [q] Quit"
         }
         ActiveTab::DataEntry => "[Tab/Up/Down] Field | [Ctrl+S] Submit | [Esc] Cancel | [?] Help & Status",
     };
@@ -814,7 +861,7 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     let (prompt_line, prompt_prefix_len) = match app.detail_prompt_kind {
         DetailPromptKind::None => (
             Line::from(Span::styled(
-                "[c] Comment | [f] Attach File | [v] Paste Clipboard | [e] Edit Alt | [o] Open Att | [g] Jump ID | [u] Unblock Subtask | [s/d/x] Status | [Esc] Close",
+                "[c] Comment | [f] Attach File | [v] Paste Clipboard | [e] Edit Alt | [o] Open Att | [g] Jump ID | [u] Unblock Subtask | [s/r/d/x] Status | [Esc] Close",
                 Style::default().fg(Color::Cyan),
             )),
             None,

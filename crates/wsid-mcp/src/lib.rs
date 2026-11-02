@@ -292,4 +292,47 @@ mod tests {
                 .contains("cycle detected")
         );
     }
+
+    #[test]
+    fn exposes_user_matrix_bulk_tools_and_duration_strings() {
+        let mut server = test_server();
+        let a = call_tool(&mut server, 1, "create_task", json!({ "title": "A", "time_estimate_minutes": "1h30m", "importance": 1 }));
+        assert_eq!(a["task"]["time_estimate_minutes"], 90);
+        let b = call_tool(&mut server, 2, "create_task", json!({ "title": "B" }));
+        let (a, b) = (a["task"]["id"].as_str().unwrap().to_string(), b["task"]["id"].as_str().unwrap().to_string());
+
+        let users = call_tool(&mut server, 3, "list_users", json!({}));
+        assert!(
+            users["users"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|u| u == "claude")
+        );
+        call_tool(&mut server, 4, "register_user", json!({ "user": "newguy" }));
+        let users = call_tool(&mut server, 5, "list_users", json!({}));
+        assert!(
+            users["users"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|u| u == "newguy")
+        );
+
+        let matrix = call_tool(&mut server, 6, "get_eisenhower_matrix", json!({}));
+        assert_eq!(matrix["count"], 2);
+
+        let bulk = call_tool(
+            &mut server,
+            7,
+            "bulk_update_tasks",
+            json!({ "ids": [a, b, "ZZ9999"], "importance_at_least": 4, "add_tags": ["bulk"] }),
+        );
+        assert_eq!(bulk["updated"].as_array().unwrap().len(), 2);
+        assert_eq!(bulk["failures"].as_array().unwrap().len(), 1);
+        assert_eq!(bulk["updated"][0]["importance"], 4);
+
+        let del = call_tool(&mut server, 8, "bulk_delete_tasks", json!({ "ids": [a, b] }));
+        assert_eq!(del["deleted"].as_array().unwrap().len(), 2);
+    }
 }

@@ -30,7 +30,7 @@ fn try_main() -> wsid_core::Result<()> {
 
     let user = match cli.user.as_deref() {
         Some(u) if !u.trim().is_empty() => normalize_user(u)?,
-        _ => config.default_user.clone(),
+        _ => normalize_user(&config.default_user)?,
     };
 
     let output_mode = OutputMode::from_flags(cli.accessible, cli.json);
@@ -204,6 +204,90 @@ mod tests {
     }
 
     #[test]
+    fn cli_edit_users_kanban_and_multi_delete() {
+        use crate::args::{EditArgs, UsersAction};
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("cli_bulk.db");
+        let config = AppConfig { primary_user: "alice".to_string(), default_user: "alice".to_string(), ..AppConfig::default() };
+        let run = |cmd: Commands, user: &str| -> wsid_core::Result<String> {
+            let mut buf = Vec::new();
+            execute_command(cmd, &db_path, &config, user, OutputMode::Json, &mut buf)?;
+            Ok(String::from_utf8(buf).unwrap())
+        };
+        let add = |title: &str| {
+            Commands::Add(Box::new(AddArgs {
+                title: title.to_string(),
+                description: None,
+                status: None,
+                due: None,
+                sgdb: None,
+                estimate: None,
+                difficulty: None,
+                importance: Some(1),
+                urgent: false,
+                priority: None,
+                tags: Vec::new(),
+                reporter: None,
+                assignee: Some("bob".to_string()),
+                evaluator: None,
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
+                subtask_of: Vec::new(),
+                parent_of: Vec::new(),
+                parallel: Vec::new(),
+                related: Vec::new(),
+                attachments: Vec::new(),
+                attachment_descriptions: Vec::new(),
+            }))
+        };
+        let id_of = |json: &str| -> String {
+            let v: serde_json::Value = serde_json::from_str(json).unwrap();
+            v["task"]["id"]
+                .as_str()
+                .or_else(|| v["id"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        let a = id_of(&run(add("A"), "alice").unwrap());
+        let b = id_of(&run(add("B"), "alice").unwrap());
+
+        let edited = run(
+            Commands::Edit(EditArgs {
+                ids: vec![a.clone(), b.clone()],
+                status: Some("todo".to_string()),
+                assignee: None,
+                importance: Some(4),
+                difficulty: None,
+                urgent: false,
+                not_urgent: false,
+                add_tags: vec!["batch".to_string()],
+                remove_tags: Vec::new(),
+            }),
+            "alice",
+        )
+        .unwrap();
+        assert!(edited.contains("\"importance\": 4"));
+
+        let kanban = run(Commands::Kanban { all: true }, "alice").unwrap();
+        assert!(kanban.contains(&a) && kanban.contains(&b));
+
+        // Only the main user may delete users; others get an error.
+        assert!(
+            run(Commands::Users { action: UsersAction::Delete { user: "bob".to_string(), delete_authored: false, yes: true } }, "bob")
+                .is_err()
+        );
+        let done =
+            run(Commands::Users { action: UsersAction::Delete { user: "bob".to_string(), delete_authored: false, yes: true } }, "alice")
+                .unwrap();
+        assert!(done.contains("reassigned_task_count"));
+        let users = run(Commands::Users { action: UsersAction::List }, "alice").unwrap();
+        assert!(!users.contains("bob"));
+
+        run(Commands::Delete { ids: vec![a, b] }, "alice").unwrap();
+    }
+
+    #[test]
     fn tui_renders_all_five_views_and_detail_modal_and_detects_external_db_changes() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("tui_test.db");
@@ -333,5 +417,41 @@ mod tests {
 
         assert!(app.on_tick().unwrap());
         assert_eq!(app.focus_queue.actionable_tasks.len(), 2);
+    }
+
+    #[test]
+    fn tui_multi_select_and_bulk_edit() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("tui_bulk.db");
+        let config = AppConfig::default();
+        {
+            let mut db = Database::open(&db_path).unwrap();
+            for title in ["One", "Two"] {
+                wsid_core::create_task(
+                    &mut db,
+                    wsid_core::CreateTaskInput { title: title.to_string(), importance: Some(1), ..Default::default() },
+                    "alice",
+                )
+                .unwrap();
+            }
+        }
+        let mut app = TuiApp::new(&db_path, config, "alice".to_string(), false).unwrap();
+        let key = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+
+        key(&mut app, KeyCode::Char('4'));
+        key(&mut app, KeyCode::Char('A'));
+        assert_eq!(app.selected_ids.len(), 2);
+        key(&mut app, KeyCode::Char('b'));
+        for ch in "importance=5 +batch".chars() {
+            key(&mut app, KeyCode::Char(ch));
+        }
+        key(&mut app, KeyCode::Enter);
+
+        assert!(app.selected_ids.is_empty(), "status: {}", app.status_message);
+        assert!(
+            app.all_tasks
+                .iter()
+                .all(|t| t.importance == 5 && t.tags == vec!["batch".to_string()])
+        );
     }
 }
