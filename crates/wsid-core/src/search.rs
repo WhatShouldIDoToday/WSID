@@ -5,6 +5,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 use rusqlite::{Connection, params_from_iter};
 use serde::{Deserialize, Serialize};
 
+use crate::attachments::load_task_description_attachments;
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
@@ -174,6 +175,7 @@ fn load_filtered_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Ta
     for row in rows {
         let mut task = row?;
         task.tags = load_task_tags(conn, &task.id)?;
+        task.attachments = load_task_description_attachments(conn, &task.id)?;
         tasks.push(task);
     }
     Ok(tasks)

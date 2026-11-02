@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::attachments::{cleanup_managed_files_after_delete, load_note_attachments};
 use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::{is_valid_task_id, normalize_task_id};
@@ -133,6 +135,7 @@ pub fn add_task_note(
         task_id: commented_task.id.clone(),
         author: author.clone(),
         body: body.clone(),
+        attachments: Vec::new(),
         created_at: parse_utc(&now_str),
     };
 
@@ -303,14 +306,40 @@ pub fn list_task_notes(db: &Database, raw_task_id: &str) -> Result<Vec<TaskNote>
 
     let rows = stmt.query_map([&task_id], |row| {
         let created_str: String = row.get(4)?;
-        Ok(TaskNote { id: row.get(0)?, task_id: row.get(1)?, author: row.get(2)?, body: row.get(3)?, created_at: parse_utc(&created_str) })
+        Ok(TaskNote {
+            id: row.get(0)?,
+            task_id: row.get(1)?,
+            author: row.get(2)?,
+            body: row.get(3)?,
+            attachments: Vec::new(),
+            created_at: parse_utc(&created_str),
+        })
     })?;
 
     let mut notes = Vec::new();
     for r in rows {
-        notes.push(r?);
+        let mut note = r?;
+        note.attachments = load_note_attachments(&db.conn, note.id)?;
+        notes.push(note);
     }
     Ok(notes)
+}
+
+/// Deletes a task note by `note_id` and cleans up any managed clipboard attachments belonging to that note.
+pub fn delete_task_note(db: &mut Database, note_id: i64) -> Result<()> {
+    delete_task_note_with_attachments_dir(db, note_id, None)
+}
+
+pub fn delete_task_note_with_attachments_dir(db: &mut Database, note_id: i64, managed_dir_override: Option<&Path>) -> Result<()> {
+    let note_attachments = load_note_attachments(&db.conn, note_id).unwrap_or_default();
+    let affected = db
+        .conn
+        .execute("DELETE FROM task_notes WHERE id = ?1", [note_id])?;
+    if affected == 0 {
+        return Err(WsidError::Validation(format!("task note #{note_id} not found")));
+    }
+    cleanup_managed_files_after_delete(&db.conn, &note_attachments, managed_dir_override);
+    Ok(())
 }
 
 /// One-step cleanup helper for overzealous mention/subtask blockers:

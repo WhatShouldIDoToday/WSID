@@ -254,6 +254,18 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                             },
                             "required": ["relation", "target_id"]
                         }
+                    },
+                    "attachments": {
+                        "type": "array",
+                        "description": "Optional files/images on disk to attach to the task description.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string", "description": "Path to the file on disk." },
+                                "description": { "type": "string", "description": "Optional screen-reader alt text (defaults to filename)." }
+                            },
+                            "required": ["path"]
+                        }
                     }
                 },
                 "required": ["title"]
@@ -314,9 +326,80 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                         "type": "boolean",
                         "default": true,
                         "description": "Whether `@persona` and `@takenote:<persona>` mentions should spawn subtasks."
+                    },
+                    "attachments": {
+                        "type": "array",
+                        "description": "Optional files/images on disk to attach to this comment.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string", "description": "Path to the file on disk." },
+                                "description": { "type": "string", "description": "Optional screen-reader alt text (defaults to filename)." }
+                            },
+                            "required": ["path"]
+                        }
                     }
                 },
                 "required": ["task_id", "body"]
+            }),
+        },
+        ToolDefinition {
+            name: "attach_file".to_string(),
+            description: "Attaches a file or image on disk to a task description or a specific task comment (`note_id`), with optional `description` for screen-reader alt text (defaults to the filename).".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Short task ID (e.g. 'AB1234')." },
+                    "note_id": { "type": "integer", "description": "Optional comment ID when attaching to a specific note instead of the task description." },
+                    "path": { "type": "string", "description": "Path to the file on disk." },
+                    "description": { "type": "string", "description": "Optional accessibility alt text / description (defaults to filename)." }
+                },
+                "required": ["task_id", "path"]
+            }),
+        },
+        ToolDefinition {
+            name: "update_attachment".to_string(),
+            description: "Updates the screen-reader alt text (`description`) of an existing task or comment attachment.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "attachment_id": { "type": "integer" },
+                    "description": { "type": "string", "description": "New alt text / description (pass empty string to reset to filename)." }
+                },
+                "required": ["attachment_id", "description"]
+            }),
+        },
+        ToolDefinition {
+            name: "remove_attachment".to_string(),
+            description: "Removes an attachment from a task or comment. If the file was saved in WSID's managed app-data folder, the file is deleted from disk; external files are preserved.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "attachment_id": { "type": "integer" }
+                },
+                "required": ["attachment_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "delete_task".to_string(),
+            description: "Deletes a task by short ID, cleaning up any managed clipboard attachments in WSID's app-data directory while preserving external files.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolDefinition {
+            name: "delete_task_note".to_string(),
+            description: "Deletes a task comment by `note_id`, cleaning up any managed clipboard attachments on that comment while preserving external files.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "note_id": { "type": "integer" }
+                },
+                "required": ["note_id"]
             }),
         },
         ToolDefinition {

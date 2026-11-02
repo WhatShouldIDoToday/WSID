@@ -4,10 +4,11 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use wsid_core::{
-    AppConfig, CreateTaskInput, Database, FocusPreset, RelationInputKind, SearchQuery, Task, TaskNote, TaskRelation, TaskStatus,
-    UpdateTaskInput, WsidError, add_task_note, compute_focus_queue, create_task, get_blocked_tasks, get_direct_blocked_tasks,
-    get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks,
-    list_task_notes, list_task_relations, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_task,
+    AppConfig, AttachmentInput, CreateTaskInput, Database, FocusPreset, RelationInputKind, SearchQuery, Task, TaskNote, TaskRelation,
+    TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, compute_focus_queue, create_task, delete_task,
+    delete_task_note, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks,
+    get_parallel_peers, get_related_tasks, get_task, link_tasks, list_task_notes, list_task_relations, remove_attachment, search_tasks,
+    transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
 };
 
 use crate::protocol::CallToolResult;
@@ -81,6 +82,8 @@ struct CreateTaskArgs {
     pub evaluator: Option<String>,
     #[serde(default)]
     pub relations: Vec<InitialRelationSpec>,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentInput>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +101,43 @@ struct AddTaskNoteArgs {
     pub author: Option<String>,
     pub body: String,
     pub spawn_subtasks: Option<bool>,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentInput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AttachFileArgs {
+    #[serde(alias = "id")]
+    pub task_id: String,
+    pub note_id: Option<i64>,
+    #[serde(alias = "file_path")]
+    pub path: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateAttachmentArgs {
+    #[serde(alias = "id")]
+    pub attachment_id: i64,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RemoveAttachmentArgs {
+    #[serde(alias = "id")]
+    pub attachment_id: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DeleteTaskArgs {
+    #[serde(alias = "task_id")]
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DeleteTaskNoteArgs {
+    #[serde(alias = "id")]
+    pub note_id: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -195,7 +235,34 @@ pub fn dispatch_tool(
                 .unwrap_or(&config.default_persona);
             let spawn_subtasks = args.spawn_subtasks.unwrap_or(true);
 
-            add_task_note(db, &args.task_id, author, &args.body, spawn_subtasks).map(|res| CallToolResult::ok_json(&res))
+            add_task_note(db, &args.task_id, author, &args.body, spawn_subtasks).and_then(|mut res| {
+                for att in &args.attachments {
+                    let saved = attach_existing_file(db, &res.note.task_id, Some(res.note.id), &att.path, att.description.as_deref())?;
+                    res.note.attachments.push(saved);
+                }
+                Ok(CallToolResult::ok_json(&res))
+            })
+        }
+        "attach_file" => {
+            let args: AttachFileArgs = parse_args(args_val)?;
+            attach_existing_file(db, &args.task_id, args.note_id, &args.path, args.description.as_deref())
+                .map(|att| CallToolResult::ok_json(&att))
+        }
+        "update_attachment" => {
+            let args: UpdateAttachmentArgs = parse_args(args_val)?;
+            update_attachment_description(db, args.attachment_id, &args.description).map(|att| CallToolResult::ok_json(&att))
+        }
+        "remove_attachment" => {
+            let args: RemoveAttachmentArgs = parse_args(args_val)?;
+            remove_attachment(db, args.attachment_id).map(|removed| CallToolResult::ok_json(&json!({ "removed": removed })))
+        }
+        "delete_task" => {
+            let args: DeleteTaskArgs = parse_args(args_val)?;
+            delete_task(db, &args.id).map(|()| CallToolResult::ok_json(&json!({ "deleted": true, "id": args.id })))
+        }
+        "delete_task_note" => {
+            let args: DeleteTaskNoteArgs = parse_args(args_val)?;
+            delete_task_note(db, args.note_id).map(|()| CallToolResult::ok_json(&json!({ "deleted": true, "note_id": args.note_id })))
         }
         "link_tasks" => {
             let args: LinkTasksArgs = parse_args(args_val)?;
@@ -266,8 +333,13 @@ fn handle_create_task(db: &mut Database, config: &AppConfig, args: CreateTaskArg
         linked_relations.push(rel);
     }
 
+    for att in &args.attachments {
+        attach_existing_file(db, &created.id, None, &att.path, att.description.as_deref())?;
+    }
+    let refreshed = if args.attachments.is_empty() { created } else { get_task(db, &created.id)? };
+
     Ok(CallToolResult::ok_json(&json!({
-        "task": created,
+        "task": refreshed,
         "relations": linked_relations,
     })))
 }

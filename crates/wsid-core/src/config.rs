@@ -11,6 +11,7 @@ use crate::tasks::normalize_persona;
 pub const LOCAL_DB_FILENAME: &str = ".wsid.db";
 pub const GLOBAL_DB_FILENAME: &str = "wsid.db";
 pub const CONFIG_FILENAME: &str = "config.toml";
+pub const ATTACHMENTS_DIRNAME: &str = "attachments";
 pub const WSID_DB_ENV_VAR: &str = "WSID_DB";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -77,12 +78,25 @@ pub fn default_config_path() -> PathBuf {
         .join(CONFIG_FILENAME)
 }
 
-pub fn default_global_db_path() -> PathBuf {
+/// Returns the OS-native local application data directory for WSID:
+/// - macOS: `~/Library/Application Support/wsid`
+/// - Windows: `%LOCALAPPDATA%\wsid`
+/// - Linux: `$XDG_DATA_HOME/wsid` (or `~/.local/share/wsid`)
+pub fn default_app_data_dir() -> PathBuf {
     dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("wsid")
-        .join(GLOBAL_DB_FILENAME)
+}
+
+pub fn default_global_db_path() -> PathBuf {
+    default_app_data_dir().join(GLOBAL_DB_FILENAME)
+}
+
+/// Returns the managed directory where clipboard-pasted attachments are saved:
+/// `<default_app_data_dir>/attachments`.
+pub fn default_attachments_dir() -> PathBuf {
+    default_app_data_dir().join(ATTACHMENTS_DIRNAME)
 }
 
 /// Searches `start_dir` and its ancestor directories for an existing `.wsid.db`.

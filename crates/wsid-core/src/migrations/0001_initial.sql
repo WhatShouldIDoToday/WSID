@@ -79,6 +79,22 @@ CREATE TABLE IF NOT EXISTS task_notes (
 
 CREATE INDEX IF NOT EXISTS idx_task_notes_task_id ON task_notes(task_id, created_at);
 
+CREATE TABLE IF NOT EXISTS task_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    note_id INTEGER REFERENCES task_notes(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    media_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+    description TEXT NOT NULL DEFAULT '',
+    is_managed INTEGER NOT NULL DEFAULT 0
+        CHECK (is_managed IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_attachments_task_id ON task_attachments(task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_attachments_note_id ON task_attachments(note_id);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
     id,
     title,

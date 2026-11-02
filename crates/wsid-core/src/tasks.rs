@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::str::FromStr;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::attachments::{cleanup_managed_files_after_delete, load_all_attachments_for_task, load_task_description_attachments};
 use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::{ShortIdGenerator, normalize_task_id};
@@ -202,6 +204,7 @@ pub(crate) fn get_task_conn(conn: &Connection, raw_id: &str) -> Result<Task> {
 
     let mut task = task_opt.ok_or_else(|| WsidError::TaskNotFound(id.clone()))?;
     task.tags = load_task_tags(conn, &id)?;
+    task.attachments = load_task_description_attachments(conn, &id)?;
     Ok(task)
 }
 
@@ -225,6 +228,7 @@ pub(crate) fn list_tasks_conn(conn: &Connection) -> Result<Vec<Task>> {
     for row in rows {
         let mut task = row?;
         task.tags = load_task_tags(conn, &task.id)?;
+        task.attachments = load_task_description_attachments(conn, &task.id)?;
         tasks.push(task);
     }
     Ok(tasks)
@@ -342,11 +346,17 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
 }
 
 pub fn delete_task(db: &mut Database, raw_id: &str) -> Result<()> {
+    delete_task_with_attachments_dir(db, raw_id, None)
+}
+
+pub fn delete_task_with_attachments_dir(db: &mut Database, raw_id: &str, managed_dir_override: Option<&Path>) -> Result<()> {
     let id = normalize_task_id(raw_id)?;
+    let existing_attachments = load_all_attachments_for_task(&db.conn, &id).unwrap_or_default();
     let affected = db.conn.execute("DELETE FROM tasks WHERE id = ?1", [&id])?;
     if affected == 0 {
         return Err(WsidError::TaskNotFound(id));
     }
+    cleanup_managed_files_after_delete(&db.conn, &existing_attachments, managed_dir_override);
     Ok(())
 }
 
@@ -413,6 +423,7 @@ pub(crate) fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         urgent_override: urgent_i64 != 0,
         manual_priority: i8::try_from(manual_priority_i64).unwrap_or(0),
         tags: Vec::new(),
+        attachments: Vec::new(),
         reporter: row.get(13)?,
         assignee: row.get(14)?,
         evaluator: row.get(15)?,

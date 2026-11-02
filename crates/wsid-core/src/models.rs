@@ -259,11 +259,45 @@ pub struct TaskRelation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskAttachment {
+    pub id: i64,
+    pub task_id: String,
+    pub note_id: Option<i64>,
+    pub file_path: String,
+    pub file_name: String,
+    pub media_type: String,
+    pub description: String,
+    pub is_managed: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+impl TaskAttachment {
+    /// Returns the accessibility alt text (`description` when non-empty, otherwise `file_name`).
+    pub fn alt_text(&self) -> &str {
+        let trimmed = self.description.trim();
+        if trimmed.is_empty() { &self.file_name } else { trimmed }
+    }
+
+    /// Returns `true` if `media_type` starts with `"image/"`.
+    pub fn is_image(&self) -> bool {
+        self.media_type.starts_with("image/")
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentInput {
+    pub path: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskNote {
     pub id: i64,
     pub task_id: String,
     pub author: String,
     pub body: String,
+    #[serde(default)]
+    pub attachments: Vec<TaskAttachment>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -298,6 +332,8 @@ pub struct Task {
     pub urgent_override: bool,
     pub manual_priority: i8,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub attachments: Vec<TaskAttachment>,
     pub reporter: String,
     pub assignee: String,
     pub evaluator: String,
