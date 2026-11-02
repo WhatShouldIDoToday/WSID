@@ -1,4 +1,5 @@
 [tools]
+bun = "latest"
 rumdl = "latest"
 rust = { version = "stable", components = ["rustfmt", "clippy"] }
 taplo = "latest"
