@@ -1,4 +1,5 @@
 pub mod app;
+pub mod form;
 pub mod ui;
 
 use std::path::Path;

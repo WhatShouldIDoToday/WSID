@@ -9,6 +9,7 @@ use ratatui::widgets::{
 use wsid_core::{EisenhowerQuadrant, TaskStatus, default_global_db_path, get_about_metadata};
 
 use crate::tui::app::{ActiveTab, DataEntryForm, DatabaseSortColumn, DetailPromptKind, TuiApp};
+use crate::tui::form;
 
 const SELECTED_STYLE: Style = Style::new()
     .fg(Color::Black)
@@ -61,6 +62,10 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp) {
 
     if app.about_modal_open {
         render_about_modal(frame, frame.area(), app);
+    }
+
+    if app.form_errors.is_some() {
+        render_form_error_modal(frame, frame.area(), app);
     }
 }
 
@@ -646,19 +651,30 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         .state
         .select(Some(app.entry_form.active_index));
 
+    let label_width = form::label_width();
+    let error_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     let mut items: Vec<ListItem> = Vec::new();
-    for (idx, label) in DataEntryForm::LABELS.iter().enumerate() {
+    // Rows each item occupies (1, or 2 when an error line is shown), for cursor placement.
+    let mut heights: Vec<u16> = Vec::new();
+    for (idx, spec) in form::FIELDS.iter().enumerate() {
         let is_active = app.entry_form.active_index == idx;
         let val = &app.entry_form.fields[idx];
-        let text = format!("{label:<38}: {val}");
-        let style = if is_active {
+        let error = app.entry_form.errors[idx].as_deref();
+        let style = if error.is_some() {
+            error_style
+        } else if is_active {
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
-        items.push(ListItem::new(Line::from(Span::styled(text, style))));
+        let mut lines = vec![Line::from(Span::styled(format!("{:<label_width$}: {val}", spec.label), style))];
+        if let Some(msg) = error {
+            lines.push(Line::from(Span::styled(format!("{}✗ {msg}", " ".repeat(label_width + 2)), error_style)));
+        }
+        heights.push(lines.len() as u16);
+        items.push(ListItem::new(lines));
     }
 
     let is_submit = app.entry_form.active_index == DataEntryForm::SUBMIT_INDEX;
@@ -677,31 +693,83 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     let form_block = panel_block(" Add New Task ", Borders::NONE, app.accessible_mode);
     let inner_area = form_block.inner(area);
 
-    let form = List::new(items)
+    // Background-only highlight so red error text stays red on the selected row.
+    let form_widget = List::new(items)
         .block(form_block)
-        .highlight_style(SELECTED_STYLE)
+        .highlight_style(Style::new().bg(Color::DarkGray))
         .highlight_symbol(">> ")
         .highlight_spacing(HighlightSpacing::Always);
-    frame.render_stateful_widget(form, area, &mut app.entry_form.state);
+    frame.render_stateful_widget(form_widget, area, &mut app.entry_form.state);
 
-    if app.entry_form.active_index < DataEntryForm::SUBMIT_INDEX && inner_area.height > 0 {
+    let active = app.entry_form.active_index;
+    if active < DataEntryForm::SUBMIT_INDEX && inner_area.height > 0 {
         let offset = app.entry_form.state.offset();
-        if app.entry_form.active_index >= offset {
-            let visible_row = (app.entry_form.active_index - offset) as u16;
+        if active >= offset {
+            let visible_row: u16 = heights[offset..active].iter().sum();
             if visible_row < inner_area.height {
-                let val_len = app.entry_form.fields[app.entry_form.active_index]
-                    .chars()
-                    .count() as u16;
-                // ">> " (3) + "{label:<38}: " (40) = 43 chars
+                let val_len = app.entry_form.fields[active].chars().count() as u16;
                 let cursor_x = inner_area
                     .x
-                    .saturating_add(43 + val_len)
+                    .saturating_add(form::value_column() as u16 + val_len)
                     .min(inner_area.right().saturating_sub(1));
                 let cursor_y = inner_area.y.saturating_add(visible_row);
                 frame.set_cursor_position(Position::new(cursor_x, cursor_y));
             }
         }
     }
+}
+
+/// Label without its leading number and trailing hint, e.g. `3. Due Date (YYYY-MM-DD HH:MM)` -> `Due Date`.
+fn short_label(label: &str) -> &str {
+    let no_num = label.split_once(". ").map_or(label, |(_, rest)| rest);
+    no_num
+        .split(" (")
+        .next()
+        .unwrap_or(no_num)
+        .trim_end_matches(" *")
+}
+
+fn render_form_error_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    let Some(errors) = app.form_errors.as_ref() else {
+        return;
+    };
+    let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+
+    let mut lines: Vec<Line> = vec![Line::from(Span::styled(
+        format!("Fix {} problem(s) before creating the task:", errors.len()),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    lines.push(Line::from(""));
+    for (idx, msg) in errors {
+        let name = idx.map_or("Task", |i| short_label(form::FIELDS[i].label));
+        lines.push(Line::from(vec![Span::styled("✗ ", red), Span::styled(format!("{name}: "), red), Span::raw(msg.clone())]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("[Enter/Esc] Back to the form", Style::default().fg(Color::Cyan))));
+
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let width = (area.width * 7 / 10).max(40).min(area.width);
+    let popup =
+        Rect { x: area.x + (area.width.saturating_sub(width)) / 2, y: area.y + (area.height.saturating_sub(height)) / 2, width, height };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(Span::styled(" Cannot create task ", red))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Red));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        popup,
+    );
+}
+
+fn looks_like_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    ["error", "failed", "cannot", "invalid", "blocked", "unknown", "expected"]
+        .iter()
+        .any(|w| lower.contains(w))
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
@@ -721,9 +789,20 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
         ActiveTab::DataEntry => "[Tab/Up/Down] Field | [Ctrl+S] Submit | [Esc] Cancel | [?] Help & Status",
     };
 
-    let text = if app.status_message.is_empty() { format!(" {hints}") } else { format!(" {}  │  {hints}", app.status_message) };
+    let mut spans: Vec<Span> = Vec::new();
+    if app.status_message.is_empty() {
+        spans.push(Span::raw(format!(" {hints}")));
+    } else {
+        let style = if looks_like_error(&app.status_message) {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(format!(" {}", app.status_message), style));
+        spans.push(Span::raw(format!("  │  {hints}")));
+    }
 
-    let footer = Paragraph::new(text)
+    let footer = Paragraph::new(Line::from(spans))
         .style(Style::default().fg(Color::Cyan))
         .block(
             Block::default()

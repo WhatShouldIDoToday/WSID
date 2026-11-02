@@ -15,6 +15,7 @@ use wsid_core::{
 
 use crate::args::{parse_date_arg, parse_duration_estimate, parse_relation_arg};
 use crate::cli_runner::read_system_clipboard_attachment;
+pub use crate::tui::form::DataEntryForm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
@@ -118,68 +119,6 @@ pub enum DetailPromptKind {
     ConfirmDeleteNote,
 }
 
-#[derive(Debug, Clone)]
-pub struct DataEntryForm {
-    pub fields: [String; 16],
-    pub active_index: usize,
-    pub state: ListState,
-}
-
-impl DataEntryForm {
-    pub const SUBMIT_INDEX: usize = 16;
-
-    pub const LABELS: [&'static str; 16] = [
-        "1. Title *",
-        "2. Description",
-        "3. Due Date (YYYY-MM-DD or ISO)",
-        "4. SGDB Date (YYYY-MM-DD or ISO, <= Due)",
-        "5. Time Estimate (15m, 2h, 3d, 1w)",
-        "6. Difficulty (1-5)",
-        "7. Importance (1-5)",
-        "8. Manual Priority (1-5)",
-        "9. Urgent Override (true/false)",
-        "10. Tags (single words)",
-        "11. Relations (e.g. blocks:AB1234)",
-        "12. Attach File Path",
-        "13. Attach Alt Description",
-        "14. Reporter",
-        "15. Assignee",
-        "16. Evaluator",
-    ];
-
-    pub fn new(default_user: &str) -> Self {
-        let mut state = ListState::default();
-        state.select(Some(0));
-        Self {
-            fields: [
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                "3".to_string(),
-                "3".to_string(),
-                "3".to_string(),
-                "false".to_string(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                default_user.to_string(),
-                default_user.to_string(),
-                default_user.to_string(),
-            ],
-            active_index: 0,
-            state,
-        }
-    }
-
-    pub fn set_active_index(&mut self, index: usize) {
-        self.active_index = index;
-        self.state.select(Some(index));
-    }
-}
-
 pub struct TuiApp {
     pub db: Database,
     pub db_path: PathBuf,
@@ -238,6 +177,9 @@ pub struct TuiApp {
     pub detail_prompt_kind: DetailPromptKind,
     pub detail_prompt_input: String,
     pub detail_note_cursor: usize,
+
+    /// Validation problems shown in a modal after a failed submit: `(field index, message)`.
+    pub form_errors: Option<Vec<(Option<usize>, String)>>,
 
     // Active-user switching prompt
     pub user_switching: bool,
@@ -303,6 +245,7 @@ impl TuiApp {
             detail_prompt_kind: DetailPromptKind::None,
             detail_prompt_input: String::new(),
             detail_note_cursor: 0,
+            form_errors: None,
             user_switching: false,
             user_input: String::new(),
             about_modal_open: false,
@@ -315,6 +258,7 @@ impl TuiApp {
     /// Polls `PRAGMA data_version` on the SQLite database and reloads state if an external
     /// process (e.g. MCP server or CLI) committed changes.
     pub fn on_tick(&mut self) -> wsid_core::Result<bool> {
+        self.entry_form.validate_if_idle(std::time::Instant::now());
         if self.change_detector.has_external_changes(&self.db)? {
             self.refresh_all()?;
             self.status_message = "Live reload: detected external database update".to_string();
@@ -457,6 +401,20 @@ impl TuiApp {
         // Global Ctrl+C always exits cleanly
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
+            return;
+        }
+
+        // Form validation modal blocks all other input until dismissed
+        if self.form_errors.is_some() {
+            if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
+                let first = self
+                    .form_errors
+                    .take()
+                    .and_then(|errs| errs.into_iter().find_map(|(i, _)| i));
+                if let Some(i) = first {
+                    self.entry_form.set_active_index(i);
+                }
+            }
             return;
         }
 
@@ -1019,14 +977,10 @@ impl TuiApp {
                     self.entry_form.set_active_index(next);
                 }
             }
-            KeyCode::Backspace => {
-                if self.entry_form.active_index < DataEntryForm::SUBMIT_INDEX {
-                    self.entry_form.fields[self.entry_form.active_index].pop();
-                }
-            }
+            KeyCode::Backspace => self.entry_form.backspace(),
             KeyCode::Char(ch) => {
                 if self.entry_form.active_index < DataEntryForm::SUBMIT_INDEX {
-                    self.entry_form.fields[self.entry_form.active_index].push(ch);
+                    self.entry_form.type_char(ch);
                 } else if ch == ' ' {
                     self.submit_data_entry_form();
                 }
@@ -1036,114 +990,53 @@ impl TuiApp {
     }
 
     pub fn submit_data_entry_form(&mut self) {
-        let f = &self.entry_form.fields;
-        let title = f[0].trim().to_string();
-        if title.is_empty() {
-            self.status_message = "Validation error: Title is required".to_string();
+        let problems = self.entry_form.validate_all();
+        if !problems.is_empty() {
+            self.form_errors = Some(problems.into_iter().map(|(i, m)| (Some(i), m)).collect());
             return;
         }
 
-        let description = if f[1].trim().is_empty() { None } else { Some(f[1].trim().to_string()) };
-        let due_date = match parse_date_arg("due_date", Some(&f[2])) {
-            Ok(d) => d,
-            Err(e) => {
-                self.status_message = format!("Validation error: {e}");
-                return;
-            }
-        };
-        let sgdb_date = match parse_date_arg("sgdb_date", Some(&f[3])) {
-            Ok(d) => d,
-            Err(e) => {
-                self.status_message = format!("Validation error: {e}");
-                return;
-            }
-        };
-        let time_estimate_minutes = if f[4].trim().is_empty() {
-            None
-        } else {
-            match parse_duration_estimate(&f[4]) {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    self.status_message = format!("Validation error: {e}");
-                    return;
-                }
-            }
-        };
-        let difficulty = match f[5].trim().parse::<u8>() {
-            Ok(v) => Some(v),
-            Err(_) => {
-                self.status_message = "Validation error: Difficulty must be an integer 1..=5".to_string();
-                return;
-            }
-        };
-        let importance = match f[6].trim().parse::<u8>() {
-            Ok(v) => Some(v),
-            Err(_) => {
-                self.status_message = "Validation error: Importance must be an integer 1..=5".to_string();
-                return;
-            }
-        };
-        let manual_priority = match f[7].trim().parse::<i8>() {
-            Ok(v) if (1..=5).contains(&v) => Some(v),
-            _ => {
-                self.status_message = "Validation error: Manual Priority must be an integer 1..=5".to_string();
-                return;
-            }
-        };
-        let urgent_override = Some(matches!(f[8].trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "y"));
-
+        // Every field has passed its validator, so the parses below cannot fail.
+        let f = self.entry_form.fields.clone();
+        let opt = |s: &str| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) };
         let tags: Vec<String> = f[9]
             .split(|c: char| c == ',' || c.is_whitespace())
-            .filter(|s| !s.trim().is_empty())
+            .filter(|s| !s.is_empty())
             .map(ToString::to_string)
             .collect();
 
-        // Parse relation entries like `blocks:AB1234, sub_task_of:CD5678` or plain `AB1234` (defaults to `related`)
+        // Relations like `blocks:AB1234, sub_task_of:CD5678` or a bare ID (defaults to `related`)
         let mut parsed_relations: Vec<(RelationInputKind, String)> = Vec::new();
         for tok in f[10]
             .split(|c: char| c == ',' || c.is_whitespace())
-            .filter(|s| !s.trim().is_empty())
+            .filter(|s| !s.is_empty())
         {
-            if let Some((rel_str, target_str)) = tok.split_once(':') {
-                match parse_relation_arg(rel_str) {
-                    Ok(kind) => parsed_relations.push((kind, target_str.to_string())),
-                    Err(e) => {
-                        self.status_message = format!("Validation error in relation '{tok}': {e}");
-                        return;
-                    }
-                }
-            } else {
-                parsed_relations.push((RelationInputKind::Related, tok.to_string()));
+            let (rel, target) = tok.split_once(':').unwrap_or(("related", tok));
+            if let Ok(kind) = parse_relation_arg(rel) {
+                parsed_relations.push((kind, target.to_string()));
             }
         }
 
-        let attach_path_str = f[11].trim().to_string();
-        let attach_desc_opt = if f[12].trim().is_empty() { None } else { Some(f[12].trim().to_string()) };
+        let input = CreateTaskInput {
+            title: f[0].trim().to_string(),
+            description: opt(&f[1]),
+            due_date: parse_date_arg("due_date", Some(&f[2])).ok().flatten(),
+            sgdb_date: parse_date_arg("sgdb_date", Some(&f[3])).ok().flatten(),
+            time_estimate_minutes: opt(&f[4]).and_then(|s| parse_duration_estimate(&s).ok()),
+            difficulty: f[5].trim().parse::<u8>().ok(),
+            importance: f[6].trim().parse::<u8>().ok(),
+            manual_priority: f[7].trim().parse::<i8>().ok(),
+            urgent_override: Some(matches!(f[8].trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "y")),
+            tags,
+            reporter: opt(&f[13]),
+            assignee: opt(&f[14]),
+            evaluator: opt(&f[15]),
+            ..Default::default()
+        };
+        let attach_path = f[11].trim().to_string();
+        let attach_desc = opt(&f[12]);
 
-        let reporter = if f[13].trim().is_empty() { None } else { Some(f[13].trim().to_string()) };
-        let assignee = if f[14].trim().is_empty() { None } else { Some(f[14].trim().to_string()) };
-        let evaluator = if f[15].trim().is_empty() { None } else { Some(f[15].trim().to_string()) };
-
-        match create_task(
-            &mut self.db,
-            CreateTaskInput {
-                title,
-                description,
-                due_date,
-                sgdb_date,
-                time_estimate_minutes,
-                difficulty,
-                importance,
-                manual_priority,
-                urgent_override,
-                tags,
-                reporter,
-                assignee,
-                evaluator,
-                ..Default::default()
-            },
-            &self.user,
-        ) {
+        match create_task(&mut self.db, input, &self.user) {
             Ok(created) => {
                 for (kind, target_id) in parsed_relations {
                     if let Err(err) = link_tasks(&mut self.db, &created.id, kind, &target_id) {
@@ -1153,9 +1046,8 @@ impl TuiApp {
                     }
                 }
 
-                if !attach_path_str.is_empty()
-                    && let Err(err) =
-                        attach_existing_file(&mut self.db, &created.id, None, Path::new(&attach_path_str), attach_desc_opt.as_deref())
+                if !attach_path.is_empty()
+                    && let Err(err) = attach_existing_file(&mut self.db, &created.id, None, Path::new(&attach_path), attach_desc.as_deref())
                 {
                     self.status_message = format!("Created [{}], but attaching file failed: {err}", created.id);
                     let _ = self.refresh_all();
@@ -1167,7 +1059,12 @@ impl TuiApp {
                 self.status_message = format!("Created task [{}] {}", created.id, created.title);
             }
             Err(err) => {
-                self.status_message = format!("Validation error: {err}");
+                let msg = err.to_string();
+                let msg = msg
+                    .strip_prefix("validation error: ")
+                    .unwrap_or(&msg)
+                    .to_string();
+                self.form_errors = Some(vec![(None, msg)]);
             }
         }
     }

@@ -525,4 +525,84 @@ mod tests {
         assert!(app.detail_modal.is_none());
         assert!(app.all_tasks.is_empty());
     }
+
+    #[test]
+    fn tui_add_task_form_cursor_mask_validation_and_error_modal() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("tui_form.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        let type_str = |app: &mut TuiApp, s: &str| {
+            for ch in s.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        };
+        let row_text = |terminal: &Terminal<TestBackend>, y: u16| -> String {
+            let buf = terminal.backend().buffer();
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect::<String>()
+        };
+
+        press(&mut app, KeyCode::Char('5'));
+
+        // Title, then a masked Due date typed as bare digits, then SGDB: cursor must sit right after the value.
+        type_str(&mut app, "Hello");
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        type_str(&mut app, "20990105");
+        assert_eq!(app.entry_form.fields[2], "2099-01-05 ");
+        press(&mut app, KeyCode::Tab);
+        type_str(&mut app, "20990101");
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let cursor = terminal.get_cursor_position().unwrap();
+        let line = row_text(&terminal, cursor.y);
+        let value = &app.entry_form.fields[3];
+        let end_of_value = line.find(value.as_str()).unwrap() + value.chars().count();
+        assert_eq!(cursor.x as usize, end_of_value, "cursor should sit at the end of the SGDB value: {line:?}");
+
+        // Leaving the field validates immediately: SGDB 01-01 is fine, but make it invalid and tab away.
+        app.entry_form.fields[3] = "2099-01-09".to_string();
+        press(&mut app, KeyCode::Tab);
+        assert!(app.entry_form.errors[3].is_some());
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let rendered: String = (0..36)
+            .map(|y| row_text(&terminal, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("✗"), "inline error line rendered");
+        let buf = terminal.backend().buffer();
+        let red_cells = (0..36u16)
+            .flat_map(|y| (0..120u16).map(move |x| (x, y)))
+            .filter(|&(x, y)| buf[(x, y)].symbol() == "✗" && buf[(x, y)].fg == ratatui::style::Color::Red)
+            .count();
+        assert!(red_cells > 0, "error marker is red");
+
+        // Submitting an invalid form opens the modal and Enter returns focus to the first invalid field.
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        let errs = app.form_errors.clone().expect("modal opened");
+        assert!(errs.iter().any(|(i, _)| *i == Some(3)));
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let rendered: String = (0..36)
+            .map(|y| row_text(&terminal, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Cannot create task"));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.form_errors.is_none());
+        assert_eq!(app.entry_form.active_index, 3);
+
+        // Fix the SGDB and submit successfully.
+        app.entry_form.fields[3] = "2099-01-01".to_string();
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(app.form_errors.is_none(), "{:?}", app.form_errors);
+        assert_eq!(app.all_tasks.len(), 1);
+    }
 }
