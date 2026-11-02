@@ -383,6 +383,8 @@
           await refreshAllData();
         }}
         onSelectTask={openTaskDetail}
+        onDataChanged={refreshAllData}
+        {announce}
       />
     {:else if activeTab === "database"}
       <DatabaseView

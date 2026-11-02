@@ -20,6 +20,14 @@
     $props();
 
   let filterMyTasksOnly = $state<boolean>(false);
+  let draggingTaskId = $state<string | null>(null);
+  let dropTargetStatus = $state<TaskStatus | null>(null);
+  let pointerDrag = $state<{
+    task: Task;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
 
   let filteredTasks = $derived(
     filterMyTasksOnly
@@ -51,7 +59,116 @@
       announce(`Cannot move task ${task.id}: ${String(err)}`);
     }
   }
+
+  function isInteractiveTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    return Boolean(target.closest("button, select, input, textarea, a, label"));
+  }
+
+  function handleDragStart(e: DragEvent, task: Task) {
+    if (isInteractiveTarget(e.target)) {
+      e.preventDefault();
+      return;
+    }
+    pointerDrag = null;
+    draggingTaskId = task.id;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", task.id);
+    }
+  }
+
+  function handleDragOver(e: DragEvent, colStatus: TaskStatus) {
+    if (!draggingTaskId) return;
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "move";
+    }
+    if (dropTargetStatus !== colStatus) {
+      dropTargetStatus = colStatus;
+    }
+  }
+
+  function handleDragLeave(e: DragEvent, colStatus: TaskStatus) {
+    const currentTarget = e.currentTarget as HTMLElement | null;
+    const related = e.relatedTarget as Node | null;
+    if (currentTarget && related && currentTarget.contains(related)) {
+      return;
+    }
+    if (dropTargetStatus === colStatus) {
+      dropTargetStatus = null;
+    }
+  }
+
+  async function handleDrop(e: DragEvent, colStatus: TaskStatus) {
+    e.preventDefault();
+    const id =
+      draggingTaskId || e.dataTransfer?.getData("text/plain")?.trim() || null;
+    draggingTaskId = null;
+    dropTargetStatus = null;
+    pointerDrag = null;
+    if (!id) return;
+    const task = tasks.find((t) => t.id === id);
+    if (task && task.status !== colStatus) {
+      await moveTaskToStatus(task, colStatus);
+    }
+  }
+
+  function handleDragEnd() {
+    draggingTaskId = null;
+    dropTargetStatus = null;
+    pointerDrag = null;
+  }
+
+  function handlePointerDown(e: PointerEvent, task: Task) {
+    if (e.button !== 0 || isInteractiveTarget(e.target)) return;
+    pointerDrag = {
+      task,
+      startX: e.clientX,
+      startY: e.clientY,
+      active: false,
+    };
+  }
+
+  function handleWindowPointerMove(e: PointerEvent) {
+    if (!pointerDrag) return;
+    const dx = e.clientX - pointerDrag.startX;
+    const dy = e.clientY - pointerDrag.startY;
+    if (!pointerDrag.active && Math.hypot(dx, dy) > 6) {
+      pointerDrag.active = true;
+      draggingTaskId = pointerDrag.task.id;
+    }
+    if (pointerDrag.active) {
+      e.preventDefault();
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const colEl = el?.closest("[data-drop-column]") as HTMLElement | null;
+      const statusAttr = colEl?.dataset.dropColumn as TaskStatus | undefined;
+      dropTargetStatus = statusAttr ?? null;
+    }
+  }
+
+  async function handleWindowPointerUp() {
+    if (!pointerDrag) return;
+    const activeDrag = pointerDrag;
+    const targetCol = dropTargetStatus;
+    pointerDrag = null;
+    draggingTaskId = null;
+    dropTargetStatus = null;
+    if (
+      activeDrag.active &&
+      targetCol &&
+      activeDrag.task.status !== targetCol
+    ) {
+      await moveTaskToStatus(activeDrag.task, targetCol);
+    }
+  }
 </script>
+
+<svelte:window
+  onpointermove={handleWindowPointerMove}
+  onpointerup={handleWindowPointerUp}
+  onpointercancel={handleDragEnd}
+/>
 
 <section aria-labelledby="kanban-view-heading" class="kanban-view">
   <div
@@ -78,7 +195,12 @@
       {@const colTasks = tasksForColumn(colStatus)}
       <section
         class="kanban-column"
+        class:drop-target-active={dropTargetStatus === colStatus}
+        data-drop-column={colStatus}
         aria-labelledby={`kanban-col-${colStatus}`}
+        ondragover={(e) => handleDragOver(e, colStatus)}
+        ondragleave={(e) => handleDragLeave(e, colStatus)}
+        ondrop={(e) => handleDrop(e, colStatus)}
       >
         <h3 id={`kanban-col-${colStatus}`} class="kanban-col-header">
           <span>{STATUS_LABELS[colStatus]}</span>
@@ -94,9 +216,14 @@
             {#each colTasks as task (task.id)}
               <li>
                 <article
-                  class="task-card"
+                  class="task-card draggable-card"
+                  class:is-dragging={draggingTaskId === task.id}
                   style="padding: 0.75rem;"
                   aria-labelledby={`kanban-card-${task.id}`}
+                  draggable="true"
+                  ondragstart={(e) => handleDragStart(e, task)}
+                  ondragend={handleDragEnd}
+                  onpointerdown={(e) => handlePointerDown(e, task)}
                 >
                   <div class="meta-row" style="justify-content: space-between;">
                     <span class="task-id-badge">{task.id}</span>

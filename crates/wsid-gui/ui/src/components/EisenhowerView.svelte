@@ -4,6 +4,7 @@
     type EisenhowerQuadrant,
     QUADRANT_META,
     STATUS_LABELS,
+    updateExistingTask,
     formatDurationMinutes,
   } from "../lib/ipc";
 
@@ -13,6 +14,8 @@
     filterByUser: boolean;
     onToggleUserFilter: (enabled: boolean) => void;
     onSelectTask: (id: string) => void;
+    onDataChanged: () => void;
+    announce: (msg: string) => void;
   }
 
   let {
@@ -21,6 +24,8 @@
     filterByUser,
     onToggleUserFilter,
     onSelectTask,
+    onDataChanged,
+    announce,
   }: Props = $props();
 
   const QUADRANTS: EisenhowerQuadrant[] = [
@@ -30,10 +35,177 @@
     "q4_later",
   ];
 
+  let draggingTaskId = $state<string | null>(null);
+  let dropTargetQuadrant = $state<EisenhowerQuadrant | null>(null);
+  let deadlineWarning = $state<string | null>(null);
+  let pointerDrag = $state<{
+    entry: EisenhowerClassification;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
+
   function itemsForQuadrant(q: EisenhowerQuadrant): EisenhowerClassification[] {
     return items.filter((item) => item.quadrant === q);
   }
+
+  function isInteractiveTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    return Boolean(target.closest("button, select, input, textarea, a, label"));
+  }
+
+  async function moveEntryToQuadrant(
+    entry: EisenhowerClassification,
+    targetQuadrant: EisenhowerQuadrant,
+  ) {
+    if (entry.quadrant === targetQuadrant) return;
+
+    const targetImportant =
+      targetQuadrant === "q1_do_first" || targetQuadrant === "q2_schedule";
+    const targetUrgent =
+      targetQuadrant === "q1_do_first" ||
+      targetQuadrant === "q3_delegate_quick";
+
+    const nextImportance = targetImportant
+      ? Math.max(entry.task.importance, 3)
+      : Math.min(entry.task.importance, 2);
+    const nextUrgentOverride = targetUrgent;
+
+    const deadlineForcesUrgent =
+      !targetUrgent && entry.slack_days !== null && entry.slack_days <= 2.0;
+
+    try {
+      await updateExistingTask({
+        id: entry.task.id,
+        importance: nextImportance,
+        urgent_override: nextUrgentOverride,
+      });
+
+      if (deadlineForcesUrgent) {
+        const resultingQuadrant = targetImportant
+          ? QUADRANT_META.q1_do_first.title
+          : QUADRANT_META.q3_delegate_quick.title;
+        const msg = `Task ${entry.task.id} (${entry.task.title}) updated (Importance ${nextImportance}/5, Urgent Override cleared), but it remains in ${resultingQuadrant} because its deadline (${entry.effective_deadline ?? "upcoming"}, ${entry.slack_days?.toFixed(1)}d slack) is within the 2.0-day urgent horizon.`;
+        deadlineWarning = msg;
+        announce(msg);
+      } else {
+        deadlineWarning = null;
+        announce(
+          `Moved ${entry.task.id} (${entry.task.title}) to ${QUADRANT_META[targetQuadrant].title} (Importance ${nextImportance}/5, Urgent Override ${nextUrgentOverride ? "on" : "off"})`,
+        );
+      }
+
+      onDataChanged();
+    } catch (err) {
+      announce(`Cannot move task ${entry.task.id}: ${String(err)}`);
+    }
+  }
+
+  function handleDragStart(e: DragEvent, entry: EisenhowerClassification) {
+    if (isInteractiveTarget(e.target)) {
+      e.preventDefault();
+      return;
+    }
+    pointerDrag = null;
+    draggingTaskId = entry.task.id;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", entry.task.id);
+    }
+  }
+
+  function handleDragOver(e: DragEvent, q: EisenhowerQuadrant) {
+    if (!draggingTaskId) return;
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "move";
+    }
+    if (dropTargetQuadrant !== q) {
+      dropTargetQuadrant = q;
+    }
+  }
+
+  function handleDragLeave(e: DragEvent, q: EisenhowerQuadrant) {
+    const currentTarget = e.currentTarget as HTMLElement | null;
+    const related = e.relatedTarget as Node | null;
+    if (currentTarget && related && currentTarget.contains(related)) {
+      return;
+    }
+    if (dropTargetQuadrant === q) {
+      dropTargetQuadrant = null;
+    }
+  }
+
+  async function handleDrop(e: DragEvent, q: EisenhowerQuadrant) {
+    e.preventDefault();
+    const id =
+      draggingTaskId || e.dataTransfer?.getData("text/plain")?.trim() || null;
+    draggingTaskId = null;
+    dropTargetQuadrant = null;
+    pointerDrag = null;
+    if (!id) return;
+    const entry = items.find((item) => item.task.id === id);
+    if (entry && entry.quadrant !== q) {
+      await moveEntryToQuadrant(entry, q);
+    }
+  }
+
+  function handleDragEnd() {
+    draggingTaskId = null;
+    dropTargetQuadrant = null;
+    pointerDrag = null;
+  }
+
+  function handlePointerDown(e: PointerEvent, entry: EisenhowerClassification) {
+    if (e.button !== 0 || isInteractiveTarget(e.target)) return;
+    pointerDrag = {
+      entry,
+      startX: e.clientX,
+      startY: e.clientY,
+      active: false,
+    };
+  }
+
+  function handleWindowPointerMove(e: PointerEvent) {
+    if (!pointerDrag) return;
+    const dx = e.clientX - pointerDrag.startX;
+    const dy = e.clientY - pointerDrag.startY;
+    if (!pointerDrag.active && Math.hypot(dx, dy) > 6) {
+      pointerDrag.active = true;
+      draggingTaskId = pointerDrag.entry.task.id;
+    }
+    if (pointerDrag.active) {
+      e.preventDefault();
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const quadEl = el?.closest("[data-drop-quadrant]") as HTMLElement | null;
+      const quadAttr = quadEl?.dataset.dropQuadrant as
+        EisenhowerQuadrant | undefined;
+      dropTargetQuadrant = quadAttr ?? null;
+    }
+  }
+
+  async function handleWindowPointerUp() {
+    if (!pointerDrag) return;
+    const activeDrag = pointerDrag;
+    const targetQuad = dropTargetQuadrant;
+    pointerDrag = null;
+    draggingTaskId = null;
+    dropTargetQuadrant = null;
+    if (
+      activeDrag.active &&
+      targetQuad &&
+      activeDrag.entry.quadrant !== targetQuad
+    ) {
+      await moveEntryToQuadrant(activeDrag.entry, targetQuad);
+    }
+  }
 </script>
+
+<svelte:window
+  onpointermove={handleWindowPointerMove}
+  onpointerup={handleWindowPointerUp}
+  onpointercancel={handleDragEnd}
+/>
 
 <section aria-labelledby="eisenhower-view-heading">
   <div
@@ -57,11 +229,38 @@
     </div>
   </div>
 
+  {#if deadlineWarning}
+    <div
+      class="card"
+      role="alert"
+      style="margin-bottom: 1rem; border-color: var(--warning); background: rgba(251, 191, 36, 0.12); display: flex; justify-content: space-between; align-items: center; gap: 1rem;"
+    >
+      <span style="color: var(--warning-text); font-weight: 600;">
+        {deadlineWarning}
+      </span>
+      <button
+        type="button"
+        class="btn-sm"
+        onclick={() => (deadlineWarning = null)}
+      >
+        Dismiss
+      </button>
+    </div>
+  {/if}
+
   <div class="eisenhower-grid">
     {#each QUADRANTS as q (q)}
       {@const qItems = itemsForQuadrant(q)}
       {@const meta = QUADRANT_META[q]}
-      <section class="quadrant-panel" aria-labelledby={`quadrant-heading-${q}`}>
+      <section
+        class="quadrant-panel"
+        class:drop-target-active={dropTargetQuadrant === q}
+        data-drop-quadrant={q}
+        aria-labelledby={`quadrant-heading-${q}`}
+        ondragover={(e) => handleDragOver(e, q)}
+        ondragleave={(e) => handleDragLeave(e, q)}
+        ondrop={(e) => handleDrop(e, q)}
+      >
         <header
           style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.5rem;"
         >
@@ -93,7 +292,15 @@
           >
             {#each qItems as entry (entry.task.id)}
               <li>
-                <article class="task-card" style="padding: 0.75rem;">
+                <article
+                  class="task-card draggable-card"
+                  class:is-dragging={draggingTaskId === entry.task.id}
+                  style="padding: 0.75rem;"
+                  draggable="true"
+                  ondragstart={(e) => handleDragStart(e, entry)}
+                  ondragend={handleDragEnd}
+                  onpointerdown={(e) => handlePointerDown(e, entry)}
+                >
                   <div class="task-card-header">
                     <div>
                       <div class="meta-row" style="margin-bottom: 0.25rem;">

@@ -590,6 +590,9 @@ select[aria-invalid="true"] {
 }
 
 .kanban-column-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -597,6 +600,36 @@ select[aria-invalid="true"] {
   flex: 1;
   min-height: 0;
   padding-right: 0.15rem;
+}
+
+.draggable-card {
+  cursor: grab;
+  user-select: none;
+  transition:
+    opacity 0.12s ease,
+    border-color 0.12s ease,
+    transform 0.12s ease;
+}
+
+.draggable-card:active {
+  cursor: grabbing;
+}
+
+.draggable-card.is-dragging {
+  opacity: 0.45;
+  border-style: dashed;
+  border-color: var(--accent-primary);
+}
+
+.kanban-column.drop-target-active,
+.quadrant-panel.drop-target-active {
+  border-color: var(--accent-primary);
+  background: color-mix(
+    in srgb,
+    var(--bg-surface) 90%,
+    var(--accent-primary) 10%
+  );
+  box-shadow: inset 0 0 0 1px var(--accent-primary);
 }
 
 /* Eisenhower 2x2 Matrix */
@@ -1157,19 +1190,30 @@ input[type="text"].tag-compact-input {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-start;
   gap: 0.5rem;
 }
 
 .relation-combobox-wrapper {
+  flex: 0 1 24rem;
+  min-width: 16rem;
+  max-width: 100%;
+}
+
+.relation-input-group {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 1;
-  min-width: 15rem;
+  width: 100%;
 }
 
 .relation-combobox-input {
-  padding-right: 2.2rem !important;
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  padding: 0.45rem 2.2rem 0.45rem 0.65rem !important;
+  border-radius: 0.375rem;
 }
 
 .relation-combobox-trigger {
