@@ -1,3 +1,4 @@
+pub mod about;
 pub mod attachments;
 pub mod config;
 pub mod db;
@@ -10,6 +11,11 @@ pub mod scoring;
 pub mod search;
 pub mod tasks;
 
+pub use about::{
+    APP_FULL_NAME, APP_LICENSE_SPDX, APP_LICENSE_TEXT, APP_NAME, APP_REPOSITORY_URL, APP_VERSION, AboutMetadata, CrateAttribution,
+    LicenseGroup, LicenseOverviewCount, RUST_LICENSES_JSON, RustLicenseBundle, THIRD_PARTY_NOTICES_TEXT, get_about_metadata,
+    load_rust_license_bundle,
+};
 pub use attachments::{
     attach_existing_file, attach_existing_file_with_dir, get_attachment, infer_media_type, list_task_attachments, open_file_in_os,
     remove_attachment, remove_attachment_with_dir, save_clipboard_attachment, save_clipboard_attachment_with_dir,

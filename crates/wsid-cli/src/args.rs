@@ -148,6 +148,14 @@ pub enum Commands {
         #[arg(long, short = 'v')]
         verbose: bool,
     },
+
+    /// Display WSID application version, Apache-2.0 license, repository URL, and third-party license attributions
+    #[command(visible_alias = "licenses")]
+    About {
+        /// Print full third-party license notice texts in addition to the crate attribution summary
+        #[arg(long)]
+        full: bool,
+    },
 }
 
 #[derive(Debug, Args)]

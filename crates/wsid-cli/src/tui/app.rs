@@ -209,6 +209,10 @@ pub struct TuiApp {
     pub detail_modal: Option<TaskDetailSnapshot>,
     pub detail_prompt_kind: DetailPromptKind,
     pub detail_prompt_input: String,
+
+    // About & Third-Party Licenses Modal state
+    pub about_modal_open: bool,
+    pub about_scroll: u16,
 }
 
 impl TuiApp {
@@ -256,6 +260,8 @@ impl TuiApp {
             detail_modal: None,
             detail_prompt_kind: DetailPromptKind::None,
             detail_prompt_input: String::new(),
+            about_modal_open: false,
+            about_scroll: 0,
         };
         app.refresh_all()?;
         Ok(app)
@@ -389,6 +395,12 @@ impl TuiApp {
             return;
         }
 
+        // 0. If the About / Licenses modal is open, route keys to it
+        if self.about_modal_open {
+            self.handle_about_modal_key(key);
+            return;
+        }
+
         // 1. If the Task Detail Modal is open, route keys to it
         if self.detail_modal.is_some() {
             self.handle_detail_modal_key(key);
@@ -454,6 +466,12 @@ impl TuiApp {
                 } else {
                     self.status_message = "Refreshed database state".to_string();
                 }
+                return;
+            }
+            KeyCode::Char('?') => {
+                self.about_modal_open = true;
+                self.about_scroll = 0;
+                self.status_message = "About WSID & Third-Party Licenses — [j/k/PgUp/PgDn] Scroll, [Esc/?/q] Close".to_string();
                 return;
             }
             _ => {}
@@ -951,6 +969,31 @@ impl TuiApp {
             Err(err) => {
                 self.status_message = format!("Validation error: {err}");
             }
+        }
+    }
+
+    fn handle_about_modal_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                self.about_modal_open = false;
+                self.status_message = "Closed About & Licenses modal".to_string();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.about_scroll = self.about_scroll.saturating_add(1);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.about_scroll = self.about_scroll.saturating_sub(1);
+            }
+            KeyCode::PageDown | KeyCode::Char(' ') => {
+                self.about_scroll = self.about_scroll.saturating_add(15);
+            }
+            KeyCode::PageUp => {
+                self.about_scroll = self.about_scroll.saturating_sub(15);
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                self.about_scroll = 0;
+            }
+            _ => {}
         }
     }
 

@@ -8,14 +8,14 @@ use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use wsid_core::{
-    AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, CreateTaskInput, Database, DbChangeDetector,
+    AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, CreateTaskInput, Database, DbChangeDetector,
     EisenhowerClassification, FocusPreset, FocusQueueResponse, RelationInputKind, SearchHit, SearchQuery, StatusTransitionOutcome, Task,
     TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, add_task_note, attach_existing_file, compute_focus_queue,
-    create_task, default_config_path, default_global_db_path, delete_task, delete_task_note, get_attachment, get_blocked_tasks,
-    get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks,
-    get_task, link_tasks, list_eisenhower_matrix, list_task_notes, list_tasks, normalize_persona, open_file_in_os, remove_attachment,
-    resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
-    update_attachment_description, update_task,
+    create_task, default_config_path, default_global_db_path, delete_task, delete_task_note, get_about_metadata, get_attachment,
+    get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
+    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_task_notes, list_tasks, normalize_persona, open_file_in_os,
+    remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
+    unlink_tasks, update_attachment_description, update_task,
 };
 
 pub struct GuiAppState {
@@ -726,6 +726,11 @@ fn read_attachment_preview_data_url(state: State<'_, SharedGuiState>, attachment
     encode_file_to_data_url(Path::new(&att.file_path), &att.media_type)
 }
 
+#[tauri::command]
+fn get_about_info() -> Result<AboutMetadata, String> {
+    Ok(get_about_metadata())
+}
+
 pub fn spawn_db_change_watcher(app_handle: AppHandle, state: SharedGuiState) {
     std::thread::spawn(move || {
         let mut current_path: Option<PathBuf> = None;
@@ -795,6 +800,7 @@ pub fn run() {
             delete_attachment,
             open_attachment_native,
             read_attachment_preview_data_url,
+            get_about_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running WSID desktop application");
@@ -855,5 +861,11 @@ mod tests {
         assert!(data_url.starts_with("data:image/png;base64,"));
         let decoded = base64_decode(&data_url).unwrap();
         assert_eq!(decoded, b"\x89PNG\r\n\x1a\nmockup-bytes");
+
+        // Verify About and third-party license metadata endpoint
+        let about = get_about_info().unwrap();
+        assert_eq!(about.license_spdx, "Apache-2.0");
+        assert_eq!(about.repository_url, "https://github.com/dmbeta/WSID");
+        assert!(!about.rust_licenses.licenses.is_empty());
     }
 }

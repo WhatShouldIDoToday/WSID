@@ -577,6 +577,55 @@ export async function readAttachmentPreviewDataUrl(
   return invoke<string>("read_attachment_preview_data_url", { attachmentId });
 }
 
+export interface LicenseOverviewCount {
+  count: number;
+  id: string;
+  name: string;
+}
+
+export interface CrateAttribution {
+  name: string;
+  version: string;
+  authors: string[];
+  repository: string | null;
+}
+
+export interface LicenseGroup {
+  id: string;
+  name: string;
+  text: string;
+  used_by: CrateAttribution[];
+}
+
+export interface RustLicenseBundle {
+  overview: LicenseOverviewCount[];
+  licenses: LicenseGroup[];
+}
+
+export interface AboutMetadata {
+  app_name: string;
+  app_full_name: string;
+  version: string;
+  license_spdx: string;
+  repository_url: string;
+  license_text: string;
+  rust_licenses: RustLicenseBundle;
+}
+
+export interface FrontendDependencyLicense {
+  name: string;
+  version: string | null;
+  license: string | null;
+  repository: string | null;
+  author: string | null;
+  licenseText: string | null;
+  noticeText: string | null;
+}
+
+export async function getAboutInfo(): Promise<AboutMetadata> {
+  return invoke<AboutMetadata>("get_about_info");
+}
+
 export async function subscribeToExternalDbChanges(
   onChanged: () => void,
 ): Promise<UnlistenFn> {

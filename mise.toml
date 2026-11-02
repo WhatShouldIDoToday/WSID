@@ -1,5 +1,6 @@
 [tools]
 bun = "latest"
+"cargo:cargo-about" = { version = "latest", features = "cli" }
 rumdl = "latest"
 rust = { version = "stable", components = ["rustfmt", "clippy"] }
 taplo = "latest"

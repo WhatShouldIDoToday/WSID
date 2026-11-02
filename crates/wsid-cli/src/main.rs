@@ -193,6 +193,14 @@ mod tests {
         let show_str = String::from_utf8(show_buf).unwrap();
         assert!(show_str.contains("Kanban architecture diagram"));
         assert!(show_str.contains(&ext_img.display().to_string()));
+
+        // 5. Verify `wsid about` outputs version, Apache-2.0 license, repository URL, and third-party crates
+        let mut about_buf = Vec::new();
+        execute_command(Commands::About { full: true }, &db_path, &config, "alice", OutputMode::Accessible, &mut about_buf).unwrap();
+        let about_str = String::from_utf8(about_buf).unwrap();
+        assert!(about_str.contains("Apache-2.0"));
+        assert!(about_str.contains("https://github.com/dmbeta/WSID"));
+        assert!(about_str.contains("ratatui"));
     }
 
     #[test]
@@ -277,6 +285,15 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         assert!(app.accessible_mode);
         terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+
+        // Open About & Third-Party Licenses modal ('?'), scroll ('j'), and close ('Esc')
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert!(app.about_modal_open);
+        app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert_eq!(app.about_scroll, 1);
+        terminal.draw(|f| crate::tui::ui::render(f, &app)).unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.about_modal_open);
 
         // External write via a second Database connection should be detected on `on_tick()`
         let mut external_db = Database::open(&db_path).unwrap();

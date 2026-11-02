@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragr
 
 use crate::args::format_duration_estimate;
 use crate::tui::app::{ActiveTab, DataEntryForm, DetailPromptKind, TaskDetailSnapshot, TuiApp};
-use wsid_core::TaskStatus;
+use wsid_core::{TaskStatus, get_about_metadata};
 
 pub fn render(frame: &mut Frame, app: &TuiApp) {
     let chunks = Layout::default()
@@ -28,6 +28,10 @@ pub fn render(frame: &mut Frame, app: &TuiApp) {
 
     if let Some(ref detail) = app.detail_modal {
         render_detail_modal(frame, app, detail, frame.area());
+    }
+
+    if app.about_modal_open {
+        render_about_modal(frame, app, frame.area());
     }
 }
 
@@ -523,7 +527,7 @@ fn render_data_entry_view(frame: &mut Frame, app: &TuiApp, area: Rect) {
 
 fn render_footer(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let status = if app.status_message.trim().is_empty() {
-        "Keys: [1-5] Views | [j/k] Navigate | [Enter] Task Details & Notes | [a] Toggle Accessible Mode | [q] Quit"
+        "Keys: [1-5] Views | [j/k] Navigate | [Enter] Task Details & Notes | [a] Toggle Accessible Mode | [?] About & Licenses | [q] Quit"
     } else {
         app.status_message.as_str()
     };
@@ -704,6 +708,85 @@ fn render_detail_modal(frame: &mut Frame, app: &TuiApp, detail: &TaskDetailSnaps
                         .add_modifier(Modifier::BOLD),
                 )
                 .title(" Task Detail & Collaboration Drawer "),
+        );
+    frame.render_widget(modal, popup_area);
+}
+
+fn render_about_modal(frame: &mut Frame, app: &TuiApp, area: Rect) {
+    let popup_area = centered_rect(85, 85, area);
+    frame.render_widget(Clear, popup_area);
+
+    let about = get_about_metadata();
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!("{} v{}", about.app_full_name, about.version),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(format!("License: {}  |  Repository: {}", about.license_spdx, about.repository_url)));
+    lines.push(Line::from(Span::styled(
+        "Controls: [j/k] Scroll line | [PgUp/PgDn/Space] Scroll page | [g/Home] Top | [Esc/?/q] Close",
+        Style::default().fg(Color::Cyan),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("Third-Party Rust License Summary ({} license groups):", about.rust_licenses.licenses.len()),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    for count in &about.rust_licenses.overview {
+        lines.push(Line::from(format!("  • {} ({}): {} crate(s)", count.name, count.id, count.count)));
+    }
+    lines.push(Line::from(""));
+    lines
+        .push(Line::from(Span::styled("Third-Party Crate Attributions & License Notices:", Style::default().add_modifier(Modifier::BOLD))));
+
+    for lic in &about.rust_licenses.licenses {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("=== [{}] {} ===", lic.id, lic.name),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from("Used by:"));
+        for c in &lic.used_by {
+            if let Some(ref repo) = c.repository {
+                lines.push(Line::from(format!("  • {} v{} ({repo})", c.name, c.version)));
+            } else {
+                lines.push(Line::from(format!("  • {} v{}", c.name, c.version)));
+            }
+        }
+        lines.push(Line::from(""));
+        for l in lic.text.lines() {
+            lines.push(Line::from(format!("  {l}")));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("=== WSID Project License ({}) ===", about.license_spdx),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )));
+    for l in about.license_text.lines() {
+        lines.push(Line::from(format!("  {l}")));
+    }
+
+    let modal = Paragraph::new(lines)
+        .scroll((app.about_scroll, 0))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(border_type(app.accessible_mode))
+                .border_style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .title(" About WSID & Third-Party Licenses ([Esc/?/q] Close) "),
         );
     frame.render_widget(modal, popup_area);
 }

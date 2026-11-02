@@ -10,7 +10,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
+repository = "https://github.com/dmbeta/WSID"
+homepage = "https://github.com/dmbeta/WSID"
 
 [workspace.dependencies]
 wsid-core = { path = "crates/wsid-core" }

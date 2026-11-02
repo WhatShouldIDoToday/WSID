@@ -6,11 +6,11 @@ use chrono::Utc;
 use serde_json::json;
 use wsid_core::{
     AppConfig, CreateTaskInput, Database, EisenhowerClassification, EisenhowerQuadrant, FocusQueueResponse, RelationInputKind, SearchQuery,
-    Task, TaskAttachment, add_task_note, attach_existing_file, compute_focus_queue, create_task, delete_task, delete_task_note,
-    get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks,
-    get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_task_notes, open_file_in_os,
-    remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
-    update_attachment_description,
+    THIRD_PARTY_NOTICES_TEXT, Task, TaskAttachment, add_task_note, attach_existing_file, compute_focus_queue, create_task, delete_task,
+    delete_task_note, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
+    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
+    list_task_notes, open_file_in_os, remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status,
+    unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description,
 };
 use wsid_mcp::McpServer;
 
@@ -71,6 +71,7 @@ pub fn execute_command<W: Write>(
         Commands::Search(args) => run_search(db_path, &args, mode, out),
         Commands::Blocked { tag } => run_blocked(db_path, persona, tag.as_deref(), mode, out),
         Commands::Matrix { all } => run_matrix(db_path, config, persona, all, mode, out),
+        Commands::About { full } => run_about(full, mode, out),
     }
 }
 
@@ -890,4 +891,52 @@ pub fn read_system_clipboard_attachment() -> wsid_core::Result<(Vec<u8>, String,
     Err(wsid_core::WsidError::Validation(
         "clipboard is empty or could not be read; pass `--file <path>` or copy content to the clipboard first".to_string(),
     ))
+}
+
+fn run_about<W: Write>(full: bool, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
+    let about = get_about_metadata();
+
+    match mode {
+        OutputMode::Json => {
+            writeln!(out, "{}", serde_json::to_string_pretty(&about).unwrap_or_default())?;
+        }
+        OutputMode::Accessible | OutputMode::Standard => {
+            writeln!(out, "{} v{}", about.app_full_name, about.version)?;
+            writeln!(out, "License: {}", about.license_spdx)?;
+            writeln!(out, "Repository: {}", about.repository_url)?;
+            writeln!(out)?;
+            writeln!(out, "Third-Party Rust License Summary ({} license groups):", about.rust_licenses.licenses.len())?;
+            for count in &about.rust_licenses.overview {
+                writeln!(out, "  • {} ({}): {} crate(s)", count.name, count.id, count.count)?;
+            }
+            writeln!(out)?;
+            writeln!(out, "Third-Party Crates by License:")?;
+            for lic in &about.rust_licenses.licenses {
+                writeln!(out, "  [{}] {}", lic.id, lic.name)?;
+                for c in &lic.used_by {
+                    if let Some(ref repo) = c.repository {
+                        writeln!(out, "    - {} v{} ({repo})", c.name, c.version)?;
+                    } else {
+                        writeln!(out, "    - {} v{}", c.name, c.version)?;
+                    }
+                }
+            }
+            if full {
+                writeln!(out)?;
+                writeln!(out, "================================================================================")?;
+                writeln!(out, "PROJECT LICENSE ({})", about.license_spdx)?;
+                writeln!(out, "================================================================================")?;
+                writeln!(out, "{}", about.license_text)?;
+                writeln!(out)?;
+                writeln!(out, "================================================================================")?;
+                writeln!(out, "FULL THIRD-PARTY LICENSE NOTICES")?;
+                writeln!(out, "================================================================================")?;
+                writeln!(out, "{THIRD_PARTY_NOTICES_TEXT}")?;
+            } else {
+                writeln!(out)?;
+                writeln!(out, "Tip: run `wsid about --full` (or `wsid licenses --full`) to print full license texts.")?;
+            }
+        }
+    }
+    Ok(())
 }

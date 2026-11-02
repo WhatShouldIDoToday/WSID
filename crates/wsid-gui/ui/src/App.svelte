@@ -24,6 +24,7 @@
   import DatabaseView from "./components/DatabaseView.svelte";
   import DataEntryView from "./components/DataEntryView.svelte";
   import TaskDetailDrawer from "./components/TaskDetailDrawer.svelte";
+  import AboutModal from "./components/AboutModal.svelte";
 
   type ViewTab = "focus" | "kanban" | "eisenhower" | "database" | "entry";
 
@@ -36,6 +37,7 @@
   let allTasks = $state<Task[]>([]);
   let eisenhowerItems = $state<EisenhowerClassification[]>([]);
   let selectedTaskId = $state<string | null>(null);
+  let aboutModalOpen = $state<boolean>(false);
   let statusAnnouncement = $state<string>("Ready.");
   let loading = $state<boolean>(true);
   let refreshTrigger = $state<number>(0);
@@ -166,13 +168,17 @@
         target.tagName === "SELECT" ||
         target.isContentEditable);
 
-    if (isInput || selectedTaskId) return;
+    if (isInput || selectedTaskId || aboutModalOpen) return;
 
     if (e.key === "1") activeTab = "focus";
     else if (e.key === "2") activeTab = "kanban";
     else if (e.key === "3") activeTab = "eisenhower";
     else if (e.key === "4") activeTab = "database";
     else if (e.key === "5" || e.key === "n") activeTab = "entry";
+    else if (e.key === "?") {
+      aboutModalOpen = true;
+      announce("Opened About and Third-Party Licenses dialog.");
+    }
   }
 </script>
 
@@ -249,6 +255,18 @@
           />
           <button type="submit" class="btn-sm">Set</button>
         </form>
+
+        <button
+          type="button"
+          class="btn-sm"
+          onclick={() => {
+            aboutModalOpen = true;
+            announce("Opened About and Third-Party Licenses dialog.");
+          }}
+          aria-label="About WSID and Third-Party Licenses (Shortcut: ?)"
+        >
+          About &amp; Licenses (?)
+        </button>
       </div>
     {/if}
   </header>
@@ -340,5 +358,14 @@
     onSelectTask={openTaskDetail}
     onDataChanged={refreshAllData}
     {announce}
+  />
+{/if}
+
+{#if aboutModalOpen}
+  <AboutModal
+    onClose={() => {
+      aboutModalOpen = false;
+      announce("Closed About and Third-Party Licenses dialog.");
+    }}
   />
 {/if}
