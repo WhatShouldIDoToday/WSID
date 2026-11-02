@@ -13,7 +13,7 @@ pub use config::{
     AppConfig, CONFIG_FILENAME, GLOBAL_DB_FILENAME, LOCAL_DB_FILENAME, WSID_DB_ENV_VAR, default_config_path, default_global_db_path,
     resolve_active_db_path, resolve_db_path, resolve_local_workspace_db_path,
 };
-pub use db::{DbChangeDetector, open_db, open_in_memory_db, run_migrations};
+pub use db::{Database, DbChangeDetector, open_db, open_in_memory_db, run_migrations};
 pub use error::{Result, WsidError};
 pub use id::{SHORT_ID_LETTERS, ShortId, ShortIdGenerator, is_valid_task_id, normalize_task_id};
 pub use models::{

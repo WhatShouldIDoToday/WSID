@@ -4,6 +4,7 @@ use chrono::NaiveDate;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+use crate::db::Database;
 use crate::error::Result;
 use crate::models::{FocusPreset, OriginKind, RelationType, Task, TaskStatus};
 use crate::tasks::{list_tasks, normalize_persona, normalize_tag};
@@ -262,18 +263,18 @@ pub fn classify_task_eisenhower(
 
 /// Classifies all incomplete (or optionally all) tasks in the database for the Eisenhower Matrix View.
 pub fn list_eisenhower_matrix(
-    conn: &Connection,
+    db: &Database,
     persona_filter: Option<&str>,
     today: NaiveDate,
     config: ScoringConfig,
 ) -> Result<Vec<EisenhowerClassification>> {
-    let all_tasks = list_tasks(conn)?;
+    let all_tasks = list_tasks(db)?;
     let tasks_by_id: HashMap<String, Task> = all_tasks
         .iter()
         .cloned()
         .map(|t| (t.id.clone(), t))
         .collect();
-    let graph = RelationGraph::load(conn)?;
+    let graph = RelationGraph::load(&db.conn)?;
 
     let normalized_persona = match persona_filter {
         Some(p) if !p.trim().is_empty() => Some(normalize_persona(p)?),
@@ -314,7 +315,7 @@ pub fn continuous_urgency_score(slack_days: Option<f64>, urgent_override: bool) 
 
 /// Computes the ranked Focus Queue and Blocked Summary for `persona`.
 pub fn compute_focus_queue(
-    conn: &Connection,
+    db: &Database,
     persona: &str,
     preset: FocusPreset,
     custom_weights: Option<FocusWeights>,
@@ -326,13 +327,13 @@ pub fn compute_focus_queue(
     let weights = custom_weights.unwrap_or_else(|| FocusWeights::for_preset(preset));
     let top_k = limit.unwrap_or(DEFAULT_FOCUS_LIMIT);
 
-    let all_tasks = list_tasks(conn)?;
+    let all_tasks = list_tasks(db)?;
     let tasks_by_id: HashMap<String, Task> = all_tasks
         .iter()
         .cloned()
         .map(|t| (t.id.clone(), t))
         .collect();
-    let graph = RelationGraph::load(conn)?;
+    let graph = RelationGraph::load(&db.conn)?;
 
     let mut scored = Vec::new();
     for task in &all_tasks {
@@ -424,27 +425,27 @@ pub fn compute_focus_queue(
     });
     scored.truncate(top_k);
 
-    let blocked_summary = summarize_blocked_tasks(conn, &norm_persona)?;
+    let blocked_summary = summarize_blocked_tasks(db, &norm_persona)?;
 
     Ok(FocusQueueResponse { persona: norm_persona, preset, actionable_tasks: scored, blocked_summary })
 }
 
 /// Returns all incomplete tasks assigned to `persona` that are currently excluded from their
 /// actionable Focus View because of active blockers, incomplete subtasks, or `in_review` status.
-pub fn get_blocked_tasks(conn: &Connection, persona: &str, tag_filter: Option<&str>) -> Result<Vec<BlockedTaskEntry>> {
+pub fn get_blocked_tasks(db: &Database, persona: &str, tag_filter: Option<&str>) -> Result<Vec<BlockedTaskEntry>> {
     let norm_persona = normalize_persona(persona)?;
     let norm_tag = match tag_filter {
         Some(t) if !t.trim().is_empty() => Some(normalize_tag(t)?),
         _ => None,
     };
 
-    let all_tasks = list_tasks(conn)?;
+    let all_tasks = list_tasks(db)?;
     let tasks_by_id: HashMap<String, Task> = all_tasks
         .iter()
         .cloned()
         .map(|t| (t.id.clone(), t))
         .collect();
-    let graph = RelationGraph::load(conn)?;
+    let graph = RelationGraph::load(&db.conn)?;
 
     let mut entries = Vec::new();
     for task in &all_tasks {
@@ -476,8 +477,8 @@ pub fn get_blocked_tasks(conn: &Connection, persona: &str, tag_filter: Option<&s
 
 /// Groups blocked tasks for `persona` by tag/project (or `"untagged"`), blocker `origin_kind`,
 /// and blocking `assignee` so AI agents can immediately summarize who/what they are waiting on.
-pub fn summarize_blocked_tasks(conn: &Connection, persona: &str) -> Result<Vec<BlockedSummaryGroup>> {
-    let blocked_entries = get_blocked_tasks(conn, persona, None)?;
+pub fn summarize_blocked_tasks(db: &Database, persona: &str) -> Result<Vec<BlockedSummaryGroup>> {
+    let blocked_entries = get_blocked_tasks(db, persona, None)?;
     let mut grouped: BTreeMap<(String, String, String), (OriginKind, Vec<String>)> = BTreeMap::new();
 
     for entry in blocked_entries {
@@ -684,13 +685,13 @@ mod tests {
 
     #[test]
     fn classifies_eisenhower_quadrants_for_undated_sgdb_large_estimates_and_overrides() {
-        let mut conn = open_in_memory_db().unwrap();
+        let mut db = open_in_memory_db().unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
         let config = ScoringConfig::default();
 
         // 1. Undated important task -> Q2 (Not Urgent & Important)
         let t_q2 = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput { title: "Important undated".to_string(), importance: Some(4), ..Default::default() },
             "alice",
         )
@@ -702,7 +703,7 @@ mod tests {
 
         // 2. Undated low-importance task -> Q4 (Not Urgent & Not Important)
         let t_q4 = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput { title: "Low importance undated".to_string(), importance: Some(2), ..Default::default() },
             "alice",
         )
@@ -714,7 +715,7 @@ mod tests {
         // pulls effective slack to 5 - 4 = 1.0 day <= 2.0 urgent horizon -> Q1 (Urgent & Important)
         let due_nov6 = NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
         let t_slack = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Big task due in 5 days".to_string(),
                 importance: Some(5),
@@ -731,7 +732,7 @@ mod tests {
 
         // 4. Urgent override on low-importance undated task -> Q3 (Urgent & Not Important)
         let t_q3 = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput { title: "Ping response".to_string(), importance: Some(1), urgent_override: Some(true), ..Default::default() },
             "alice",
         )
@@ -742,19 +743,19 @@ mod tests {
 
     #[test]
     fn filters_blocked_tasks_ranks_overdue_first_and_reorders_by_preset() {
-        let mut conn = open_in_memory_db().unwrap();
+        let mut db = open_in_memory_db().unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
         let config = ScoringConfig::default();
 
         // Blocked task (should be excluded from actionable Focus queue)
         let blocker = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput { title: "Blocker task".to_string(), assignee: Some("bob".to_string()), ..Default::default() },
             "alice",
         )
         .unwrap();
         let blocked_target = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Blocked target".to_string(),
                 importance: Some(5),
@@ -764,11 +765,11 @@ mod tests {
             "alice",
         )
         .unwrap();
-        link_tasks(&mut conn, &blocker.id, RelationInputKind::Blocks, &blocked_target.id).unwrap();
+        link_tasks(&mut db, &blocker.id, RelationInputKind::Blocks, &blocked_target.id).unwrap();
 
         // Overdue task vs due-tomorrow task
         let overdue = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Overdue task".to_string(),
                 due_date: Some(NaiveDate::from_ymd_opt(2026, 10, 30).unwrap()),
@@ -783,7 +784,7 @@ mod tests {
         .unwrap();
 
         let due_tomorrow = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Due tomorrow".to_string(),
                 due_date: Some(NaiveDate::from_ymd_opt(2026, 11, 2).unwrap()),
@@ -797,7 +798,7 @@ mod tests {
         )
         .unwrap();
 
-        let balanced = compute_focus_queue(&conn, "alice", FocusPreset::Balanced, None, None, today, config).unwrap();
+        let balanced = compute_focus_queue(&db, "alice", FocusPreset::Balanced, None, None, today, config).unwrap();
         let ids: Vec<&str> = balanced
             .actionable_tasks
             .iter()
@@ -808,9 +809,9 @@ mod tests {
         assert_eq!(ids[1], due_tomorrow.id);
 
         // QuickWins vs EatTheFrog preset reordering
-        let mut conn2 = open_in_memory_db().unwrap();
+        let mut db2 = open_in_memory_db().unwrap();
         let quick_easy = create_task(
-            &mut conn2,
+            &mut db2,
             CreateTaskInput {
                 title: "10m easy fix".to_string(),
                 importance: Some(3),
@@ -824,7 +825,7 @@ mod tests {
         .unwrap();
 
         let hard_frog = create_task(
-            &mut conn2,
+            &mut db2,
             CreateTaskInput {
                 title: "4h deep architecture refactor".to_string(),
                 importance: Some(3),
@@ -837,21 +838,21 @@ mod tests {
         )
         .unwrap();
 
-        let qw = compute_focus_queue(&conn2, "alice", FocusPreset::QuickWins, None, None, today, config).unwrap();
+        let qw = compute_focus_queue(&db2, "alice", FocusPreset::QuickWins, None, None, today, config).unwrap();
         assert_eq!(qw.actionable_tasks[0].task.id, quick_easy.id);
 
-        let frog = compute_focus_queue(&conn2, "alice", FocusPreset::EatTheFrog, None, None, today, config).unwrap();
+        let frog = compute_focus_queue(&db2, "alice", FocusPreset::EatTheFrog, None, None, today, config).unwrap();
         assert_eq!(frog.actionable_tasks[0].task.id, hard_frog.id);
     }
 
     #[test]
     fn summarizes_blocked_tasks_across_reviews_mentions_and_dependencies() {
-        let mut conn = open_in_memory_db().unwrap();
+        let mut db = open_in_memory_db().unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
 
         // 1. Task in project-a blocked by a @bob mention subtask
         let t_proj_a = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Build API client".to_string(),
                 tags: vec!["project-a".to_string()],
@@ -862,11 +863,11 @@ mod tests {
             "coder",
         )
         .unwrap();
-        add_task_note(&mut conn, &t_proj_a.id, "coder", "Waiting on @bob for schema details", true).unwrap();
+        add_task_note(&mut db, &t_proj_a.id, "coder", "Waiting on @bob for schema details", true).unwrap();
 
         // 2. Task in project-b submitted for review to @human
         let t_proj_b = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Design settings dialog".to_string(),
                 tags: vec!["project-b".to_string()],
@@ -877,9 +878,9 @@ mod tests {
             "human",
         )
         .unwrap();
-        transition_task_status(&mut conn, &t_proj_b.id, TaskStatus::Completed).unwrap();
+        transition_task_status(&mut db, &t_proj_b.id, TaskStatus::Completed).unwrap();
 
-        let focus = compute_focus_queue(&conn, "coder", FocusPreset::Balanced, None, None, today, ScoringConfig::default()).unwrap();
+        let focus = compute_focus_queue(&db, "coder", FocusPreset::Balanced, None, None, today, ScoringConfig::default()).unwrap();
         assert!(focus.actionable_tasks.is_empty());
         assert_eq!(focus.blocked_summary.len(), 2);
 

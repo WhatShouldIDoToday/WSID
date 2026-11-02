@@ -5,6 +5,7 @@ use rand::Rng;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+use crate::db::Database;
 use crate::error::{Result, WsidError};
 
 /// 24 unambiguous uppercase ASCII letters (`I` and `O` excluded).
@@ -76,12 +77,23 @@ impl ShortIdGenerator {
     }
 
     /// Generates a unique short ID verified against the `tasks` table, retrying on collisions.
-    pub fn generate_unique(conn: &Connection) -> Result<String> {
-        let mut rng = rand::rng();
-        Self::generate_unique_with(conn, || Self::random_candidate(&mut rng))
+    pub fn generate_unique(db: &Database) -> Result<String> {
+        Self::generate_unique_conn(&db.conn)
     }
 
-    pub fn generate_unique_with<F>(conn: &Connection, mut next_candidate: F) -> Result<String>
+    pub fn generate_unique_with<F>(db: &Database, next_candidate: F) -> Result<String>
+    where
+        F: FnMut() -> String,
+    {
+        Self::generate_unique_conn_with(&db.conn, next_candidate)
+    }
+
+    pub(crate) fn generate_unique_conn(conn: &Connection) -> Result<String> {
+        let mut rng = rand::rng();
+        Self::generate_unique_conn_with(conn, || Self::random_candidate(&mut rng))
+    }
+
+    pub(crate) fn generate_unique_conn_with<F>(conn: &Connection, mut next_candidate: F) -> Result<String>
     where
         F: FnMut() -> String,
     {
@@ -121,25 +133,27 @@ mod tests {
 
     #[test]
     fn retries_on_collision_until_unique_id_found() {
-        let conn = open_in_memory_db().unwrap();
+        let db = open_in_memory_db().unwrap();
 
-        conn.execute("INSERT INTO tasks (id, title, reporter, assignee, evaluator) VALUES ('AB1234', 'Existing', 'me', 'me', 'me')", [])
+        db.conn
+            .execute("INSERT INTO tasks (id, title, reporter, assignee, evaluator) VALUES ('AB1234', 'Existing', 'me', 'me', 'me')", [])
             .unwrap();
 
         let mut candidates = ["AB1234", "AB1234", "CD5678"].into_iter();
-        let generated = ShortIdGenerator::generate_unique_with(&conn, || candidates.next().unwrap().to_string()).unwrap();
+        let generated = ShortIdGenerator::generate_unique_with(&db, || candidates.next().unwrap().to_string()).unwrap();
         assert_eq!(generated, "CD5678");
         assert!(is_valid_task_id(&generated));
     }
 
     #[test]
     fn returns_error_when_all_collision_attempts_exhausted() {
-        let conn = open_in_memory_db().unwrap();
+        let db = open_in_memory_db().unwrap();
 
-        conn.execute("INSERT INTO tasks (id, title, reporter, assignee, evaluator) VALUES ('AB1234', 'Existing', 'me', 'me', 'me')", [])
+        db.conn
+            .execute("INSERT INTO tasks (id, title, reporter, assignee, evaluator) VALUES ('AB1234', 'Existing', 'me', 'me', 'me')", [])
             .unwrap();
 
-        let err = ShortIdGenerator::generate_unique_with(&conn, || "AB1234".to_string()).unwrap_err();
+        let err = ShortIdGenerator::generate_unique_with(&db, || "AB1234".to_string()).unwrap_err();
         assert!(matches!(err, WsidError::IdCollisionExhausted(MAX_GENERATION_ATTEMPTS)));
     }
 }

@@ -3,7 +3,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum WsidError {
     #[error("database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    Database(String),
 
     #[error("invalid task ID '{0}': expected 2 letters (excluding I and O) followed by 4 digits (e.g. AB1234)")]
     InvalidTaskId(String),
@@ -22,6 +22,12 @@ pub enum WsidError {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl From<rusqlite::Error> for WsidError {
+    fn from(err: rusqlite::Error) -> Self {
+        Self::Database(err.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, WsidError>;

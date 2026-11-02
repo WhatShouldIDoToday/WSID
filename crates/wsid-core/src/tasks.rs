@@ -4,6 +4,7 @@ use std::str::FromStr;
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::{ShortIdGenerator, normalize_task_id};
 use crate::models::{CreateTaskInput, OriginKind, Task, TaskStatus, UpdateTaskInput};
@@ -87,12 +88,12 @@ pub fn validate_time_estimate(time_estimate_minutes: Option<i64>) -> Result<()> 
     Ok(())
 }
 
-pub fn create_task(conn: &mut Connection, input: CreateTaskInput, default_persona: &str) -> Result<Task> {
-    let tx = conn.transaction()?;
+pub fn create_task(db: &mut Database, input: CreateTaskInput, default_persona: &str) -> Result<Task> {
+    let tx = db.conn.transaction()?;
     let id = create_task_in_tx(&tx, input, default_persona)?;
     tx.commit()?;
 
-    get_task(conn, &id)
+    get_task(db, &id)
 }
 
 pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, default_persona: &str) -> Result<String> {
@@ -137,7 +138,7 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     let due_str = input.due_date.map(|d| d.format("%Y-%m-%d").to_string());
     let sgdb_str = input.sgdb_date.map(|d| d.format("%Y-%m-%d").to_string());
 
-    let id = ShortIdGenerator::generate_unique(conn)?;
+    let id = ShortIdGenerator::generate_unique_conn(conn)?;
 
     conn.execute(
         "INSERT INTO tasks (
@@ -178,7 +179,11 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     Ok(id)
 }
 
-pub fn get_task(conn: &Connection, raw_id: &str) -> Result<Task> {
+pub fn get_task(db: &Database, raw_id: &str) -> Result<Task> {
+    get_task_conn(&db.conn, raw_id)
+}
+
+pub(crate) fn get_task_conn(conn: &Connection, raw_id: &str) -> Result<Task> {
     let id = normalize_task_id(raw_id)?;
 
     let task_opt = conn
@@ -200,7 +205,11 @@ pub fn get_task(conn: &Connection, raw_id: &str) -> Result<Task> {
     Ok(task)
 }
 
-pub fn list_tasks(conn: &Connection) -> Result<Vec<Task>> {
+pub fn list_tasks(db: &Database) -> Result<Vec<Task>> {
+    list_tasks_conn(&db.conn)
+}
+
+pub(crate) fn list_tasks_conn(conn: &Connection) -> Result<Vec<Task>> {
     let mut stmt = conn.prepare(
         "SELECT
             id, title, description, status, origin_kind, origin_note_id,
@@ -221,8 +230,8 @@ pub fn list_tasks(conn: &Connection) -> Result<Vec<Task>> {
     Ok(tasks)
 }
 
-pub fn update_task(conn: &mut Connection, raw_id: &str, input: UpdateTaskInput) -> Result<Task> {
-    let current = get_task(conn, raw_id)?;
+pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> Result<Task> {
+    let current = get_task(db, raw_id)?;
 
     let title = match input.title {
         Some(t) => {
@@ -285,7 +294,7 @@ pub fn update_task(conn: &mut Connection, raw_id: &str, input: UpdateTaskInput) 
         None => None,
     };
 
-    let tx = conn.transaction()?;
+    let tx = db.conn.transaction()?;
     tx.execute(
         "UPDATE tasks SET
             title = ?1,
@@ -329,12 +338,12 @@ pub fn update_task(conn: &mut Connection, raw_id: &str, input: UpdateTaskInput) 
     }
 
     tx.commit()?;
-    get_task(conn, &current.id)
+    get_task(db, &current.id)
 }
 
-pub fn delete_task(conn: &mut Connection, raw_id: &str) -> Result<()> {
+pub fn delete_task(db: &mut Database, raw_id: &str) -> Result<()> {
     let id = normalize_task_id(raw_id)?;
-    let affected = conn.execute("DELETE FROM tasks WHERE id = ?1", [&id])?;
+    let affected = db.conn.execute("DELETE FROM tasks WHERE id = ?1", [&id])?;
     if affected == 0 {
         return Err(WsidError::TaskNotFound(id));
     }
@@ -432,18 +441,18 @@ mod tests {
 
     #[test]
     fn enforces_sgdb_and_due_date_combinations() {
-        let mut conn = open_in_memory_db().unwrap();
+        let mut db = open_in_memory_db().unwrap();
         let d_early = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
         let d_late = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
 
         // Both None is allowed
-        let t_none = create_task(&mut conn, CreateTaskInput { title: "No dates".to_string(), ..Default::default() }, "david").unwrap();
+        let t_none = create_task(&mut db, CreateTaskInput { title: "No dates".to_string(), ..Default::default() }, "david").unwrap();
         assert_eq!(t_none.due_date, None);
         assert_eq!(t_none.sgdb_date, None);
 
         // SGDB without due_date is allowed
         let t_sgdb_only = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput { title: "SGDB only".to_string(), sgdb_date: Some(d_early), ..Default::default() },
             "david",
         )
@@ -453,7 +462,7 @@ mod tests {
 
         // SGDB <= due_date is allowed
         let t_both = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "SGDB before due".to_string(),
                 sgdb_date: Some(d_early),
@@ -468,7 +477,7 @@ mod tests {
 
         // SGDB > due_date is rejected on create
         let err = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput { title: "Invalid SGDB".to_string(), sgdb_date: Some(d_late), due_date: Some(d_early), ..Default::default() },
             "david",
         )
@@ -477,7 +486,7 @@ mod tests {
 
         // SGDB > due_date is also rejected on update
         let err_update = update_task(
-            &mut conn,
+            &mut db,
             &t_both.id,
             UpdateTaskInput { sgdb_date: Some(Some(d_late)), due_date: Some(Some(d_early)), ..Default::default() },
         )
@@ -487,10 +496,10 @@ mod tests {
 
     #[test]
     fn populates_default_persona_and_normalizes_tags() {
-        let mut conn = open_in_memory_db().unwrap();
+        let mut db = open_in_memory_db().unwrap();
 
         let task = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Build Focus View".to_string(),
                 tags: vec!["#Project-A".to_string(), "UI_Core".to_string(), "project-a".to_string()],
@@ -507,7 +516,7 @@ mod tests {
 
         // Multi-word or invalid character tags are rejected
         let bad_tag_err = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput { title: "Bad tag task".to_string(), tags: vec!["two words".to_string()], ..Default::default() },
             "alice",
         )
@@ -517,29 +526,21 @@ mod tests {
 
     #[test]
     fn enforces_numeric_bounds_and_supports_crud_lifecycle() {
-        let mut conn = open_in_memory_db().unwrap();
+        let mut db = open_in_memory_db().unwrap();
 
         assert!(
-            create_task(
-                &mut conn,
-                CreateTaskInput { title: "Invalid importance".to_string(), importance: Some(6), ..Default::default() },
-                "bob"
-            )
-            .is_err()
+            create_task(&mut db, CreateTaskInput { title: "Invalid importance".to_string(), importance: Some(6), ..Default::default() }, "bob")
+                .is_err()
+        );
+
+        assert!(
+            create_task(&mut db, CreateTaskInput { title: "Invalid difficulty".to_string(), difficulty: Some(0), ..Default::default() }, "bob")
+                .is_err()
         );
 
         assert!(
             create_task(
-                &mut conn,
-                CreateTaskInput { title: "Invalid difficulty".to_string(), difficulty: Some(0), ..Default::default() },
-                "bob"
-            )
-            .is_err()
-        );
-
-        assert!(
-            create_task(
-                &mut conn,
+                &mut db,
                 CreateTaskInput { title: "Negative estimate".to_string(), time_estimate_minutes: Some(-15), ..Default::default() },
                 "bob"
             )
@@ -547,7 +548,7 @@ mod tests {
         );
 
         let created = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Initial title".to_string(),
                 importance: Some(4),
@@ -562,7 +563,7 @@ mod tests {
         .unwrap();
 
         let updated = update_task(
-            &mut conn,
+            &mut db,
             &created.id,
             UpdateTaskInput {
                 title: Some("Updated title".to_string()),
@@ -578,10 +579,10 @@ mod tests {
         assert!(updated.completed_at.is_some());
         assert_eq!(updated.tags, vec!["rust".to_string(), "sqlite".to_string()]);
 
-        let all = list_tasks(&conn).unwrap();
+        let all = list_tasks(&db).unwrap();
         assert_eq!(all.len(), 1);
 
-        delete_task(&mut conn, &created.id).unwrap();
-        assert!(matches!(get_task(&conn, &created.id), Err(WsidError::TaskNotFound(_))));
+        delete_task(&mut db, &created.id).unwrap();
+        assert!(matches!(get_task(&db, &created.id), Err(WsidError::TaskNotFound(_))));
     }
 }

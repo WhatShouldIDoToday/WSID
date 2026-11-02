@@ -5,6 +5,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 use rusqlite::{Connection, params_from_iter};
 use serde::{Deserialize, Serialize};
 
+use crate::db::Database;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
 use crate::tasks::{load_task_tags, map_task_row, normalize_persona, normalize_tag};
@@ -28,8 +29,8 @@ pub struct SearchHit {
 
 /// Hybrid search combining SQLite structured filters + FTS5 trigram pre-filtering
 /// with `nucleo-matcher` subsequence & typo-tolerant scoring.
-pub fn search_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<SearchHit>> {
-    let candidates = load_filtered_tasks(conn, search)?;
+pub fn search_tasks(db: &Database, search: &SearchQuery) -> Result<Vec<SearchHit>> {
+    let candidates = load_filtered_tasks(&db.conn, search)?;
     let raw_query = search.query.trim();
     let limit = search.limit.unwrap_or(usize::MAX);
 
@@ -46,7 +47,7 @@ pub fn search_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Searc
     let lower_query = cleaned_query.to_ascii_lowercase();
 
     // Also pull FTS5 trigram matches when any query token has >= 3 chars so we can boost exact trigram hits.
-    let fts_ids = query_fts_trigram_ids(conn, cleaned_query).unwrap_or_default();
+    let fts_ids = query_fts_trigram_ids(db, cleaned_query).unwrap_or_default();
 
     let mut matcher = Matcher::new(Config::DEFAULT);
     let pattern = Pattern::new(cleaned_query, CaseMatching::Ignore, Normalization::Smart, AtomKind::Fuzzy);
@@ -179,7 +180,7 @@ fn load_filtered_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Ta
 }
 
 /// Queries SQLite FTS5 trigram index for 3+ character tokens.
-pub fn query_fts_trigram_ids(conn: &Connection, query: &str) -> Result<HashSet<String>> {
+pub fn query_fts_trigram_ids(db: &Database, query: &str) -> Result<HashSet<String>> {
     let tokens: Vec<String> = query
         .split_whitespace()
         .map(|tok| {
@@ -200,7 +201,9 @@ pub fn query_fts_trigram_ids(conn: &Connection, query: &str) -> Result<HashSet<S
         .collect::<Vec<_>>()
         .join(" OR ");
 
-    let mut stmt = conn.prepare("SELECT id FROM tasks_fts WHERE tasks_fts MATCH ?1")?;
+    let mut stmt = db
+        .conn
+        .prepare("SELECT id FROM tasks_fts WHERE tasks_fts MATCH ?1")?;
     let rows = stmt.query_map([&match_expr], |r| r.get::<_, String>(0))?;
 
     let mut ids = HashSet::new();
@@ -302,10 +305,10 @@ mod tests {
 
     #[test]
     fn supports_exact_id_short_queries_typos_and_structured_filters() {
-        let mut conn = open_in_memory_db().unwrap();
+        let mut db = open_in_memory_db().unwrap();
 
         let t1 = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Audit keyboard accessibility in Kanban".to_string(),
                 description: Some("Ensure WCAG 2.2 focus rings and ARIA labels work".to_string()),
@@ -319,7 +322,7 @@ mod tests {
         .unwrap();
 
         let t2 = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Optimize SQLite WAL checkpointing".to_string(),
                 description: Some("Verify PRAGMA data_version polling".to_string()),
@@ -333,23 +336,22 @@ mod tests {
         .unwrap();
 
         // 1. Exact short ID lookup (with or without leading '#')
-        let id_hits =
-            search_tasks(&conn, &SearchQuery { query: format!("#{}", t1.id.to_ascii_lowercase()), ..Default::default() }).unwrap();
+        let id_hits = search_tasks(&db, &SearchQuery { query: format!("#{}", t1.id.to_ascii_lowercase()), ..Default::default() }).unwrap();
         assert_eq!(id_hits.first().unwrap().task.id, t1.id);
 
         // 2. 1-2 character query ("kb" subsequence matching "Kanban" / "keyboard")
-        let short_hits = search_tasks(&conn, &SearchQuery { query: "kb".to_string(), ..Default::default() }).unwrap();
+        let short_hits = search_tasks(&db, &SearchQuery { query: "kb".to_string(), ..Default::default() }).unwrap();
         assert!(!short_hits.is_empty());
         assert_eq!(short_hits[0].task.id, t1.id);
 
         // 3. Typo tolerance ("acessibility" missing one 'c' matches "accessibility")
-        let typo_hits = search_tasks(&conn, &SearchQuery { query: "acessibility".to_string(), ..Default::default() }).unwrap();
+        let typo_hits = search_tasks(&db, &SearchQuery { query: "acessibility".to_string(), ..Default::default() }).unwrap();
         assert!(!typo_hits.is_empty());
         assert_eq!(typo_hits[0].task.id, t1.id);
 
         // 4. Combined tag + status + assignee structured filtering
         let filtered_hits = search_tasks(
-            &conn,
+            &db,
             &SearchQuery {
                 query: String::new(),
                 status: Some(TaskStatus::Todo),

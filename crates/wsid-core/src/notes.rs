@@ -3,13 +3,14 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::{is_valid_task_id, normalize_task_id};
 use crate::models::{
     AddTaskNoteOutcome, CreateTaskInput, OriginKind, RelationInputKind, StatusTransitionOutcome, Task, TaskNote, TaskStatus,
 };
 use crate::relations::{ensure_task_exists, link_tasks_in_tx};
-use crate::tasks::{create_task_in_tx, format_utc, get_task, normalize_persona, parse_utc};
+use crate::tasks::{create_task_in_tx, format_utc, get_task, get_task_conn, normalize_persona, parse_utc};
 
 /// Parsed tokens extracted from a task note body.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -102,7 +103,7 @@ const fn is_ident_char(b: u8) -> bool {
 /// Appends a note to `raw_task_id` and optionally spawns `@persona` blocking subtasks,
 /// `@takenote:<persona>` non-blocking related tasks, and `#<task_id>` cross-links.
 pub fn add_task_note(
-    conn: &mut Connection,
+    db: &mut Database,
     raw_task_id: &str,
     raw_author: &str,
     raw_body: &str,
@@ -115,11 +116,11 @@ pub fn add_task_note(
         return Err(WsidError::Validation("task note body cannot be empty".to_string()));
     }
 
-    let commented_task = get_task(conn, &task_id)?;
+    let commented_task = get_task(db, &task_id)?;
     let tokens = parse_note_tokens(&body);
     let now_str = format_utc(Utc::now());
 
-    let tx = conn.transaction()?;
+    let tx = db.conn.transaction()?;
 
     tx.execute(
         "INSERT INTO task_notes (task_id, author, body, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -143,7 +144,7 @@ pub fn add_task_note(
     let effective_parent_id = review_parent_id
         .clone()
         .unwrap_or_else(|| commented_task.id.clone());
-    let effective_parent = get_task(&tx, &effective_parent_id)?;
+    let effective_parent = get_task_conn(&tx, &effective_parent_id)?;
 
     // Resolve valid existing referenced `#AB1234` tasks
     let mut existing_ref_ids = Vec::new();
@@ -272,28 +273,28 @@ pub fn add_task_note(
 
     let mut spawned_tasks = Vec::with_capacity(spawned_ids.len());
     for id in &spawned_ids {
-        spawned_tasks.push(get_task(conn, id)?);
+        spawned_tasks.push(get_task(db, id)?);
     }
 
     let mut reused_tasks = Vec::with_capacity(reused_ids.len());
     for id in &reused_ids {
-        reused_tasks.push(get_task(conn, id)?);
+        reused_tasks.push(get_task(db, id)?);
     }
 
     let mut completed_review_tasks = Vec::with_capacity(completed_review_ids.len());
     for id in &completed_review_ids {
-        completed_review_tasks.push(get_task(conn, id)?);
+        completed_review_tasks.push(get_task(db, id)?);
     }
 
     Ok(AddTaskNoteOutcome { note, spawned_tasks, reused_tasks, completed_review_tasks })
 }
 
 /// Lists all notes for `raw_task_id` in chronological order.
-pub fn list_task_notes(conn: &Connection, raw_task_id: &str) -> Result<Vec<TaskNote>> {
+pub fn list_task_notes(db: &Database, raw_task_id: &str) -> Result<Vec<TaskNote>> {
     let task_id = normalize_task_id(raw_task_id)?;
-    ensure_task_exists(conn, &task_id)?;
+    ensure_task_exists(&db.conn, &task_id)?;
 
-    let mut stmt = conn.prepare_cached(
+    let mut stmt = db.conn.prepare_cached(
         "SELECT id, task_id, author, body, created_at
          FROM task_notes
          WHERE task_id = ?1
@@ -315,12 +316,12 @@ pub fn list_task_notes(conn: &Connection, raw_task_id: &str) -> Result<Vec<TaskN
 /// One-step cleanup helper for overzealous mention/subtask blockers:
 /// removes any `blocks` or `parent_of` (subtask) incoming/outgoing blocking links from `raw_task_id`
 /// and marks the subtask `completed` if `dismiss` is true (or converts it into a non-blocking `related` task if `dismiss` is false).
-pub fn unblock_or_dismiss_subtask(conn: &mut Connection, raw_task_id: &str, dismiss: bool) -> Result<Task> {
+pub fn unblock_or_dismiss_subtask(db: &mut Database, raw_task_id: &str, dismiss: bool) -> Result<Task> {
     let task_id = normalize_task_id(raw_task_id)?;
-    let subtask = get_task(conn, &task_id)?;
+    let subtask = get_task(db, &task_id)?;
     let now_str = format_utc(Utc::now());
 
-    let tx = conn.transaction()?;
+    let tx = db.conn.transaction()?;
 
     // Find any parent tasks that this subtask currently blocks
     let mut stmt = tx.prepare("SELECT target_id FROM task_relations WHERE source_id = ?1 AND relation_type = 'blocks'")?;
@@ -342,22 +343,22 @@ pub fn unblock_or_dismiss_subtask(conn: &mut Connection, raw_task_id: &str, dism
     }
 
     tx.commit()?;
-    get_task(conn, &subtask.id)
+    get_task(db, &subtask.id)
 }
 
 /// Transitions a task's status while enforcing role-based `in_review` handoffs and blocker checks.
-pub fn transition_task_status(conn: &mut Connection, raw_task_id: &str, new_status: TaskStatus) -> Result<StatusTransitionOutcome> {
-    let task = get_task(conn, raw_task_id)?;
+pub fn transition_task_status(db: &mut Database, raw_task_id: &str, new_status: TaskStatus) -> Result<StatusTransitionOutcome> {
+    let task = get_task(db, raw_task_id)?;
     let now_str = format_utc(Utc::now());
 
-    let tx = conn.transaction()?;
+    let tx = db.conn.transaction()?;
 
     // Non-completion status transitions (e.g. backlog -> todo -> in_progress -> stuck)
     if new_status != TaskStatus::Completed {
         set_task_status_raw(&tx, &task.id, new_status, &now_str)?;
         tx.commit()?;
         return Ok(StatusTransitionOutcome {
-            task: get_task(conn, &task.id)?,
+            task: get_task(db, &task.id)?,
             spawned_review_task: None,
             auto_completed_parent_tasks: Vec::new(),
         });
@@ -412,8 +413,8 @@ pub fn transition_task_status(conn: &mut Connection, raw_task_id: &str, new_stat
 
         tx.commit()?;
         return Ok(StatusTransitionOutcome {
-            task: get_task(conn, &task.id)?,
-            spawned_review_task: Some(get_task(conn, &review_id)?),
+            task: get_task(db, &task.id)?,
+            spawned_review_task: Some(get_task(db, &review_id)?),
             auto_completed_parent_tasks: Vec::new(),
         });
     }
@@ -436,7 +437,7 @@ pub fn transition_task_status(conn: &mut Connection, raw_task_id: &str, new_stat
         drop(stmt);
 
         for parent_id in candidate_parents {
-            let parent = get_task(&tx, &parent_id)?;
+            let parent = get_task_conn(&tx, &parent_id)?;
             if parent.status == TaskStatus::InReview {
                 let remaining = find_incomplete_blockers_or_subtasks(&tx, &parent.id)?;
                 if remaining.is_empty() {
@@ -451,10 +452,10 @@ pub fn transition_task_status(conn: &mut Connection, raw_task_id: &str, new_stat
 
     let mut auto_completed_parent_tasks = Vec::with_capacity(auto_completed_parent_ids.len());
     for pid in &auto_completed_parent_ids {
-        auto_completed_parent_tasks.push(get_task(conn, pid)?);
+        auto_completed_parent_tasks.push(get_task(db, pid)?);
     }
 
-    Ok(StatusTransitionOutcome { task: get_task(conn, &task.id)?, spawned_review_task: None, auto_completed_parent_tasks })
+    Ok(StatusTransitionOutcome { task: get_task(db, &task.id)?, spawned_review_task: None, auto_completed_parent_tasks })
 }
 
 fn set_task_status_raw(conn: &Connection, task_id: &str, status: TaskStatus, now_str: &str) -> Result<()> {
@@ -563,10 +564,10 @@ mod tests {
 
     #[test]
     fn spawns_blocking_mention_and_non_blocking_takenote_with_cross_links() {
-        let mut conn = open_in_memory_db().unwrap();
+        let mut db = open_in_memory_db().unwrap();
 
         let parent = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Implement color palette".to_string(),
                 reporter: Some("claude-author".to_string()),
@@ -580,7 +581,7 @@ mod tests {
         .unwrap();
 
         let other_project_task =
-            create_task(&mut conn, CreateTaskInput { title: "Update design tokens".to_string(), ..Default::default() }, "human").unwrap();
+            create_task(&mut db, CreateTaskInput { title: "Update design tokens".to_string(), ..Default::default() }, "human").unwrap();
 
         // Human comments mentioning @bob (current assignee), @human (self-mention, ignored),
         // @takenote:carol (non-blocking), and #<other_project_task.id>
@@ -590,7 +591,7 @@ mod tests {
             other_project_task.id.to_ascii_lowercase()
         );
 
-        let outcome = add_task_note(&mut conn, &parent.id, "human", &comment, true).unwrap();
+        let outcome = add_task_note(&mut db, &parent.id, "human", &comment, true).unwrap();
 
         // Exactly 2 tasks spawned: 1 blocking mention for bob (deduplicated), 1 takenote for carol; @human self-mention suppressed
         assert_eq!(outcome.spawned_tasks.len(), 2);
@@ -617,22 +618,22 @@ mod tests {
         // Verify relations on `parent`:
         // ONLY `bob_subtask` blocks `parent` and is a subtask of `parent`.
         // `carol_takenote` does NOT block `parent` and is NOT a subtask of `parent`.
-        let blockers = get_direct_blockers(&conn, &parent.id).unwrap();
+        let blockers = get_direct_blockers(&db, &parent.id).unwrap();
         assert_eq!(blockers.len(), 1);
         assert_eq!(blockers[0].id, bob_subtask.id);
 
-        let subtasks = get_direct_subtasks(&conn, &parent.id).unwrap();
+        let subtasks = get_direct_subtasks(&db, &parent.id).unwrap();
         assert_eq!(subtasks.len(), 1);
         assert_eq!(subtasks[0].id, bob_subtask.id);
 
         // `carol_takenote` is linked via `related` to both `parent` and `other_project_task`
-        let carol_related = get_related_tasks(&conn, &carol_takenote.id).unwrap();
+        let carol_related = get_related_tasks(&db, &carol_takenote.id).unwrap();
         let carol_related_ids: Vec<&str> = carol_related.iter().map(|t| t.id.as_str()).collect();
         assert!(carol_related_ids.contains(&parent.id.as_str()));
         assert!(carol_related_ids.contains(&other_project_task.id.as_str()));
 
         // Posting a second comment mentioning `@bob` while `bob_subtask` is still open reuses `bob_subtask`
-        let second_outcome = add_task_note(&mut conn, &parent.id, "human", "@bob also check focus outlines", true).unwrap();
+        let second_outcome = add_task_note(&mut db, &parent.id, "human", "@bob also check focus outlines", true).unwrap();
         assert!(second_outcome.spawned_tasks.is_empty());
         assert_eq!(second_outcome.reused_tasks.len(), 1);
         assert_eq!(second_outcome.reused_tasks[0].id, bob_subtask.id);
@@ -643,18 +644,18 @@ mod tests {
         );
 
         // Test `unblock_or_dismiss_subtask` cleanup helper
-        let dismissed = unblock_or_dismiss_subtask(&mut conn, &bob_subtask.id, true).unwrap();
+        let dismissed = unblock_or_dismiss_subtask(&mut db, &bob_subtask.id, true).unwrap();
         assert_eq!(dismissed.status, TaskStatus::Completed);
-        assert!(get_direct_blockers(&conn, &parent.id).unwrap().is_empty());
+        assert!(get_direct_blockers(&db, &parent.id).unwrap().is_empty());
     }
 
     #[test]
     fn executes_full_human_ai_review_ping_pong_lifecycle() {
-        let mut conn = open_in_memory_db().unwrap();
+        let mut db = open_in_memory_db().unwrap();
 
         // 1. Create a task assigned to `bob` with evaluator `human`
         let task = create_task(
-            &mut conn,
+            &mut db,
             CreateTaskInput {
                 title: "Build accessible settings modal".to_string(),
                 reporter: Some("human".to_string()),
@@ -669,7 +670,7 @@ mod tests {
         .unwrap();
 
         // 2. Bob finishes initial implementation and marks `task` Completed -> moves to `in_review` + spawns review subtask for `human`
-        let step1 = transition_task_status(&mut conn, &task.id, TaskStatus::Completed).unwrap();
+        let step1 = transition_task_status(&mut db, &task.id, TaskStatus::Completed).unwrap();
         assert_eq!(step1.task.status, TaskStatus::InReview);
         let review_round_1 = step1.spawned_review_task.expect("should spawn review task");
         assert_eq!(review_round_1.origin_kind, OriginKind::Review);
@@ -679,7 +680,7 @@ mod tests {
 
         // 3. Human reviews and comments on `task` with `@bob tweaks needed...`
         //    -> `review_round_1` is auto-completed, `task` moves back to `in_progress`, and a blocking `@bob` subtask is created
-        let feedback = add_task_note(&mut conn, &task.id, "human", "@bob please add aria-modal and Escape key handling", true).unwrap();
+        let feedback = add_task_note(&mut db, &task.id, "human", "@bob please add aria-modal and Escape key handling", true).unwrap();
 
         assert_eq!(feedback.completed_review_tasks.len(), 1);
         assert_eq!(feedback.completed_review_tasks[0].id, review_round_1.id);
@@ -688,18 +689,18 @@ mod tests {
         assert_eq!(bob_fix_subtask.assignee, "bob");
         assert_eq!(bob_fix_subtask.origin_kind, OriginKind::Mention);
 
-        let refreshed_parent = get_task(&conn, &task.id).unwrap();
+        let refreshed_parent = get_task(&db, &task.id).unwrap();
         assert_eq!(refreshed_parent.status, TaskStatus::InProgress);
 
         // 4. Bob cannot mark parent `task` Completed while `bob_fix_subtask` is still open
-        assert!(transition_task_status(&mut conn, &task.id, TaskStatus::Completed).is_err());
+        assert!(transition_task_status(&mut db, &task.id, TaskStatus::Completed).is_err());
 
         // 5. Bob completes `bob_fix_subtask` (since bob == evaluator on mention subtasks, it completes directly)
-        let fix_done = transition_task_status(&mut conn, &bob_fix_subtask.id, TaskStatus::Completed).unwrap();
+        let fix_done = transition_task_status(&mut db, &bob_fix_subtask.id, TaskStatus::Completed).unwrap();
         assert_eq!(fix_done.task.status, TaskStatus::Completed);
 
         // 6. Bob resubmits `task` as Completed -> moves to `in_review` and spawns `review_round_2` for `human`
-        let step2 = transition_task_status(&mut conn, &task.id, TaskStatus::Completed).unwrap();
+        let step2 = transition_task_status(&mut db, &task.id, TaskStatus::Completed).unwrap();
         assert_eq!(step2.task.status, TaskStatus::InReview);
         let review_round_2 = step2
             .spawned_review_task
@@ -707,13 +708,13 @@ mod tests {
         assert_ne!(review_round_2.id, review_round_1.id);
 
         // 7. Human approves by completing `review_round_2` -> `review_round_2` completes AND `task` auto-transitions from `in_review` to `completed`!
-        let approval = transition_task_status(&mut conn, &review_round_2.id, TaskStatus::Completed).unwrap();
+        let approval = transition_task_status(&mut db, &review_round_2.id, TaskStatus::Completed).unwrap();
         assert_eq!(approval.task.status, TaskStatus::Completed);
         assert_eq!(approval.auto_completed_parent_tasks.len(), 1);
         assert_eq!(approval.auto_completed_parent_tasks[0].id, task.id);
         assert_eq!(approval.auto_completed_parent_tasks[0].status, TaskStatus::Completed);
 
-        let final_parent = get_task(&conn, &task.id).unwrap();
+        let final_parent = get_task(&db, &task.id).unwrap();
         assert_eq!(final_parent.status, TaskStatus::Completed);
         assert!(final_parent.completed_at.is_some());
     }
