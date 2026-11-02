@@ -219,6 +219,37 @@ pub enum FocusPreset {
     UnblockOthers,
 }
 
+impl FocusPreset {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::QuickWins => "quick_wins",
+            Self::EatTheFrog => "eat_the_frog",
+            Self::UnblockOthers => "unblock_others",
+        }
+    }
+}
+
+impl fmt::Display for FocusPreset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for FocusPreset {
+    type Err = WsidError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "balanced" | "default" => Ok(Self::Balanced),
+            "quick_wins" | "quick-wins" | "quickwins" => Ok(Self::QuickWins),
+            "eat_the_frog" | "eat-the-frog" | "eatthefrog" | "frog" => Ok(Self::EatTheFrog),
+            "unblock_others" | "unblock-others" | "unblockothers" | "unblock" => Ok(Self::UnblockOthers),
+            other => Err(WsidError::Validation(format!("invalid focus preset '{other}'"))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskRelation {
     pub source_id: String,
