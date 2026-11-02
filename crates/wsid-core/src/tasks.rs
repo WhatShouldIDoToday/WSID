@@ -529,13 +529,21 @@ mod tests {
         let mut db = open_in_memory_db().unwrap();
 
         assert!(
-            create_task(&mut db, CreateTaskInput { title: "Invalid importance".to_string(), importance: Some(6), ..Default::default() }, "bob")
-                .is_err()
+            create_task(
+                &mut db,
+                CreateTaskInput { title: "Invalid importance".to_string(), importance: Some(6), ..Default::default() },
+                "bob"
+            )
+            .is_err()
         );
 
         assert!(
-            create_task(&mut db, CreateTaskInput { title: "Invalid difficulty".to_string(), difficulty: Some(0), ..Default::default() }, "bob")
-                .is_err()
+            create_task(
+                &mut db,
+                CreateTaskInput { title: "Invalid difficulty".to_string(), difficulty: Some(0), ..Default::default() },
+                "bob"
+            )
+            .is_err()
         );
 
         assert!(
