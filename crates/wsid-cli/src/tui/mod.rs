@@ -2,6 +2,7 @@ pub mod app;
 pub mod form;
 pub mod text_edit;
 pub mod ui;
+pub mod user_ref;
 
 use std::path::Path;
 use std::time::Duration;

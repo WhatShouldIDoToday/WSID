@@ -15,6 +15,7 @@ use wsid_core::{
 };
 
 use crate::tui::text_edit::{self, EditKind, TextHistory};
+use crate::tui::user_ref::user_kind_mismatch;
 
 /// How long the active field must be idle before it is validated.
 pub const VALIDATION_DEBOUNCE: Duration = Duration::from_millis(400);
@@ -25,6 +26,8 @@ const SGDB_DATE: usize = 3;
 const TIME_ESTIMATE: usize = 4;
 const RELATIONS: usize = 10;
 const ATTACHMENTS: usize = 11;
+/// Reporter, Assignee, Evaluator.
+const PERSONA_FIELDS: [usize; 3] = [12, 13, 14];
 const MAX_DROPDOWN_ROWS: usize = 8;
 
 fn clean(msg: &str) -> String {
@@ -1055,6 +1058,17 @@ impl DataEntryForm {
                 .map(|n| n.message.clone());
         }
         self.refresh_local_hints();
+        self.apply_kind_warnings(db);
+    }
+
+    /// Replaces the note on Reporter/Assignee/Evaluator with a kind-mismatch warning when one applies.
+    fn apply_kind_warnings(&mut self, db: &Database) {
+        let kinds = wsid_core::list_user_kinds(db).unwrap_or_default();
+        for idx in PERSONA_FIELDS {
+            if let Some(warning) = user_kind_mismatch(&self.fields[idx], &kinds) {
+                self.notes[idx] = Some(warning);
+            }
+        }
     }
 
     fn apply(&mut self, issues: &[FieldIssue], rows: &[usize]) {
@@ -1091,6 +1105,7 @@ impl DataEntryForm {
         let rows: &[usize] = if idx == 2 || idx == 3 { &[2, 3] } else { &[idx] };
         // A row you haven't visited keeps its own state, except the paired date row.
         self.apply(&issues, rows);
+        self.apply_kind_warnings(db);
         if idx == RELATIONS {
             self.errors[RELATIONS] = self
                 .relation_buffer_error(db, user)
@@ -1104,6 +1119,7 @@ impl DataEntryForm {
         let issues = validate_task_draft(db, &self.to_draft(), user);
         let all: Vec<usize> = (0..FIELD_COUNT).collect();
         self.apply(&issues, &all);
+        self.apply_kind_warnings(db);
         if !self.fields[RELATIONS].trim().is_empty() {
             self.errors[RELATIONS] = self
                 .relation_buffer_error(db, user)
@@ -1134,7 +1150,7 @@ impl DataEntryForm {
             RELATIONS => "[type] kind or task | [Enter] Add | [Enter on empty] Manage | [Tab] Next | [Ctrl+S] Submit",
             ATTACHMENTS if self.pending_attachment.is_some() => "[type] Alt text | [Enter] Add file | [Esc] Back",
             ATTACHMENTS => "[type/paste/drop] File path | [Enter] Add | [Enter on empty] Manage | [Tab] Next | [Ctrl+S] Submit",
-            12..=14 => "[type] user (new users are created) | [Tab] Next | [Ctrl+S] Submit",
+            12..=14 => "[type] user or kind:user (new users are created) | [Tab] Next | [Ctrl+S] Submit",
             _ => "[Tab/Up/Down] Field | [Alt+Bksp] Del word | [Ctrl+Z] Undo | [Ctrl+S] Submit | [Esc] Cancel",
         }
     }
