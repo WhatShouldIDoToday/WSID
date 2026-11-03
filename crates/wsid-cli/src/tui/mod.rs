@@ -5,7 +5,8 @@ pub mod ui;
 use std::path::Path;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind};
+use crossterm::execute;
 use ratatui::Terminal;
 use wsid_core::AppConfig;
 
@@ -15,7 +16,9 @@ pub fn run_tui(db_path: &Path, config: AppConfig, user: String, accessible_mode:
     let mut app = TuiApp::new(db_path, config, user, accessible_mode)?;
 
     let mut terminal = ratatui::init();
+    let _ = execute!(std::io::stdout(), EnableBracketedPaste);
     let res = run_event_loop(&mut terminal, &mut app);
+    let _ = execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
 
     res
@@ -27,10 +30,10 @@ fn run_event_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app:
         terminal.draw(|frame| ui::render(frame, app))?;
 
         if event::poll(tick_rate)? {
-            if let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press
-            {
-                app.handle_key(key);
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => app.handle_key(key),
+                Event::Paste(text) => app.handle_paste(&text),
+                _ => {}
             }
         } else {
             let _ = app.on_tick();

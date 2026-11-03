@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -652,14 +654,18 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         .select(Some(app.entry_form.active_index));
 
     let label_width = form::label_width();
+    let pad = " ".repeat(label_width + 2);
     let error_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+    let note_style = Style::default().fg(Color::Yellow);
+    let sub_style = Style::default().fg(Color::Cyan);
     let mut items: Vec<ListItem> = Vec::new();
-    // Rows each item occupies (1, or 2 when an error line is shown), for cursor placement.
+    // Rows each item occupies (label row, list sub-rows, error and note lines), for cursor and dropdown placement.
     let mut heights: Vec<u16> = Vec::new();
     for (idx, spec) in form::FIELDS.iter().enumerate() {
-        let is_active = app.entry_form.active_index == idx;
-        let val = &app.entry_form.fields[idx];
-        let error = app.entry_form.errors[idx].as_deref();
+        let form = &app.entry_form;
+        let is_active = form.active_index == idx;
+        let val = &form.fields[idx];
+        let error = form.errors[idx].as_deref();
         let style = if error.is_some() {
             error_style
         } else if is_active {
@@ -669,9 +675,43 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         } else {
             Style::default()
         };
-        let mut lines = vec![Line::from(Span::styled(format!("{:<label_width$}: {val}", spec.label), style))];
+        let label = match (idx, &form.pending_attachment) {
+            (11, Some(path)) => {
+                let name = Path::new(path)
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                format!("Alt text for {name}")
+                    .chars()
+                    .take(label_width)
+                    .collect()
+            }
+            _ => spec.label.to_string(),
+        };
+        let mut lines = vec![Line::from(Span::styled(format!("{label:<label_width$}: {val}"), style))];
+        match idx {
+            10 => {
+                for (r, title) in form.relations.iter().zip(&form.relation_titles) {
+                    lines.push(Line::from(Span::styled(format!("{pad}↳ {}  {}  {title}", r.relation, r.target), sub_style)));
+                }
+            }
+            11 => {
+                for a in &form.attachments {
+                    let name = Path::new(&a.path)
+                        .file_name()
+                        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                    lines.push(Line::from(Span::styled(
+                        format!("{pad}↳ {name} - \"{}\"", a.description.as_deref().unwrap_or("")),
+                        sub_style,
+                    )));
+                }
+            }
+            _ => {}
+        }
         if let Some(msg) = error {
-            lines.push(Line::from(Span::styled(format!("{}✗ {msg}", " ".repeat(label_width + 2)), error_style)));
+            lines.push(Line::from(Span::styled(format!("{pad}✗ {msg}"), error_style)));
+        }
+        if let Some(note) = form.notes[idx].as_deref() {
+            lines.push(Line::from(Span::styled(format!("{pad}+ {note}"), note_style)));
         }
         heights.push(lines.len() as u16);
         items.push(ListItem::new(lines));
@@ -714,9 +754,44 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                     .min(inner_area.right().saturating_sub(1));
                 let cursor_y = inner_area.y.saturating_add(visible_row);
                 frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+                render_dropdown(frame, inner_area, visible_row, heights[active], app);
             }
         }
     }
+}
+
+/// Suggestion / manage list under the active row (above it when there is no room below).
+fn render_dropdown(frame: &mut Frame, inner: Rect, row: u16, row_height: u16, app: &TuiApp) {
+    let Some(dd) = app.entry_form.dropdown.as_ref() else {
+        return;
+    };
+    let x = inner
+        .x
+        .saturating_add(form::value_column() as u16)
+        .min(inner.right().saturating_sub(1));
+    let width = inner.right().saturating_sub(x).min(70);
+    let rows = dd.labels.len().min(8) as u16;
+    let height = rows + if app.accessible_mode { 0 } else { 2 };
+    let below = inner.y.saturating_add(row).saturating_add(row_height);
+    let y = if below + height <= inner.bottom() || inner.y + row < height { below } else { inner.y + row - height };
+    let popup = Rect { x, y, width, height: height.min(inner.bottom().saturating_sub(y)) };
+    if popup.width == 0 || popup.height == 0 {
+        return;
+    }
+
+    let items: Vec<ListItem> = dd
+        .labels
+        .iter()
+        .map(|l| ListItem::new(Line::from(l.as_str())))
+        .collect();
+    let mut state = ratatui::widgets::ListState::default();
+    state.select(Some(dd.selected));
+    let list = List::new(items)
+        .block(panel_block(if dd.manage { " Remove with Delete " } else { "" }, Borders::ALL, app.accessible_mode))
+        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
+        .highlight_symbol("> ");
+    frame.render_widget(Clear, popup);
+    frame.render_stateful_widget(list, popup, &mut state);
 }
 
 /// Label without its leading number and trailing hint, e.g. `3. Due Date (YYYY-MM-DD HH:MM)` -> `Due Date`.
@@ -786,7 +861,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
         ActiveTab::Database => {
             "[1-5] Views | [/] Search | [f] Status | [t] Tag | [u] User | [m] Mine | [o/O] Sort | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [q] Quit"
         }
-        ActiveTab::DataEntry => "[Tab/Up/Down] Field | [Ctrl+S] Submit | [Esc] Cancel | [?] Help & Status",
+        ActiveTab::DataEntry => app.entry_form.hint(),
     };
 
     let mut spans: Vec<Span> = Vec::new();

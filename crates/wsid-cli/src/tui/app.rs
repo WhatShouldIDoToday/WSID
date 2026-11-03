@@ -4,17 +4,18 @@ use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
 use wsid_core::{
-    AppConfig, BulkTaskPatch, CreateTaskInput, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FocusPreset,
-    FocusQueueResponse, RelationInputKind, SearchHit, SearchQuery, Task, TaskNote, TaskStatus, UpdateTaskInput, add_task_note,
-    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task, delete_task, delete_task_note,
+    AppConfig, BulkTaskPatch, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FieldIssue, FocusPreset,
+    FocusQueueResponse, SearchHit, SearchQuery, Task, TaskNote, TaskStatus, UpdateTaskInput, WsidError, add_task_note,
+    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task_from_draft, delete_task, delete_task_note,
     get_attachment, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
-    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user,
-    open_file_in_os, register_user, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
+    get_related_tasks, get_task, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os,
+    register_user, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
     update_attachment_description, update_task,
 };
 
-use crate::args::{parse_date_arg, parse_duration_estimate, parse_relation_arg};
+use crate::args::{parse_date_arg, parse_duration_estimate};
 use crate::cli_runner::read_system_clipboard_attachment;
+use crate::tui::form;
 pub use crate::tui::form::DataEntryForm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,7 +259,8 @@ impl TuiApp {
     /// Polls `PRAGMA data_version` on the SQLite database and reloads state if an external
     /// process (e.g. MCP server or CLI) committed changes.
     pub fn on_tick(&mut self) -> wsid_core::Result<bool> {
-        self.entry_form.validate_if_idle(std::time::Instant::now());
+        self.entry_form
+            .validate_if_idle(&self.db, &self.user, std::time::Instant::now());
         if self.change_detector.has_external_changes(&self.db)? {
             self.refresh_all()?;
             self.status_message = "Live reload: detected external database update".to_string();
@@ -412,7 +414,7 @@ impl TuiApp {
                     .take()
                     .and_then(|errs| errs.into_iter().find_map(|(i, _)| i));
                 if let Some(i) = first {
-                    self.entry_form.set_active_index(i);
+                    self.entry_form.set_active_index(&self.db, &self.user, i);
                 }
             }
             return;
@@ -450,7 +452,7 @@ impl TuiApp {
 
         // 3. If on DataEntry tab, route typing to form unless switching tabs via Alt/F-keys or Esc
         if self.active_tab == ActiveTab::DataEntry {
-            if key.code == KeyCode::Esc {
+            if key.code == KeyCode::Esc && !self.entry_form.wants_escape() {
                 self.active_tab = ActiveTab::Focus;
                 self.status_message = "Switched to Focus View".to_string();
                 return;
@@ -956,107 +958,81 @@ impl TuiApp {
             return;
         }
 
+        let rows = DataEntryForm::SUBMIT_INDEX + 1;
+        let (db, user) = (&self.db, self.user.as_str());
+        let form = &mut self.entry_form;
+        let mut submit = false;
         match key.code {
-            KeyCode::Tab | KeyCode::Down => {
-                let next = (self.entry_form.active_index + 1) % (DataEntryForm::SUBMIT_INDEX + 1);
-                self.entry_form.set_active_index(next);
-            }
-            KeyCode::BackTab | KeyCode::Up => {
-                let prev = self
-                    .entry_form
-                    .active_index
-                    .checked_sub(1)
-                    .unwrap_or(DataEntryForm::SUBMIT_INDEX);
-                self.entry_form.set_active_index(prev);
-            }
-            KeyCode::Enter => {
-                if self.entry_form.active_index == DataEntryForm::SUBMIT_INDEX {
-                    self.submit_data_entry_form();
+            KeyCode::Esc => form.escape(db, user),
+            KeyCode::Tab => form.set_active_index(db, user, (form.active_index + 1) % rows),
+            KeyCode::BackTab => form.set_active_index(db, user, form.active_index.checked_sub(1).unwrap_or(rows - 1)),
+            KeyCode::Down | KeyCode::Up => {
+                let delta: isize = if key.code == KeyCode::Down { 1 } else { -1 };
+                if let Some(dd) = form.dropdown.as_mut() {
+                    dd.step(delta);
                 } else {
-                    let next = (self.entry_form.active_index + 1) % (DataEntryForm::SUBMIT_INDEX + 1);
-                    self.entry_form.set_active_index(next);
+                    let next = (form.active_index as isize + delta).rem_euclid(rows as isize) as usize;
+                    form.set_active_index(db, user, next);
                 }
             }
-            KeyCode::Backspace => self.entry_form.backspace(),
+            KeyCode::Enter => {
+                if form.active_index == DataEntryForm::SUBMIT_INDEX {
+                    submit = true;
+                } else if form.enter(db, user) {
+                    form.set_active_index(db, user, (form.active_index + 1) % rows);
+                }
+            }
+            KeyCode::Delete => {
+                form.delete_selected_item();
+            }
+            KeyCode::Backspace => {
+                if !form.delete_selected_item() {
+                    form.backspace(db, user);
+                }
+            }
             KeyCode::Char(ch) => {
-                if self.entry_form.active_index < DataEntryForm::SUBMIT_INDEX {
-                    self.entry_form.type_char(ch);
+                if form.active_index < DataEntryForm::SUBMIT_INDEX {
+                    form.type_char(db, user, ch);
                 } else if ch == ' ' {
-                    self.submit_data_entry_form();
+                    submit = true;
                 }
             }
             _ => {}
         }
+        if submit {
+            self.submit_data_entry_form();
+        }
+    }
+
+    /// Bracketed paste (also how terminals deliver drag-and-dropped file paths).
+    pub fn handle_paste(&mut self, text: &str) {
+        if self.active_tab == ActiveTab::DataEntry && self.form_errors.is_none() {
+            self.entry_form.paste(&self.db, &self.user, text);
+        }
     }
 
     pub fn submit_data_entry_form(&mut self) {
-        let problems = self.entry_form.validate_all();
+        let problems = self.entry_form.validate_all(&self.db, &self.user);
         if !problems.is_empty() {
             self.form_errors = Some(problems.into_iter().map(|(i, m)| (Some(i), m)).collect());
             return;
         }
 
-        // Every field has passed its validator, so the parses below cannot fail.
-        let f = self.entry_form.fields.clone();
-        let opt = |s: &str| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) };
-        let tags: Vec<String> = f[9]
-            .split(|c: char| c == ',' || c.is_whitespace())
-            .filter(|s| !s.is_empty())
-            .map(ToString::to_string)
-            .collect();
-
-        // Relations like `blocks:AB1234, sub_task_of:CD5678` or a bare ID (defaults to `related`)
-        let mut parsed_relations: Vec<(RelationInputKind, String)> = Vec::new();
-        for tok in f[10]
-            .split(|c: char| c == ',' || c.is_whitespace())
-            .filter(|s| !s.is_empty())
-        {
-            let (rel, target) = tok.split_once(':').unwrap_or(("related", tok));
-            if let Ok(kind) = parse_relation_arg(rel) {
-                parsed_relations.push((kind, target.to_string()));
-            }
-        }
-
-        let input = CreateTaskInput {
-            title: f[0].trim().to_string(),
-            description: opt(&f[1]),
-            due_date: parse_date_arg("due_date", Some(&f[2])).ok().flatten(),
-            sgdb_date: parse_date_arg("sgdb_date", Some(&f[3])).ok().flatten(),
-            time_estimate_minutes: opt(&f[4]).and_then(|s| parse_duration_estimate(&s).ok()),
-            difficulty: f[5].trim().parse::<u8>().ok(),
-            importance: f[6].trim().parse::<u8>().ok(),
-            manual_priority: f[7].trim().parse::<i8>().ok(),
-            urgent_override: Some(matches!(f[8].trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "y")),
-            tags,
-            reporter: opt(&f[13]),
-            assignee: opt(&f[14]),
-            evaluator: opt(&f[15]),
-            ..Default::default()
-        };
-        let attach_path = f[11].trim().to_string();
-        let attach_desc = opt(&f[12]);
-
-        match create_task(&mut self.db, input, &self.user) {
+        let draft = self.entry_form.to_draft();
+        match create_task_from_draft(&mut self.db, &draft, &self.user) {
             Ok(created) => {
-                for (kind, target_id) in parsed_relations {
-                    if let Err(err) = link_tasks(&mut self.db, &created.id, kind, &target_id) {
-                        self.status_message = format!("Created [{}], but linking '{target_id}' failed: {err}", created.id);
-                        let _ = self.refresh_all();
-                        return;
-                    }
-                }
-
-                if !attach_path.is_empty()
-                    && let Err(err) = attach_existing_file(&mut self.db, &created.id, None, Path::new(&attach_path), attach_desc.as_deref())
-                {
-                    self.status_message = format!("Created [{}], but attaching file failed: {err}", created.id);
-                    let _ = self.refresh_all();
-                    return;
-                }
-
                 self.entry_form = DataEntryForm::new(&self.user);
                 let _ = self.refresh_all();
                 self.status_message = format!("Created task [{}] {}", created.id, created.title);
+            }
+            Err(WsidError::DraftRejected(issues)) => {
+                self.form_errors = Some(
+                    issues
+                        .into_iter()
+                        .filter(FieldIssue::is_error)
+                        .map(|i| (Some(form::field_index(i.field)), i.message))
+                        .collect(),
+                );
             }
             Err(err) => {
                 let msg = err.to_string();

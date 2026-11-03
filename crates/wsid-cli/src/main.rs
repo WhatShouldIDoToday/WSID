@@ -605,4 +605,141 @@ mod tests {
         assert!(app.form_errors.is_none(), "{:?}", app.form_errors);
         assert_eq!(app.all_tasks.len(), 1);
     }
+
+    #[test]
+    fn tui_relation_attachment_and_user_pickers() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("tui_pickers.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let target = wsid_core::create_task(
+            &mut Database::open(&db_path).unwrap(),
+            wsid_core::CreateTaskInput { title: "Fix login".to_string(), ..Default::default() },
+            "alice",
+        )
+        .unwrap();
+        app.refresh_all().unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        let type_str = |app: &mut TuiApp, s: &str| {
+            for ch in s.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        };
+        let screen = |terminal: &Terminal<TestBackend>| -> String {
+            let buf = terminal.backend().buffer();
+            (0..buf.area.height)
+                .map(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        press(&mut app, KeyCode::Char('5'));
+        type_str(&mut app, "Picker task");
+        app.entry_form.set_active_index(&app.db, "alice", 10);
+
+        // Kind prefix -> dropdown of kinds -> Enter fills `blocks:`, then title search offers the task.
+        type_str(&mut app, "blo");
+        assert!(app.entry_form.dropdown.is_some());
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        assert!(screen(&terminal).contains("blocks"), "kind dropdown drawn");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.entry_form.fields[10], "blocks:");
+        type_str(&mut app, "login");
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        assert!(screen(&terminal).contains(&format!("{}  Fix login", target.id)), "target dropdown drawn");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.entry_form.relations.len(), 1);
+        assert_eq!(app.entry_form.relations[0].relation, "blocks");
+        assert!(app.entry_form.fields[10].is_empty());
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        assert!(screen(&terminal).contains("↳ blocks"), "relation sub-row drawn");
+
+        // Nonexistent task and unknown kind are flagged inline, in red, without leaving the field.
+        type_str(&mut app, "blocks:AB1333");
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            app.entry_form.errors[10]
+                .as_deref()
+                .unwrap()
+                .contains("No task AB1333")
+        );
+        assert_eq!(app.entry_form.relations.len(), 1);
+        for _ in 0..13 {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_str(&mut app, "blockz:AB1333");
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            app.entry_form.errors[10]
+                .as_deref()
+                .unwrap()
+                .contains("Unknown relation")
+        );
+        for _ in 0..13 {
+            press(&mut app, KeyCode::Backspace);
+        }
+
+        // Manage list: Enter on empty input opens it, Delete removes the highlighted relation.
+        press(&mut app, KeyCode::Enter);
+        assert!(app.entry_form.dropdown.as_ref().is_some_and(|d| d.manage));
+        press(&mut app, KeyCode::Delete);
+        assert!(app.entry_form.relations.is_empty());
+        assert_eq!(app.entry_form.active_index, 10);
+
+        // Attachments: a pasted quoted path opens the alt-text step prefilled with the file name.
+        let file = dir.path().join("a b.png");
+        std::fs::write(&file, b"x").unwrap();
+        app.entry_form.set_active_index(&app.db, "alice", 11);
+        app.handle_paste(&format!("'{}'", file.display()));
+        assert_eq!(app.entry_form.pending_attachment.as_deref(), Some(file.to_str().unwrap()));
+        assert_eq!(app.entry_form.fields[11], "a b.png");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.entry_form.attachments.len(), 1);
+        assert_eq!(app.entry_form.attachments[0].description.as_deref(), Some("a b.png"));
+
+        // A multi-file paste adds each file with its name as alt text; a missing file is an error.
+        let second = dir.path().join("c.txt");
+        std::fs::write(&second, b"y").unwrap();
+        app.handle_paste(&format!("{} {}", second.display(), second.display()));
+        assert_eq!(app.entry_form.attachments.len(), 3);
+        app.handle_paste("/definitely/missing.txt");
+        assert!(
+            app.entry_form.errors[11]
+                .as_deref()
+                .unwrap()
+                .contains("File not found")
+        );
+        app.entry_form.fields[11].clear();
+
+        // Users: a new name shows an info note; a known user is offered in the dropdown.
+        app.entry_form.set_active_index(&app.db, "alice", 13);
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_str(&mut app, "quebert");
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        assert!(screen(&terminal).contains("@quebert is new"), "new-user note drawn");
+
+        // Submit creates everything atomically, including the new user.
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(app.form_errors.is_none(), "{:?}", app.form_errors);
+        let created = app
+            .all_tasks
+            .iter()
+            .find(|t| t.title == "Picker task")
+            .unwrap();
+        assert_eq!(created.assignee, "quebert");
+    }
 }
