@@ -968,7 +968,7 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         lines.push(Line::from("  (None — press [f] to attach a file or [v] to paste from clipboard)"));
     } else {
         for (idx, att) in all_atts.iter().enumerate() {
-            let selected = idx == att_cursor;
+            let selected = app.attachment_focused && idx == att_cursor;
             let marked = app.attachment_marked.contains(&att.id);
             let exists = std::path::Path::new(&att.file_path).exists();
             let missing_suffix = if exists { "" } else { " (missing)" };

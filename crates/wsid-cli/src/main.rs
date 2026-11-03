@@ -871,6 +871,15 @@ mod tests {
         app.open_detail_for(&task_id);
         assert_eq!(app.detail_modal.as_ref().unwrap().all_attachments().len(), 3);
 
+        // Unfocused list has no cursor and no details block for an "implicitly selected" row.
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let unfocused = screen(&terminal);
+        assert!(!unfocused.contains("▶ [ ]"), "no attachment cursor before focus: {unfocused}");
+        assert!(!unfocused.contains("Linked file | text/plain"), "no details block before focus: {unfocused}");
+        assert!(unfocused.contains("Attachments (3) — press [a] to focus list"), "unfocused header: {unfocused}");
+
         // Focus attachments list with 'a'
         press(&mut app, KeyCode::Char('a'));
         assert!(app.attachment_focused);
