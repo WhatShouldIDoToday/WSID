@@ -19,12 +19,12 @@
   interface Props {
     items: EisenhowerClassification[];
     activeUser: string;
-    filterByUser: boolean;
+    userFilter: string;
     activeProject: string;
     knownTags: string[];
     knownUsers: string[];
     knownProjects: string[];
-    onToggleUserFilter: (enabled: boolean) => void;
+    onUserFilterChange: (user: string) => void;
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
     announce: (msg: string) => void;
@@ -33,12 +33,12 @@
   let {
     items,
     activeUser,
-    filterByUser,
+    userFilter,
     activeProject,
     knownTags,
     knownUsers,
     knownProjects,
-    onToggleUserFilter,
+    onUserFilterChange,
     onSelectTask,
     onDataChanged,
     announce,
@@ -76,6 +76,19 @@
     "q3_delegate_quick",
     "q4_later",
   ];
+
+  const USER_ALL = "all";
+  let userOptions = $derived(
+    [
+      ...new Set([
+        activeUser,
+        ...knownUsers,
+        ...(userFilter === USER_ALL ? [] : [userFilter]),
+      ]),
+    ]
+      .filter(Boolean)
+      .sort(),
+  );
 
   const selection = new Selection();
   /** Ids being dragged (the whole selection when the grabbed card is selected). */
@@ -255,16 +268,20 @@
     </div>
 
     <div class="control-inline">
-      <input
-        id="matrix-user-toggle"
-        type="checkbox"
-        checked={filterByUser}
-        onchange={(e) =>
-          onToggleUserFilter((e.currentTarget as HTMLInputElement).checked)}
-      />
-      <label for="matrix-user-toggle">
-        Only show tasks assigned to @{activeUser}
+      <label for="matrix-user-select" class="field-label" style="margin: 0;">
+        User
       </label>
+      <select
+        id="matrix-user-select"
+        value={userFilter}
+        onchange={(e) =>
+          onUserFilterChange((e.currentTarget as HTMLSelectElement).value)}
+      >
+        <option value={USER_ALL}>All users</option>
+        {#each userOptions as user (user)}
+          <option value={user}>@{user}</option>
+        {/each}
+      </select>
     </div>
   </div>
 

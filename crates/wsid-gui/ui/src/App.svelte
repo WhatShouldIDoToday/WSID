@@ -42,7 +42,8 @@
 
   let activeTab = $state<ViewTab>("focus");
   let session = $state<AppSessionSnapshot | null>(null);
-  let filterMyTasksOnly = $state<boolean>(false);
+  /** Assignee filter for the Eisenhower matrix; `all` means every user. */
+  let eisenhowerUser = $state<string>("all");
   let focusQueue = $state<FocusQueueResponse | null>(null);
   /** Focus queue project scope; unlike Kanban/Eisenhower it starts on all. */
   let focusProject = $state<string>("all");
@@ -86,6 +87,10 @@
   function enterView(nextTab: ViewTab) {
     if (nextTab === "focus" && focusProject !== "all") {
       focusProject = "all";
+      void refreshAllData();
+    }
+    if (nextTab === "eisenhower" && eisenhowerUser !== "all") {
+      eisenhowerUser = "all";
       void refreshAllData();
     }
     activeTab = nextTab;
@@ -132,7 +137,7 @@
     try {
       const snap = await getSessionState();
       session = snap;
-      const userFilter = filterMyTasksOnly ? snap.active_user : null;
+      const userFilter = eisenhowerUser === "all" ? null : eisenhowerUser;
       const [fq, blocked, tasks, matrix] = await Promise.all([
         getFocusViewData(
           snap.active_user,
@@ -159,8 +164,11 @@
   async function handleSelectUser(user: string) {
     const trimmed = user.trim();
     if (!trimmed) return;
+    const previousUser = session?.active_user ?? null;
     try {
       session = await setActiveUser(trimmed);
+      // An Eisenhower user filter that named the previous active user follows the switch.
+      if (eisenhowerUser === previousUser) eisenhowerUser = session.active_user;
       userSwitcherOpen = false;
       announce(`Switched active user to @${session.active_user}.`);
       await refreshAllData();
@@ -205,6 +213,7 @@
   /** Database switches reset every view's temporary scope, matching the TUI `reset_after_database_switch`. */
   function resetViewScopeAfterDatabaseSwitch() {
     focusProject = "all";
+    eisenhowerUser = "all";
     viewEpoch += 1;
   }
 
@@ -470,9 +479,13 @@
           items={eisenhowerItems}
           activeUser={session?.active_user ?? "human"}
           {activeProject}
-          filterByUser={filterMyTasksOnly}
-          onToggleUserFilter={async (enabled) => {
-            filterMyTasksOnly = enabled;
+          userFilter={eisenhowerUser}
+          onUserFilterChange={async (user) => {
+            eisenhowerUser = user;
+            announce(
+              "Matrix user filter: " +
+                (user === "all" ? "all users" : "@" + user),
+            );
             await refreshAllData();
           }}
           knownTags={session?.known_tags ?? []}

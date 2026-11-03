@@ -80,7 +80,24 @@
     return selection.has(task.id) ? [...selection.ids] : [task.id];
   }
 
-  let filterMyTasksOnly = $state<boolean>(false);
+  const USER_ALL = "all";
+  /** Assignee shown on the board; starts on all users. */
+  let userFilter = $state<string>(USER_ALL);
+  let followedUser = untrack(() => activeUser);
+
+  // A user filter that still names the previous active user follows a switch; other choices are kept.
+  $effect(() => {
+    const nextUser = activeUser;
+    if (nextUser !== followedUser) {
+      if (userFilter === followedUser) userFilter = nextUser;
+      followedUser = nextUser;
+    }
+  });
+
+  let userOptions = $derived(
+    [...new Set([activeUser, ...knownUsers])].filter(Boolean).sort(),
+  );
+
   let dropTargetStatus = $state<TaskStatus | null>(null);
   let pointerDrag = $state<PointerDragState<Task> | null>(null);
 
@@ -89,10 +106,10 @@
       .filter(
         (t) => projectFilter === PROJECT_ALL || t.project === projectFilter,
       )
-      .filter((t) =>
-        filterMyTasksOnly
-          ? t.assignee.toLowerCase() === activeUser.toLowerCase()
-          : true,
+      .filter(
+        (t) =>
+          userFilter === USER_ALL ||
+          t.assignee.toLowerCase() === userFilter.toLowerCase(),
       ),
   );
 
@@ -225,14 +242,23 @@
     </div>
 
     <div class="control-inline">
-      <input
-        id="kanban-user-filter"
-        type="checkbox"
-        bind:checked={filterMyTasksOnly}
-      />
-      <label for="kanban-user-filter">
-        Only show tasks assigned to @{activeUser}
+      <label for="kanban-user-select" class="field-label" style="margin: 0;">
+        User
       </label>
+      <select
+        id="kanban-user-select"
+        bind:value={userFilter}
+        onchange={() =>
+          announce(
+            "Kanban user filter: " +
+              (userFilter === USER_ALL ? "all users" : "@" + userFilter),
+          )}
+      >
+        <option value={USER_ALL}>All users</option>
+        {#each userOptions as user (user)}
+          <option value={user}>@{user}</option>
+        {/each}
+      </select>
     </div>
   </div>
 
