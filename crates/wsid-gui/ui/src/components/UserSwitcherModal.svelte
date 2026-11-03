@@ -114,7 +114,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
-  class="user-modal-backdrop"
+  class="switcher-modal-backdrop"
   role="dialog"
   aria-modal="true"
   aria-labelledby="user-switcher-title"
@@ -124,8 +124,8 @@
     if (e.target === e.currentTarget) onClose();
   }}
 >
-  <div class="user-modal-card">
-    <div class="user-modal-header">
+  <div class="switcher-modal-card">
+    <div class="switcher-modal-header">
       <h2 id="user-switcher-title">Switch Active User</h2>
       <button
         type="button"
@@ -140,7 +140,7 @@
     <input
       bind:this={inputEl}
       type="text"
-      class="user-modal-input"
+      class="switcher-modal-input"
       placeholder="Type a user name (letters, numbers, _, -) and press Enter..."
       aria-label="Filter users or enter a new user name"
       aria-invalid={typedValidation.error || validationError ? "true" : "false"}
@@ -157,12 +157,12 @@
       </div>
     {/if}
 
-    <ul class="user-modal-list" role="listbox" aria-label="Known users">
+    <ul class="switcher-modal-list" role="listbox" aria-label="Known users">
       {#each filteredUsers as user, idx (user)}
         <li role="option" aria-selected={user === activeUser}>
           <button
             type="button"
-            class="user-modal-option"
+            class="switcher-modal-option"
             class:is-highlighted={idx === highlightedIndex}
             class:is-current={user === activeUser}
             onclick={() => chooseUser(user)}
@@ -184,7 +184,7 @@
         <li role="option" aria-selected="false">
           <button
             type="button"
-            class="user-modal-option is-highlighted"
+            class="switcher-modal-option is-highlighted"
             onclick={() => chooseUser(normalizedTyped)}
           >
             <span>Create & switch to <strong>@{normalizedTyped}</strong></span>

@@ -145,6 +145,7 @@ export interface AppSessionSnapshot {
   is_global_db: boolean;
   primary_user: string;
   active_user: string;
+  active_project: string;
   active_preset: FocusPreset;
   focus_limit: number;
   recent_workspaces: string[];
@@ -586,6 +587,36 @@ export function validateUsername(raw: string): {
   return { normalized: trimmed, error: null };
 }
 
+/** Mirrors core `DEFAULT_PROJECT`; a blank project name normalizes to it. */
+export const DEFAULT_PROJECT = "default";
+
+/** Mirrors core `ALL_PROJECTS`: a filter sentinel, never a real project. */
+export const ALL_PROJECTS = "all";
+
+export function validateProject(raw: string): {
+  normalized: string | null;
+  error: string | null;
+} {
+  // Mirrors core `normalize_project`: trim, lowercase, blank means the default project.
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) {
+    return { normalized: DEFAULT_PROJECT, error: null };
+  }
+  if (!USERNAME_REGEX.test(trimmed)) {
+    return {
+      normalized: null,
+      error: `Invalid project "${raw.trim()}" — projects may only contain letters, numbers, underscores (_), or dashes (-).`,
+    };
+  }
+  if (trimmed === ALL_PROJECTS) {
+    return {
+      normalized: null,
+      error: `'${ALL_PROJECTS}' is reserved and cannot be used as a project name.`,
+    };
+  }
+  return { normalized: trimmed, error: null };
+}
+
 export const TAG_REGEX = /^[a-z0-9_-]+$/;
 
 /** Mirrors core `normalize_tag`: optional leading `#`, lowercase, `[a-z0-9_-]+`. */
@@ -783,6 +814,12 @@ export async function getSessionState(): Promise<AppSessionSnapshot> {
 
 export async function setActiveUser(user: string): Promise<AppSessionSnapshot> {
   return invoke<AppSessionSnapshot>("set_active_user", { user });
+}
+
+export async function setActiveProject(
+  project: string,
+): Promise<AppSessionSnapshot> {
+  return invoke<AppSessionSnapshot>("set_active_project", { project });
 }
 
 export async function previewDeleteUser(

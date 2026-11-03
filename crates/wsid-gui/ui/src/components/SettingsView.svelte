@@ -16,6 +16,7 @@
     uiPrefs: UiPreferences;
     onUpdateUiPrefs: (prefs: UiPreferences) => void;
     onOpenUserModal: () => void;
+    onOpenProjectModal: () => void;
     onPickWorkspaceDb: () => void | Promise<void>;
     onSwitchGlobalDb: () => void | Promise<void>;
     onSwitchRecentDb: (path: string) => void | Promise<void>;
@@ -32,6 +33,7 @@
     uiPrefs,
     onUpdateUiPrefs,
     onOpenUserModal,
+    onOpenProjectModal,
     onPickWorkspaceDb,
     onSwitchGlobalDb,
     onSwitchRecentDb,
@@ -139,6 +141,18 @@
       </div>
 
       <div class="form-field" style="margin-bottom: 1rem;">
+        <span class="field-label">Active Project</span>
+        <div
+          style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;"
+        >
+          <span class="badge">#{session.active_project}</span>
+          <button type="button" onclick={onOpenProjectModal}>
+            Switch Project...
+          </button>
+        </div>
+      </div>
+
+      <div class="form-field" style="margin-bottom: 1rem;">
         <label for="settings-focus-preset" class="field-label">
           Default Focus Preset
         </label>
@@ -180,6 +194,19 @@
     </section>
 
     <!-- Appearance & Accessibility -->
+    <section class="card" aria-labelledby="settings-shortcuts-heading">
+      <h3 id="settings-shortcuts-heading" style="margin: 0 0 0.85rem 0;">
+        Keyboard Shortcuts
+      </h3>
+      <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.9rem;">
+        <li><kbd>Ctrl+U</kbd> switch active user (any view)</li>
+        <li><kbd>Ctrl+P</kbd> switch active project (any view)</li>
+        <li><kbd>1</kbd>–<kbd>5</kbd> switch views, <kbd>6</kbd> Settings</li>
+        <li><kbd>Cmd/Ctrl+,</kbd> open Settings</li>
+        <li><kbd>?</kbd> About and third-party licenses</li>
+      </ul>
+    </section>
+
     <section class="card" aria-labelledby="settings-a11y-heading">
       <h3 id="settings-a11y-heading" style="margin: 0 0 0.85rem 0;">
         Appearance & Accessibility

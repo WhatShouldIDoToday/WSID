@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import {
     type EisenhowerClassification,
     type EisenhowerQuadrant,
@@ -19,6 +20,7 @@
     items: EisenhowerClassification[];
     activeUser: string;
     filterByUser: boolean;
+    activeProject: string;
     knownTags: string[];
     knownUsers: string[];
     knownProjects: string[];
@@ -32,6 +34,7 @@
     items,
     activeUser,
     filterByUser,
+    activeProject,
     knownTags,
     knownUsers,
     knownProjects,
@@ -42,8 +45,17 @@
   }: Props = $props();
 
   const PROJECT_ALL = "all";
-  /** Project shown on the matrix; Eisenhower starts on `default`, not `all`. */
-  let projectFilter = $state<string>("default");
+  /** Project shown on the matrix; starts on the active project, not `all`. */
+  let projectFilter = $state<string>(untrack(() => activeProject));
+
+  let followedProject = untrack(() => activeProject);
+  $effect(() => {
+    const nextProject = activeProject;
+    if (nextProject !== followedProject) {
+      if (projectFilter === followedProject) projectFilter = nextProject;
+      followedProject = nextProject;
+    }
+  });
   let projectOptions = $derived(
     [
       ...new Set([

@@ -16,10 +16,10 @@ use wsid_core::{
     compute_focus_queue_in_project, create_task_from_draft, default_config_path, default_global_db_path, delete_task, delete_task_note,
     delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
     get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
-    list_known_projects, list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os, parse_deadline_datetime,
-    preview_user_deletion, register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks,
-    transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task, update_task_relation,
-    validate_focus_limit, validate_task_draft,
+    list_known_projects, list_known_users, list_task_notes, list_tasks, normalize_project, normalize_user, open_file_in_os,
+    parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment,
+    search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
+    update_task_relation, validate_focus_limit, validate_task_draft,
 };
 
 pub struct GuiAppState {
@@ -27,6 +27,8 @@ pub struct GuiAppState {
     pub config_path: PathBuf,
     pub config: AppConfig,
     pub active_user: String,
+    /// Session-only project context (`Ctrl+P` in the GUI). Defaults to `DEFAULT_PROJECT`.
+    pub active_project: String,
     pub active_preset: FocusPreset,
 }
 
@@ -37,7 +39,8 @@ impl GuiAppState {
         let db_path = resolve_active_db_path(None, false);
         let active_user = config.default_user.clone();
         let active_preset = config.focus_preset;
-        Self { db_path, config_path, config, active_user, active_preset }
+        let active_project = wsid_core::DEFAULT_PROJECT.to_string();
+        Self { db_path, config_path, config, active_user, active_project, active_preset }
     }
 
     pub fn open_db(&self) -> Result<Database, String> {
@@ -58,6 +61,7 @@ pub struct AppSessionSnapshot {
     pub is_global_db: bool,
     pub primary_user: String,
     pub active_user: String,
+    pub active_project: String,
     pub active_preset: String,
     pub focus_limit: usize,
     pub recent_workspaces: Vec<String>,
@@ -151,6 +155,7 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
         is_global_db: is_global,
         primary_user: state.config.primary_user.clone(),
         active_user: state.active_user.clone(),
+        active_project: state.active_project.clone(),
         active_preset: state.active_preset.as_str().to_string(),
         focus_limit: state.config.focus_limit,
         recent_workspaces: state
@@ -206,9 +211,21 @@ pub fn payload_to_draft(payload: GuiCreateTaskPayload) -> Result<TaskDraft, Stri
     })
 }
 
+/// Fills an unset or blank project with the session's active project, matching the TUI Add Task form.
+fn default_project_to_active(mut payload: GuiCreateTaskPayload, active_project: &str) -> GuiCreateTaskPayload {
+    if payload
+        .project
+        .as_deref()
+        .is_none_or(|p| p.trim().is_empty())
+    {
+        payload.project = Some(active_project.to_string());
+    }
+    payload
+}
+
 pub fn create_task_from_payload(state: &GuiAppState, payload: GuiCreateTaskPayload) -> Result<Task, String> {
     let mut db = state.open_db()?;
-    let draft = payload_to_draft(payload)?;
+    let draft = payload_to_draft(default_project_to_active(payload, &state.active_project))?;
     // Atomic: the task, its relations, and its attachments are created together or not at all.
     create_task_from_draft(&mut db, &draft, &state.active_user).map_err(|e| e.to_string())
 }
@@ -307,6 +324,16 @@ fn set_active_user(state: State<'_, SharedGuiState>, user: String) -> Result<App
     let mut db = guard.open_db()?;
     register_user(&mut db, &norm).map_err(|e| e.to_string())?;
     guard.active_user = norm;
+    build_session_snapshot(&guard)
+}
+
+#[tauri::command]
+fn set_active_project(state: State<'_, SharedGuiState>, project: String) -> Result<AppSessionSnapshot, String> {
+    let norm = normalize_project(&project).map_err(|e| e.to_string())?;
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    guard.active_project = norm;
     build_session_snapshot(&guard)
 }
 
@@ -560,7 +587,7 @@ fn validate_new_task(state: State<'_, SharedGuiState>, payload: GuiCreateTaskPay
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
     let db = guard.open_db()?;
-    let draft = payload_to_draft(payload)?;
+    let draft = payload_to_draft(default_project_to_active(payload, &guard.active_project))?;
     Ok(validate_task_draft(&db, &draft, &guard.active_user))
 }
 
@@ -968,6 +995,9 @@ fn build_app_menu(app_handle: &AppHandle, state: &SharedGuiState) -> tauri::Resu
             &MenuItem::with_id(app_handle, "menu:open_workspace_db", "Open Workspace Database...", true, Some("CmdOrCtrl+O"))?,
             &MenuItem::with_id(app_handle, "menu:switch_global_db", "Switch to Global Database", true, Some("CmdOrCtrl+Shift+G"))?,
             &recent_submenu,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &MenuItem::with_id(app_handle, "menu:switch_user", "Switch Active User...", true, None::<&str>)?,
+            &MenuItem::with_id(app_handle, "menu:switch_project", "Switch Active Project...", true, None::<&str>)?,
             #[cfg(not(target_os = "macos"))]
             &PredefinedMenuItem::separator(app_handle)?,
             #[cfg(not(target_os = "macos"))]
@@ -1075,6 +1105,12 @@ pub fn run() {
                 "menu:switch_global_db" => {
                     let _ = app.emit("wsid://menu-action", "switch_global_db");
                 }
+                "menu:switch_user" => {
+                    let _ = app.emit("wsid://menu-action", "switch_user");
+                }
+                "menu:switch_project" => {
+                    let _ = app.emit("wsid://menu-action", "switch_project");
+                }
                 "menu:settings" | "menu:view_settings" => {
                     let _ = app.emit("wsid://menu-action", "open_settings");
                 }
@@ -1110,6 +1146,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_session_state,
             set_active_user,
+            set_active_project,
             preview_delete_user,
             delete_user,
             set_focus_preset,
@@ -1156,6 +1193,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn new_task_project_defaults_to_active_project_only_when_unset() {
+        let unset = default_project_to_active(GuiCreateTaskPayload::default(), "work");
+        assert_eq!(unset.project.as_deref(), Some("work"));
+
+        let blank = default_project_to_active(GuiCreateTaskPayload { project: Some("  ".into()), ..Default::default() }, "work");
+        assert_eq!(blank.project.as_deref(), Some("work"));
+
+        let explicit = default_project_to_active(GuiCreateTaskPayload { project: Some("home".into()), ..Default::default() }, "work");
+        assert_eq!(explicit.project.as_deref(), Some("home"));
+    }
+
+    #[test]
     fn gui_backend_creates_tasks_manages_attachments_and_loads_full_detail() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("gui_test.db");
@@ -1166,6 +1215,7 @@ mod tests {
             config_path,
             config: AppConfig::default(),
             active_user: "alice".to_string(),
+            active_project: wsid_core::DEFAULT_PROJECT.to_string(),
             active_preset: FocusPreset::Balanced,
         };
 

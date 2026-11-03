@@ -3,6 +3,7 @@
   import {
     getSessionState,
     setActiveUser,
+    setActiveProject,
     setFocusPreset,
     setFocusLimit,
     switchDatabase,
@@ -33,6 +34,7 @@
   import TaskDetailDrawer from "./components/TaskDetailDrawer.svelte";
   import AboutModal from "./components/AboutModal.svelte";
   import UserSwitcherModal from "./components/UserSwitcherModal.svelte";
+  import ProjectSwitcherModal from "./components/ProjectSwitcherModal.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
 
   type ViewTab =
@@ -50,6 +52,9 @@
   let selectedTaskId = $state<string | null>(null);
   let aboutModalOpen = $state<boolean>(false);
   let userSwitcherOpen = $state<boolean>(false);
+  let projectSwitcherOpen = $state<boolean>(false);
+  /** Bumped on database switch so mounted views drop their temporary filter scope. */
+  let viewEpoch = $state<number>(0);
   let statusAnnouncement = $state<string>("Ready.");
   let loading = $state<boolean>(true);
   let refreshTrigger = $state<number>(0);
@@ -73,6 +78,19 @@
     statusAnnouncement = msg;
   }
 
+  /**
+   * Enters a view through one path so its temporary scope resets like the TUI `apply_view_scope`.
+   * Focus returns to all projects. Kanban and Eisenhower initialize from the active project and
+   * Database remounts with cleared filters, so those views need no work here.
+   */
+  function enterView(nextTab: ViewTab) {
+    if (nextTab === "focus" && focusProject !== "all") {
+      focusProject = "all";
+      void refreshAllData();
+    }
+    activeTab = nextTab;
+  }
+
   function switchTab(nextTab: ViewTab, announcement?: string) {
     if (nextTab === activeTab) return;
     if (activeTab === "entry" && entryFormDirty) {
@@ -80,7 +98,7 @@
       confirmLeaveOpen = true;
       return;
     }
-    activeTab = nextTab;
+    enterView(nextTab);
     if (announcement) {
       announce(announcement);
     }
@@ -92,7 +110,7 @@
     confirmLeaveOpen = false;
     entryFormDirty = false;
     if (pending) {
-      activeTab = pending.nextTab;
+      enterView(pending.nextTab);
       if (pending.announcement) {
         announce(pending.announcement);
       }
@@ -151,6 +169,19 @@
     }
   }
 
+  async function handleSelectProject(project: string) {
+    const trimmed = project.trim();
+    if (!trimmed) return;
+    try {
+      session = await setActiveProject(trimmed);
+      projectSwitcherOpen = false;
+      announce(`Switched active project to #${session.active_project}.`);
+      await refreshAllData();
+    } catch (err) {
+      announce(`Failed to change project: ${String(err)}`);
+    }
+  }
+
   async function handlePresetChange(preset: FocusPreset) {
     try {
       session = await setFocusPreset(preset);
@@ -171,11 +202,18 @@
     }
   }
 
+  /** Database switches reset every view's temporary scope, matching the TUI `reset_after_database_switch`. */
+  function resetViewScopeAfterDatabaseSwitch() {
+    focusProject = "all";
+    viewEpoch += 1;
+  }
+
   async function handlePickWorkspaceDb() {
     try {
       const picked = await pickWorkspaceDatabaseDialog();
       if (!picked) return;
       session = await switchDatabase(picked, false);
+      resetViewScopeAfterDatabaseSwitch();
       announce(`Switched active database to ${session.db_path}.`);
       await refreshAllData();
     } catch (err) {
@@ -186,6 +224,7 @@
   async function handleSwitchToGlobalDb() {
     try {
       session = await switchDatabase(null, true);
+      resetViewScopeAfterDatabaseSwitch();
       announce(`Switched to global database (${session.global_db_path}).`);
       await refreshAllData();
     } catch (err) {
@@ -198,6 +237,7 @@
     try {
       const isGlobal = session ? path === session.global_db_path : false;
       session = await switchDatabase(isGlobal ? null : path, isGlobal);
+      resetViewScopeAfterDatabaseSwitch();
       announce(`Switched active database to ${session.db_path}.`);
       await refreshAllData();
     } catch (err) {
@@ -212,6 +252,10 @@
       void handleSwitchToGlobalDb();
     } else if (action === "open_settings") {
       switchTab("settings", "Opened Settings.");
+    } else if (action === "switch_user") {
+      userSwitcherOpen = true;
+    } else if (action === "switch_project") {
+      projectSwitcherOpen = true;
     } else if (action === "open_about") {
       aboutModalOpen = true;
       announce("Opened About and Third-Party Licenses dialog.");
@@ -249,6 +293,8 @@
     };
   });
 
+  let activeProject = $derived(session?.active_project ?? "default");
+
   function openTaskDetail(taskId: string) {
     selectedTaskId = taskId;
     announce(`Opened details for task ${taskId}.`);
@@ -266,6 +312,30 @@
       return;
     }
 
+    // Ctrl+U / Ctrl+P switch the active user / project from any view, including text inputs.
+    if (
+      e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      (e.key === "u" || e.key === "p")
+    ) {
+      if (
+        selectedTaskId ||
+        aboutModalOpen ||
+        confirmLeaveOpen ||
+        userSwitcherOpen ||
+        projectSwitcherOpen
+      )
+        return;
+      e.preventDefault();
+      if (e.key === "u") {
+        userSwitcherOpen = true;
+      } else {
+        projectSwitcherOpen = true;
+      }
+      return;
+    }
+
     const target = e.target as HTMLElement | null;
     const isInput =
       target &&
@@ -279,6 +349,7 @@
       selectedTaskId ||
       aboutModalOpen ||
       userSwitcherOpen ||
+      projectSwitcherOpen ||
       confirmLeaveOpen
     )
       return;
@@ -289,6 +360,7 @@
     else if (e.key === "4") switchTab("database", "Switched to Database.");
     else if (e.key === "5" || e.key === "n")
       switchTab("entry", "Switched to New Task.");
+    else if (e.key === "6") switchTab("settings", "Opened Settings.");
     else if (e.key === "?") {
       aboutModalOpen = true;
       announce("Opened About and Third-Party Licenses dialog.");
@@ -306,7 +378,8 @@
 
 {#if session}
   <div class="sr-only">
-    Active user: @{session.active_user}. Connected database: {session.is_global_db
+    Active user: @{session.active_user}. Active project: #{session.active_project}.
+    Connected database: {session.is_global_db
       ? "Global database"
       : "Workspace database"} ({session.db_path}).
   </div>
@@ -360,61 +433,72 @@
     {#if loading}
       <p role="status">Loading WSID workspace...</p>
     {:else if activeTab === "focus"}
-      <FocusView
-        focusData={focusQueue}
-        {blockedTasks}
-        knownProjects={session?.known_projects ?? []}
-        projectFilter={focusProject}
-        onProjectChange={async (project) => {
-          focusProject = project;
-          announce(`Focus queue project: ${project}`);
-          await refreshAllData();
-        }}
-        onSelectTask={openTaskDetail}
-        onPresetChange={handlePresetChange}
-        onDataChanged={refreshAllData}
-        {announce}
-      />
+      {#key viewEpoch}
+        <FocusView
+          focusData={focusQueue}
+          {blockedTasks}
+          knownProjects={session?.known_projects ?? []}
+          projectFilter={focusProject}
+          onProjectChange={async (project) => {
+            focusProject = project;
+            announce(`Focus queue project: ${project}`);
+            await refreshAllData();
+          }}
+          onSelectTask={openTaskDetail}
+          onPresetChange={handlePresetChange}
+          onDataChanged={refreshAllData}
+          {announce}
+        />
+      {/key}
     {:else if activeTab === "kanban"}
-      <KanbanView
-        tasks={allTasks}
-        activeUser={session?.active_user ?? "human"}
-        knownTags={session?.known_tags ?? []}
-        knownUsers={session?.known_users ?? []}
-        knownProjects={session?.known_projects ?? []}
-        onSelectTask={openTaskDetail}
-        onDataChanged={refreshAllData}
-        {announce}
-      />
+      {#key viewEpoch}
+        <KanbanView
+          tasks={allTasks}
+          activeUser={session?.active_user ?? "human"}
+          {activeProject}
+          knownTags={session?.known_tags ?? []}
+          knownUsers={session?.known_users ?? []}
+          knownProjects={session?.known_projects ?? []}
+          onSelectTask={openTaskDetail}
+          onDataChanged={refreshAllData}
+          {announce}
+        />
+      {/key}
     {:else if activeTab === "eisenhower"}
-      <EisenhowerView
-        items={eisenhowerItems}
-        activeUser={session?.active_user ?? "human"}
-        filterByUser={filterMyTasksOnly}
-        onToggleUserFilter={async (enabled) => {
-          filterMyTasksOnly = enabled;
-          await refreshAllData();
-        }}
-        knownTags={session?.known_tags ?? []}
-        knownUsers={session?.known_users ?? []}
-        knownProjects={session?.known_projects ?? []}
-        onSelectTask={openTaskDetail}
-        onDataChanged={refreshAllData}
-        {announce}
-      />
+      {#key viewEpoch}
+        <EisenhowerView
+          items={eisenhowerItems}
+          activeUser={session?.active_user ?? "human"}
+          {activeProject}
+          filterByUser={filterMyTasksOnly}
+          onToggleUserFilter={async (enabled) => {
+            filterMyTasksOnly = enabled;
+            await refreshAllData();
+          }}
+          knownTags={session?.known_tags ?? []}
+          knownUsers={session?.known_users ?? []}
+          knownProjects={session?.known_projects ?? []}
+          onSelectTask={openTaskDetail}
+          onDataChanged={refreshAllData}
+          {announce}
+        />
+      {/key}
     {:else if activeTab === "database"}
-      <DatabaseView
-        knownTags={session?.known_tags ?? []}
-        knownUsers={session?.known_users ?? []}
-        knownProjects={session?.known_projects ?? []}
-        {refreshTrigger}
-        onSelectTask={openTaskDetail}
-        onDataChanged={refreshAllData}
-        {announce}
-      />
+      {#key viewEpoch}
+        <DatabaseView
+          knownTags={session?.known_tags ?? []}
+          knownUsers={session?.known_users ?? []}
+          knownProjects={session?.known_projects ?? []}
+          {refreshTrigger}
+          onSelectTask={openTaskDetail}
+          onDataChanged={refreshAllData}
+          {announce}
+        />
+      {/key}
     {:else if activeTab === "entry"}
       <DataEntryView
         activeUser={session?.active_user ?? "human"}
+        {activeProject}
         knownUsers={session?.known_users ?? []}
         knownTags={session?.known_tags ?? []}
         knownProjects={session?.known_projects ?? []}
@@ -422,7 +506,7 @@
         onCreated={async (createdId) => {
           entryFormDirty = false;
           await refreshAllData();
-          activeTab = "focus";
+          enterView("focus");
           openTaskDetail(createdId);
         }}
         {announce}
@@ -433,6 +517,7 @@
         uiPrefs={uiPreferences}
         onUpdateUiPrefs={handleUpdateUiPreferences}
         onOpenUserModal={() => (userSwitcherOpen = true)}
+        onOpenProjectModal={() => (projectSwitcherOpen = true)}
         onPresetChange={handlePresetChange}
         onFocusLimitChange={handleFocusLimitChange}
         onPickWorkspaceDb={handlePickWorkspaceDb}
@@ -457,10 +542,21 @@
         type="button"
         class="status-user-btn"
         onclick={() => (userSwitcherOpen = true)}
-        title="Switch active user"
+        title="Switch active user (Ctrl+U)"
+        aria-keyshortcuts="Control+U"
         aria-label={`Active user @${session?.active_user ?? "human"}. Click to switch user.`}
       >
         @{session?.active_user ?? "human"}
+      </button>
+      <button
+        type="button"
+        class="status-user-btn"
+        onclick={() => (projectSwitcherOpen = true)}
+        title="Switch active project (Ctrl+P)"
+        aria-keyshortcuts="Control+P"
+        aria-label={`Active project #${activeProject}. Click to switch project.`}
+      >
+        #{activeProject}
       </button>
     </div>
   </footer>
@@ -489,8 +585,19 @@
   />
 {/if}
 
+{#if projectSwitcherOpen && session}
+  <ProjectSwitcherModal
+    activeProject={session.active_project}
+    knownProjects={session.known_projects}
+    onSelectProject={handleSelectProject}
+    onClose={() => (projectSwitcherOpen = false)}
+  />
+{/if}
+
 {#if aboutModalOpen}
   <AboutModal
+    activeUser={session?.active_user ?? "human"}
+    {activeProject}
     onClose={() => {
       aboutModalOpen = false;
       announce("Closed About and Third-Party Licenses dialog.");

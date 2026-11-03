@@ -9,10 +9,12 @@
   } from "../lib/ipc";
 
   interface Props {
+    activeUser: string;
+    activeProject: string;
     onClose: () => void;
   }
 
-  let { onClose }: Props = $props();
+  let { activeUser, activeProject, onClose }: Props = $props();
 
   let aboutData = $state<AboutMetadata | null>(null);
   let loading = $state(true);
@@ -156,6 +158,14 @@
     </header>
 
     <div class="drawer-body">
+      <section class="card" aria-label="Active context">
+        <p style="margin: 0; font-size: 0.9rem;">
+          Active user: <span class="badge">@{activeUser}</span> · Active
+          project:
+          <span class="badge">#{activeProject}</span>
+        </p>
+      </section>
+
       <section class="card" aria-label="Application Metadata">
         <div
           style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;"

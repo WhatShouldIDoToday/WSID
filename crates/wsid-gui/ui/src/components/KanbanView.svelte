@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import {
     type Task,
     type TaskStatus,
@@ -19,6 +20,7 @@
   interface Props {
     tasks: Task[];
     activeUser: string;
+    activeProject: string;
     knownTags: string[];
     knownUsers: string[];
     knownProjects: string[];
@@ -30,6 +32,7 @@
   let {
     tasks,
     activeUser,
+    activeProject,
     knownTags,
     knownUsers,
     knownProjects,
@@ -40,8 +43,17 @@
 
   const PROJECT_ALL = "all";
 
-  /** Project shown on the board; Kanban starts on `default`, not `all`. */
-  let projectFilter = $state<string>("default");
+  /** Project shown on the board; starts on the active project, not `all`. */
+  let projectFilter = $state<string>(untrack(() => activeProject));
+
+  let followedProject = untrack(() => activeProject);
+  $effect(() => {
+    const nextProject = activeProject;
+    if (nextProject !== followedProject) {
+      if (projectFilter === followedProject) projectFilter = nextProject;
+      followedProject = nextProject;
+    }
+  });
 
   let projectOptions = $derived(
     [...new Set(["default", ...knownProjects, ...tasks.map((t) => t.project)])]

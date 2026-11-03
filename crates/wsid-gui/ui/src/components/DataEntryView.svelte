@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import ConfirmModal from "./ConfirmModal.svelte";
   import DateFieldPicker from "./DateFieldPicker.svelte";
   import RichTextField from "./RichTextField.svelte";
@@ -38,6 +39,7 @@
 
   interface Props {
     activeUser: string;
+    activeProject: string;
     knownUsers: string[];
     knownTags: string[];
     knownProjects: string[];
@@ -48,6 +50,7 @@
 
   let {
     activeUser,
+    activeProject,
     knownUsers,
     knownTags,
     knownProjects,
@@ -69,7 +72,8 @@
   let manualPriority = $state<number>(3);
   let urgentOverride = $state<boolean>(false);
   let tags = $state<string[]>([]);
-  let project = $state<string>("default");
+  // Draft people and project start on the active context. Untouched fields follow a switch.
+  let project = $state<string>(untrack(() => activeProject));
   let reporter = $state<string>("");
   let assignee = $state<string>("");
   let evaluator = $state<string>("");
@@ -165,10 +169,33 @@
     return `= ${parsed.normalized} (${parsed.minutes.toLocaleString()} min${parsed.minutes === 1 ? "" : "s"})`;
   });
 
+  let followedUser = untrack(() => activeUser);
+  let followedProject = untrack(() => activeProject);
+
   $effect(() => {
     if (!reporter) reporter = activeUser;
     if (!assignee) assignee = activeUser;
     if (!evaluator) evaluator = activeUser;
+  });
+
+  // Mirrors the TUI retarget: a field still holding the previous active value follows the switch;
+  // an edited field is kept.
+  $effect(() => {
+    const nextUser = activeUser;
+    if (nextUser !== followedUser) {
+      if (reporter === followedUser) reporter = nextUser;
+      if (assignee === followedUser) assignee = nextUser;
+      if (evaluator === followedUser) evaluator = nextUser;
+      followedUser = nextUser;
+    }
+  });
+
+  $effect(() => {
+    const nextProject = activeProject;
+    if (nextProject !== followedProject) {
+      if (project === followedProject) project = nextProject;
+      followedProject = nextProject;
+    }
   });
 
   // Clear title error immediately when user types a valid title
@@ -289,7 +316,8 @@
       nextAttachmentDesc.trim().length > 0 ||
       (reporter.trim().length > 0 && reporter.trim() !== activeUser) ||
       (assignee.trim().length > 0 && assignee.trim() !== activeUser) ||
-      (evaluator.trim().length > 0 && evaluator.trim() !== activeUser)
+      (evaluator.trim().length > 0 && evaluator.trim() !== activeUser) ||
+      (project.trim().length > 0 && project.trim() !== activeProject)
     );
   }
 
@@ -435,6 +463,7 @@
     urgentOverride = false;
     tags = [];
     tagInputText = "";
+    project = activeProject;
     reporter = activeUser;
     assignee = activeUser;
     evaluator = activeUser;
