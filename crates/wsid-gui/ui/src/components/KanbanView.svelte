@@ -123,55 +123,7 @@
     return Boolean(target.closest("button, select, input, textarea, a, label"));
   }
 
-  function handleDragStart(e: DragEvent, task: Task) {
-    if (pointerDrag || isInteractiveTarget(e.target)) {
-      e.preventDefault();
-      return;
-    }
-    dragIds = dragPayloadFor(task);
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", dragIds.join(","));
-    }
-  }
-
-  function handleDragOver(e: DragEvent, colStatus: TaskStatus) {
-    if (dragIds.length === 0) return;
-    e.preventDefault();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = "move";
-    }
-    if (dropTargetStatus !== colStatus) {
-      dropTargetStatus = colStatus;
-    }
-  }
-
-  function handleDragLeave(e: DragEvent, colStatus: TaskStatus) {
-    const currentTarget = e.currentTarget as HTMLElement | null;
-    const related = e.relatedTarget as Node | null;
-    if (currentTarget && related && currentTarget.contains(related)) {
-      return;
-    }
-    if (dropTargetStatus === colStatus) {
-      dropTargetStatus = null;
-    }
-  }
-
-  async function handleDrop(e: DragEvent, colStatus: TaskStatus) {
-    e.preventDefault();
-    const ids = dragIds.length
-      ? dragIds
-      : (e.dataTransfer?.getData("text/plain") ?? "")
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean);
-    dragIds = [];
-    dropTargetStatus = null;
-    pointerDrag = null;
-    await moveTasksToStatus(ids, colStatus);
-  }
-
-  function handleDragEnd() {
+  function cancelPointerDrag() {
     dragIds = [];
     dropTargetStatus = null;
     pointerDrag = null;
@@ -215,7 +167,7 @@
 <svelte:window
   onpointermove={handleWindowPointerMove}
   onpointerup={handleWindowPointerUp}
-  onpointercancel={handleDragEnd}
+  onpointercancel={cancelPointerDrag}
 />
 
 {#if pointerDrag?.active}
@@ -290,10 +242,8 @@
         class:drop-target-active={dropTargetStatus === colStatus}
         data-drop-column={colStatus}
         aria-labelledby={`kanban-col-${colStatus}`}
-        ondragover={(e) => handleDragOver(e, colStatus)}
-        ondragleave={(e) => handleDragLeave(e, colStatus)}
-        ondrop={(e) => handleDrop(e, colStatus)}
       >
+        <!-- HTML5 dragover/drop handlers removed: Tauri's file-drop interceptor prevents them from firing. -->
         <h3 id={`kanban-col-${colStatus}`} class="kanban-col-header">
           <span>{STATUS_LABELS[colStatus]}</span>
           <span class="badge">{colTasks.length}</span>
@@ -313,11 +263,9 @@
                   class:is-selected={selection.has(task.id)}
                   style="padding: 0.75rem;"
                   aria-labelledby={`kanban-card-${task.id}`}
-                  draggable="true"
-                  ondragstart={(e) => handleDragStart(e, task)}
-                  ondragend={handleDragEnd}
                   onpointerdown={(e) => handlePointerDown(e, task)}
                 >
+                  <!-- HTML5 dragstart/dragend removed: Tauri's file-drop interceptor prevents them from firing. -->
                   <div class="meta-row" style="justify-content: space-between;">
                     <span
                       style="display: inline-flex; align-items: center; gap: 0.5rem;"

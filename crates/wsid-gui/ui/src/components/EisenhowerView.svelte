@@ -158,55 +158,7 @@
     }
   }
 
-  function handleDragStart(e: DragEvent, entry: EisenhowerClassification) {
-    if (pointerDrag || isInteractiveTarget(e.target)) {
-      e.preventDefault();
-      return;
-    }
-    dragIds = dragPayloadFor(entry);
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", dragIds.join(","));
-    }
-  }
-
-  function handleDragOver(e: DragEvent, q: EisenhowerQuadrant) {
-    if (dragIds.length === 0) return;
-    e.preventDefault();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = "move";
-    }
-    if (dropTargetQuadrant !== q) {
-      dropTargetQuadrant = q;
-    }
-  }
-
-  function handleDragLeave(e: DragEvent, q: EisenhowerQuadrant) {
-    const currentTarget = e.currentTarget as HTMLElement | null;
-    const related = e.relatedTarget as Node | null;
-    if (currentTarget && related && currentTarget.contains(related)) {
-      return;
-    }
-    if (dropTargetQuadrant === q) {
-      dropTargetQuadrant = null;
-    }
-  }
-
-  async function handleDrop(e: DragEvent, q: EisenhowerQuadrant) {
-    e.preventDefault();
-    const ids = dragIds.length
-      ? dragIds
-      : (e.dataTransfer?.getData("text/plain") ?? "")
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean);
-    dragIds = [];
-    dropTargetQuadrant = null;
-    pointerDrag = null;
-    await moveIdsToQuadrant(ids, q);
-  }
-
-  function handleDragEnd() {
+  function cancelPointerDrag() {
     dragIds = [];
     dropTargetQuadrant = null;
     pointerDrag = null;
@@ -251,7 +203,7 @@
 <svelte:window
   onpointermove={handleWindowPointerMove}
   onpointerup={handleWindowPointerUp}
-  onpointercancel={handleDragEnd}
+  onpointercancel={cancelPointerDrag}
 />
 
 {#if pointerDrag?.active}
@@ -363,10 +315,8 @@
         class:drop-target-active={dropTargetQuadrant === q}
         data-drop-quadrant={q}
         aria-labelledby={`quadrant-heading-${q}`}
-        ondragover={(e) => handleDragOver(e, q)}
-        ondragleave={(e) => handleDragLeave(e, q)}
-        ondrop={(e) => handleDrop(e, q)}
       >
+        <!-- HTML5 dragover/drop handlers removed: Tauri's file-drop interceptor prevents them from firing. -->
         <header
           style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.5rem;"
         >
@@ -403,11 +353,9 @@
                   class:is-dragging={dragIds.includes(entry.task.id)}
                   class:is-selected={selection.has(entry.task.id)}
                   style="padding: 0.75rem;"
-                  draggable="true"
-                  ondragstart={(e) => handleDragStart(e, entry)}
-                  ondragend={handleDragEnd}
                   onpointerdown={(e) => handlePointerDown(e, entry)}
                 >
+                  <!-- HTML5 dragstart/dragend removed: Tauri's file-drop interceptor prevents them from firing. -->
                   <div class="task-card-header">
                     <div>
                       <div class="meta-row" style="margin-bottom: 0.25rem;">
