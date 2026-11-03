@@ -8,10 +8,10 @@ use wsid_core::{
     AppConfig, AttachmentInput, BulkEditOutcome, BulkTaskPatch, Database, EisenhowerClassification, EisenhowerQuadrant, FocusQueueResponse,
     RelationDraft, RelationInputKind, Scalar, SearchQuery, THIRD_PARTY_NOTICES_TEXT, Task, TaskAttachment, TaskDraft, add_task_note,
     attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task_from_draft, delete_task_note,
-    delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
-    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
-    list_known_users, list_task_notes, list_tasks, open_file_in_os, preview_user_deletion, register_user, remove_attachment,
-    save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
+    delete_user_from_db, format_deadline_display, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks,
+    get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks,
+    list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, open_file_in_os, preview_user_deletion, register_user,
+    remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
     update_attachment_description,
 };
 use wsid_mcp::McpServer;
@@ -334,9 +334,9 @@ fn run_show<W: Write>(db_path: &Path, raw_id: &str, mode: OutputMode, out: &mut 
                 out,
                 "Due date: {}. Should Get Done By date: {}. Time estimate: {}.",
                 task.due_date
-                    .map_or_else(|| "none".to_string(), |d| d.to_string()),
+                    .map_or_else(|| "none".to_string(), |d| format_deadline_display(&d)),
                 task.sgdb_date
-                    .map_or_else(|| "none".to_string(), |d| d.to_string()),
+                    .map_or_else(|| "none".to_string(), |d| format_deadline_display(&d)),
                 format_duration_estimate(task.time_estimate_minutes)
             )?;
             writeln!(out, "Tags: {}.", if task.tags.is_empty() { "none".to_string() } else { task.tags.join(", ") })?;
@@ -369,9 +369,9 @@ fn run_show<W: Write>(db_path: &Path, raw_id: &str, mode: OutputMode, out: &mut 
                 out,
                 "  Dates: due={}, sgdb={}, estimate={}",
                 task.due_date
-                    .map_or_else(|| "-".to_string(), |d| d.to_string()),
+                    .map_or_else(|| "-".to_string(), |d| format_deadline_display(&d)),
                 task.sgdb_date
-                    .map_or_else(|| "-".to_string(), |d| d.to_string()),
+                    .map_or_else(|| "-".to_string(), |d| format_deadline_display(&d)),
                 format_duration_estimate(task.time_estimate_minutes)
             )?;
             if !task.tags.is_empty() {

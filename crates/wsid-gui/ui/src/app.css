@@ -863,6 +863,44 @@ table.db-table th {
   flex-shrink: 0;
 }
 
+.tz-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.tz-select,
+.tz-offset-input {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.tz-offset-input {
+  width: 5.2rem;
+  text-align: center;
+}
+
+.tz-select:focus-visible,
+.tz-offset-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.tz-hint {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
 .date-picker-row {
   display: flex;
   align-items: center;

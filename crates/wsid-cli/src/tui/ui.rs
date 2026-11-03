@@ -9,7 +9,8 @@ use ratatui::widgets::{
     ScrollbarState, Table, Tabs, Wrap,
 };
 use wsid_core::{
-    EisenhowerQuadrant, TaskStatus, default_global_db_path, format_deadline_display, format_duration_minutes, get_about_metadata,
+    EisenhowerQuadrant, TaskStatus, default_global_db_path, format_deadline_date, format_deadline_display, format_duration_minutes,
+    get_about_metadata,
 };
 
 use crate::tui::app::{ActiveTab, DataEntryForm, DatabaseSortColumn, DetailPromptKind, TuiApp};
@@ -260,7 +261,11 @@ fn render_kanban_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             let items: Vec<ListItem> = tasks
                 .iter()
                 .map(|t| {
-                    let due = t.due_date.as_deref().unwrap_or("-");
+                    let due = t
+                        .due_date
+                        .as_deref()
+                        .map(format_deadline_date)
+                        .unwrap_or_else(|| "-".to_string());
                     ListItem::new(Line::from(format!(
                         "{}[{}] {} (@{}, Imp:{}/5, Due:{})",
                         app.mark(&t.id),
@@ -528,8 +533,16 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .iter()
             .map(|hit| {
                 let t = &hit.task;
-                let due = t.due_date.as_deref().unwrap_or("-");
-                let sgdb = t.sgdb_date.as_deref().unwrap_or("-");
+                let due = t
+                    .due_date
+                    .as_deref()
+                    .map(format_deadline_date)
+                    .unwrap_or_else(|| "-".to_string());
+                let sgdb = t
+                    .sgdb_date
+                    .as_deref()
+                    .map(format_deadline_date)
+                    .unwrap_or_else(|| "-".to_string());
                 let tags = if t.tags.is_empty() { "-".to_string() } else { t.tags.join(",") };
                 ListItem::new(Line::from(format!(
                     "{}[{}] {} ({}) Assignee:@{} Imp:{} Diff:{} Prio:{} SGDB:{} Due:{} Tags:{}",
@@ -599,13 +612,13 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             let sgdb = t
                 .sgdb_date
                 .as_deref()
-                .and_then(|s| s.get(..10))
-                .unwrap_or("-");
+                .map(format_deadline_date)
+                .unwrap_or_else(|| "-".to_string());
             let due = t
                 .due_date
                 .as_deref()
-                .and_then(|s| s.get(..10))
-                .unwrap_or("-");
+                .map(format_deadline_date)
+                .unwrap_or_else(|| "-".to_string());
             let tags = if t.tags.is_empty() { "-".to_string() } else { t.tags.join(",") };
             Row::new(vec![
                 Cell::from(format!("{}{}", app.mark(&t.id), t.id)),

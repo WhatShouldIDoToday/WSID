@@ -268,7 +268,12 @@ mod tests {
         );
         assert_eq!(updated["title"], "Task A Updated");
         assert!(updated["sgdb_date"].is_null());
-        assert_eq!(updated["due_date"], "2099-11-10");
+        assert_eq!(
+            updated["due_date"].as_str().unwrap(),
+            wsid_core::parse_deadline_datetime("due_date", "2099-11-10")
+                .unwrap()
+                .0
+        );
 
         // Link A blocks B, then attempt B blocks A (must return tool error with cycle message)
         call_tool(&mut server, 4, "link_tasks", json!({ "source_id": a, "relation": "blocks", "target_id": b }));

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::str::FromStr;
 
-use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::attachments::{cleanup_managed_files_after_delete, load_all_attachments_for_task, load_task_description_attachments};
@@ -235,52 +235,90 @@ pub fn delete_user_from_db(
     Ok(UserDeletionOutcome { deleted_user: target, fallback_user: fallback, reassigned_task_count, deleted_task_count })
 }
 
-/// Parses and validates a deadline string (`YYYY-MM-DD` or ISO-8601 date-time),
-/// returning the normalized string and its comparable local `NaiveDateTime`.
-/// When only a date (`YYYY-MM-DD`) is provided, the time defaults to `20:00:00` (8:00 PM).
+/// Splits an optional trailing timezone designator (`Z`/`z`, `±HH:MM`, `±HHMM`, `±HH`)
+/// from a deadline string, returning the wall-clock text and the offset in minutes.
+fn split_deadline_offset<'a>(field_name: &str, raw: &'a str) -> Result<(&'a str, Option<i32>)> {
+    if let Some(trimmed) = raw.strip_suffix(['Z', 'z']) {
+        return Ok((trimmed, Some(0)));
+    }
+
+    // The wall-clock portion only contains `-` in the date separators (before index 10),
+    // so the last sign past the date is the offset designator.
+    let sign_pos = raw
+        .char_indices()
+        .rev()
+        .find(|(idx, ch)| *idx >= 10 && (*ch == '+' || *ch == '-'));
+
+    let Some((idx, sign)) = sign_pos else {
+        return Ok((raw, None));
+    };
+
+    let digits: String = raw[idx + 1..].chars().filter(|c| *c != ':').collect();
+    let offset_error = || WsidError::Validation(format!("invalid {field_name} '{raw}': timezone offset must be Z, ±HH:MM, ±HHMM, or ±HH"));
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(offset_error());
+    }
+    let (hours, minutes) = match digits.len() {
+        2 => (digits[..2].parse::<i32>().map_err(|_| offset_error())?, 0),
+        4 => (digits[..2].parse::<i32>().map_err(|_| offset_error())?, digits[2..4].parse::<i32>().map_err(|_| offset_error())?),
+        _ => return Err(offset_error()),
+    };
+    if hours > 23 || minutes > 59 {
+        return Err(offset_error());
+    }
+    let magnitude = hours * 60 + minutes;
+    let offset = if sign == '-' { -magnitude } else { magnitude };
+    Ok((&raw[..idx], Some(offset)))
+}
+
+/// Parses and validates a deadline string, returning the canonical UTC instant
+/// (`YYYY-MM-DDTHH:MM:SSZ`) plus the same instant as a local `NaiveDateTime` for
+/// comparison.
+///
+/// Accepted forms: `YYYY-MM-DD` (time defaults to `20:00` local), and
+/// `YYYY-MM-DD HH:MM[:SS]` / `YYYY-MM-DDTHH:MM[:SS]` with an optional trailing
+/// `Z` (UTC) or `±HH:MM` / `±HHMM` / `±HH` offset. Values without an offset are
+/// interpreted in the machine's local time zone.
 pub fn parse_deadline_datetime(field_name: &str, raw: &str) -> Result<(String, NaiveDateTime)> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(WsidError::Validation(format!("{field_name} cannot be empty")));
     }
 
-    // Strip optional bracketed IANA timezone suffix (e.g. `2026-11-05T20:00:00-08:00[America/Los_Angeles]`)
-    let without_bracket = match trimmed.find('[') {
-        Some(idx) if trimmed.ends_with(']') => &trimmed[..idx],
-        _ => trimmed,
-    };
-    // Normalize historical LMT offsets with seconds (e.g. `-04:56:02` -> `-04:56`) for RFC3339 compatibility
-    let normalized_offset: String = if without_bracket.len() > 19 {
-        let tail = &without_bracket[19..];
-        if tail.len() == 9 && (tail.starts_with('+') || tail.starts_with('-')) && tail.as_bytes()[3] == b':' && tail.as_bytes()[6] == b':' {
-            format!("{}{}", &without_bracket[..19], &tail[..6])
-        } else {
-            without_bracket.to_string()
-        }
+    let (body, offset_minutes) = split_deadline_offset(field_name, trimmed)?;
+    let body = body.trim();
+
+    let naive = if let Ok(d) = NaiveDate::parse_from_str(body, "%Y-%m-%d") {
+        NaiveDateTime::new(d, NaiveTime::from_hms_opt(20, 0, 0).expect("valid 20:00:00 time"))
     } else {
-        without_bracket.to_string()
+        ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"]
+            .iter()
+            .find_map(|fmt| NaiveDateTime::parse_from_str(body, fmt).ok())
+            .ok_or_else(|| {
+                WsidError::Validation(format!(
+                    "invalid {field_name} '{trimmed}': expected YYYY-MM-DD or ISO-8601 date-time with an optional Z / ±HH:MM offset"
+                ))
+            })?
     };
 
-    if let Ok(d) = NaiveDate::parse_from_str(&normalized_offset, "%Y-%m-%d") {
-        let default_time = NaiveTime::from_hms_opt(20, 0, 0).expect("valid 20:00:00 time");
-        return Ok((normalized_offset, NaiveDateTime::new(d, default_time)));
-    }
-
-    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized_offset) {
-        let local_naive = dt.with_timezone(&Local).naive_local();
-        return Ok((normalized_offset, local_naive));
-    }
-
-    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
-        if let Ok(ndt) = NaiveDateTime::parse_from_str(&normalized_offset, fmt) {
-            let iso = ndt.format("%Y-%m-%dT%H:%M").to_string();
-            return Ok((iso, ndt));
+    let utc = match offset_minutes {
+        Some(minutes) => {
+            let offset = FixedOffset::east_opt(minutes * 60)
+                .ok_or_else(|| WsidError::Validation(format!("invalid {field_name} '{trimmed}': unusable timezone offset")))?;
+            naive
+                .and_local_timezone(offset)
+                .single()
+                .ok_or_else(|| WsidError::Validation(format!("invalid {field_name} '{trimmed}': unusable timezone offset")))?
+                .with_timezone(&Utc)
         }
-    }
+        None => naive.and_local_timezone(Local).earliest().ok_or_else(|| {
+            WsidError::Validation(format!(
+                "invalid {field_name} '{trimmed}': that local time is skipped by a DST change; add an explicit offset (e.g. 2026-11-01 01:30-05:00)"
+            ))
+        })?.with_timezone(&Utc),
+    };
 
-    Err(WsidError::Validation(format!(
-        "invalid {field_name} '{trimmed}': expected YYYY-MM-DD or ISO-8601 date-time (e.g. 2026-11-05T20:00)"
-    )))
+    Ok((format_utc(utc), utc.with_timezone(&Local).naive_local()))
 }
 
 /// Parses a human-readable duration string (e.g. `"1w 2d 3h 20m"`, `"1d 2h 20m"`, `"2h 30m"`, `"45m"`, or `"45"`)
@@ -409,15 +447,9 @@ pub fn format_duration_minutes(total_minutes: u32) -> String {
     parts.join(" ")
 }
 
-/// Extracts the calendar `NaiveDate` from a stored deadline string (`YYYY-MM-DD` or ISO-8601 date-time).
+/// Extracts the calendar `NaiveDate` of a stored UTC deadline in the user's local time zone.
 pub fn parse_deadline_naive_date(raw: &str) -> Option<NaiveDate> {
-    let trimmed = raw.trim();
-    if trimmed.len() >= 10
-        && let Ok(d) = NaiveDate::parse_from_str(&trimmed[..10], "%Y-%m-%d")
-    {
-        return Some(d);
-    }
-    parse_deadline_datetime("deadline", trimmed)
+    parse_deadline_datetime("deadline", raw)
         .ok()
         .map(|(_, dt)| dt.date())
 }
@@ -427,7 +459,12 @@ pub fn local_tz_abbr() -> String {
     Local::now().format("%Z").to_string()
 }
 
-/// Formats a stored deadline (`YYYY-MM-DD` or RFC3339 date-time) for human display in the local time zone
+/// Formats a stored UTC deadline as its local calendar date (`YYYY-MM-DD`) for compact list views.
+pub fn format_deadline_date(raw: &str) -> String {
+    parse_deadline_naive_date(raw).map_or_else(|| raw.trim().to_string(), |d| d.format("%Y-%m-%d").to_string())
+}
+
+/// Formats a stored UTC deadline for human display in the local time zone
 /// (for example `"2027-02-22 20:00 EST"`).
 pub fn format_deadline_display(raw: &str) -> String {
     let trimmed = raw.trim();
@@ -435,13 +472,10 @@ pub fn format_deadline_display(raw: &str) -> String {
         return String::new();
     }
     match parse_deadline_datetime("deadline", trimmed) {
-        Ok((_, dt)) => {
-            let tz = dt
-                .and_local_timezone(Local)
-                .single()
-                .map_or_else(local_tz_abbr, |z| z.format("%Z").to_string());
-            format!("{} {tz}", dt.format("%Y-%m-%d %H:%M"))
-        }
+        Ok((normalized, _)) => parse_utc(&normalized)
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M %Z")
+            .to_string(),
         Err(_) => trimmed.to_string(),
     }
 }
@@ -459,17 +493,21 @@ pub fn validate_dates(sgdb_date: Option<&str>, due_date: Option<&str>) -> Result
     if let (Some((sgdb_str, sgdb_dt)), Some((due_str, due_dt))) = (sgdb_parsed, due_parsed)
         && sgdb_dt > due_dt
     {
-        return Err(WsidError::Validation(format!("sgdb_date ({sgdb_str}) must be on or before due_date ({due_str})")));
+        return Err(WsidError::Validation(format!(
+            "sgdb_date ({}) must be on or before due_date ({})",
+            format_deadline_display(&sgdb_str),
+            format_deadline_display(&due_str)
+        )));
     }
     Ok(())
 }
 
 /// Rejects deadlines that are already in the past (local time). Date-only values count as 20:00 that day.
 pub fn validate_not_past(field_name: &str, normalized: &str) -> Result<()> {
-    let (_, dt) = parse_deadline_datetime(field_name, normalized)?;
+    let (utc, dt) = parse_deadline_datetime(field_name, normalized)?;
     if dt < Local::now().naive_local() {
         let label = if field_name == "sgdb_date" { "Should Get Done By (SGDB) date/time" } else { "Hard due date/time" };
-        return Err(WsidError::Validation(format!("{label} cannot be in the past ({normalized})")));
+        return Err(WsidError::Validation(format!("{label} cannot be in the past ({})", format_deadline_display(&utc))));
     }
     Ok(())
 }
@@ -905,6 +943,23 @@ mod tests {
     use super::*;
     use crate::db::open_in_memory_db;
 
+    /// Canonical UTC string for a local wall-clock deadline (the storage format).
+    fn local_utc(wall_clock: &str) -> String {
+        let fmt = if wall_clock.contains('T') { "%Y-%m-%dT%H:%M" } else { "%Y-%m-%d" };
+        let naive = if fmt == "%Y-%m-%d" {
+            NaiveDateTime::new(NaiveDate::parse_from_str(wall_clock, fmt).unwrap(), NaiveTime::from_hms_opt(20, 0, 0).unwrap())
+        } else {
+            NaiveDateTime::parse_from_str(wall_clock, fmt).unwrap()
+        };
+        format_utc(
+            naive
+                .and_local_timezone(Local)
+                .earliest()
+                .unwrap()
+                .with_timezone(&Utc),
+        )
+    }
+
     #[test]
     fn enforces_sgdb_and_due_date_combinations() {
         let mut db = open_in_memory_db().unwrap();
@@ -924,7 +979,7 @@ mod tests {
             "david",
         )
         .unwrap();
-        assert_eq!(t_sgdb_only.sgdb_date, Some(d_early.clone()));
+        assert_eq!(t_sgdb_only.sgdb_date, Some(local_utc(&d_early)));
         assert_eq!(t_sgdb_only.due_date, None);
 
         // SGDB <= due_date is allowed (including ISO date-time strings)
@@ -939,8 +994,9 @@ mod tests {
             "david",
         )
         .unwrap();
-        assert_eq!(t_both.sgdb_date.as_deref(), Some("2099-11-05T14:30"));
-        assert_eq!(t_both.due_date.as_deref(), Some("2099-11-05T20:00"));
+        assert_eq!(t_both.sgdb_date, Some(local_utc("2099-11-05T14:30")));
+        assert_eq!(t_both.due_date, Some(local_utc("2099-11-05T20:00")));
+        assert!(t_both.sgdb_date.as_deref().unwrap().ends_with('Z'));
 
         // SGDB > due_date is rejected on create (including same-day 21:00 > default 20:00)
         let err = create_task(
@@ -1092,6 +1148,53 @@ mod tests {
     }
 
     #[test]
+    fn stores_deadlines_as_canonical_utc_and_accepts_explicit_offsets() {
+        // `Z` is UTC verbatim.
+        assert_eq!(
+            parse_deadline_datetime("due_date", "2099-11-05T14:30Z")
+                .unwrap()
+                .0,
+            "2099-11-05T14:30:00Z"
+        );
+        assert_eq!(
+            parse_deadline_datetime("due_date", "2099-11-05 14:30Z")
+                .unwrap()
+                .0,
+            "2099-11-05T14:30:00Z"
+        );
+
+        // Explicit offsets are converted, in every accepted spelling.
+        for raw in ["2099-11-05T14:30-05:00", "2099-11-05T14:30-0500", "2099-11-05 14:30 -05:00"] {
+            assert_eq!(parse_deadline_datetime("due_date", raw).unwrap().0, "2099-11-05T19:30:00Z", "{raw}");
+        }
+        for (raw, expected) in [
+            ("2099-11-05T14:30+05:30", "2099-11-05T09:00:00Z"),
+            ("2099-11-05T14:30+0530", "2099-11-05T09:00:00Z"),
+            ("2099-11-05T14:30+05", "2099-11-05T09:30:00Z"),
+        ] {
+            assert_eq!(parse_deadline_datetime("due_date", raw).unwrap().0, expected, "{raw}");
+        }
+
+        // Offset-less values are local wall clock, and the second tuple field mirrors that.
+        let (utc, local_naive) = parse_deadline_datetime("due_date", "2099-11-05T14:30").unwrap();
+        assert_eq!(utc, local_utc("2099-11-05T14:30"));
+        assert_eq!(local_naive, NaiveDateTime::parse_from_str("2099-11-05T14:30", "%Y-%m-%dT%H:%M").unwrap());
+        assert_eq!(parse_deadline_datetime("due_date", "2099-11-05").unwrap().0, local_utc("2099-11-05"));
+
+        // Malformed offsets are rejected rather than silently ignored.
+        for raw in ["2099-11-05T14:30+5", "2099-11-05T14:30+25:00", "2099-11-05T14:30+05:75", "2099-11-05T14:30ZZ"] {
+            assert!(parse_deadline_datetime("due_date", raw).is_err(), "{raw}");
+        }
+
+        // Date extraction uses the local calendar day, not the UTC one.
+        let near_midnight_utc = "2099-11-05T02:00:00Z";
+        let expected_local_date = parse_utc(near_midnight_utc)
+            .with_timezone(&Local)
+            .date_naive();
+        assert_eq!(parse_deadline_naive_date(near_midnight_utc), Some(expected_local_date));
+    }
+
+    #[test]
     fn enforces_strict_usernames_and_manages_user_deletion_reassignment_and_cleanup() {
         let mut db = open_in_memory_db().unwrap();
 
@@ -1183,7 +1286,7 @@ mod tests {
 
         // Unrelated edits and unchanged deadlines still work; changing to another past date does not.
         let kept = update_task(&mut db, &task.id, UpdateTaskInput { title: Some("Renamed".to_string()), ..Default::default() }).unwrap();
-        assert_eq!(kept.due_date.as_deref(), Some("2000-01-01"));
+        assert_eq!(kept.due_date, Some(local_utc("2000-01-01")));
         let reopened = update_task(
             &mut db,
             &task.id,

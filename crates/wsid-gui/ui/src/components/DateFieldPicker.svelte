@@ -2,15 +2,13 @@
   import { untrack } from "svelte";
   import { DatePicker, TimeField } from "bits-ui";
   import {
+    CalendarDate,
     Time,
     getLocalTimeZone,
-    parseAbsoluteToLocal,
     parseDate,
     parseDateTime,
     toCalendarDate,
-    toCalendarDateTime,
     toTime,
-    toZoned,
     today,
     type DateValue,
   } from "@internationalized/date";
@@ -39,11 +37,19 @@
     onBlur,
   }: Props = $props();
 
+  type TzMode = "local" | "utc" | "offset";
+
   const localTz = getLocalTimeZone();
   const todayCalendarDate = today(localTz);
+  const localOffsetMinutes = -new Date().getTimezoneOffset();
+
   let effectiveMinDate = $derived.by((): DateValue => {
     if (minDate) {
-      const parsedMin = parseIsoValue(minDate).date;
+      const parsedMin = parseIsoValue(
+        minDate,
+        "local",
+        localOffsetMinutes,
+      ).date;
       if (parsedMin && parsedMin.compare(todayCalendarDate) > 0) {
         return parsedMin;
       }
@@ -64,10 +70,97 @@
 
   const DEFAULT_TIME = new Time(20, 0);
 
-  function parseIsoValue(raw: string): {
-    date: DateValue | undefined;
-    time: Time | undefined;
-  } {
+  let tzMode = $state<TzMode>("local");
+  let offsetInput = $state(minutesToOffset(localOffsetMinutes));
+  let offsetMinutes = $state(localOffsetMinutes);
+
+  function minutesToOffset(mins: number): string {
+    const sign = mins < 0 ? "-" : "+";
+    const abs = Math.abs(mins);
+    return `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(
+      abs % 60,
+    ).padStart(2, "0")}`;
+  }
+
+  function offsetToMinutes(raw: string): number | null {
+    const m = raw.trim().match(/^([+-])(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const hours = Number(m[2]);
+    const mins = Number(m[3]);
+    if (hours > 23 || mins > 59) return null;
+    const total = hours * 60 + mins;
+    return m[1] === "-" ? -total : total;
+  }
+
+  /** Offset (in minutes east of UTC) that the wall clock is interpreted in. */
+  function modeOffset(mode: TzMode, offset: number): number {
+    if (mode === "utc") return 0;
+    if (mode === "offset") return offset;
+    return -new Date().getTimezoneOffset();
+  }
+
+  function wallClockToUtcMs(
+    date: DateValue,
+    time: Time,
+    mode: TzMode,
+    offset: number,
+  ): number {
+    const cal = toCalendarDate(date);
+    if (mode === "local") {
+      return new Date(
+        cal.year,
+        cal.month - 1,
+        cal.day,
+        time.hour,
+        time.minute,
+        0,
+        0,
+      ).getTime();
+    }
+    return (
+      Date.UTC(cal.year, cal.month - 1, cal.day, time.hour, time.minute, 0, 0) -
+      modeOffset(mode, offset) * 60_000
+    );
+  }
+
+  function utcMsToWallClock(
+    ms: number,
+    mode: TzMode,
+    offset: number,
+  ): { date: DateValue; time: Time } {
+    if (mode === "local") {
+      const d = new Date(ms);
+      return {
+        date: new CalendarDate(d.getFullYear(), d.getMonth() + 1, d.getDate()),
+        time: new Time(d.getHours(), d.getMinutes()),
+      };
+    }
+    const d = new Date(ms + modeOffset(mode, offset) * 60_000);
+    return {
+      date: new CalendarDate(
+        d.getUTCFullYear(),
+        d.getUTCMonth() + 1,
+        d.getUTCDate(),
+      ),
+      time: new Time(d.getUTCHours(), d.getUTCMinutes()),
+    };
+  }
+
+  function formatUtcIso(ms: number): string {
+    const d = new Date(ms);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(
+      d.getUTCDate(),
+    )}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(
+      d.getUTCSeconds(),
+    )}Z`;
+  }
+
+  function parseIsoValue(
+    raw: string,
+    mode: TzMode,
+    offset: number,
+  ): { date: DateValue | undefined; time: Time | undefined } {
     const trimmed = raw.trim();
     if (!trimmed) {
       return { date: undefined, time: undefined };
@@ -79,15 +172,14 @@
         return { date: undefined, time: undefined };
       }
     }
-    try {
-      const cleaned = trimmed.replace(/\[.*\]$/, "");
-      if (/[Zz]|[+-]\d{2}:\d{2}$/.test(cleaned)) {
-        const zoned = parseAbsoluteToLocal(cleaned);
-        return {
-          date: toCalendarDate(zoned),
-          time: new Time(zoned.hour, zoned.minute),
-        };
+    const cleaned = trimmed.replace(/\[.*\]$/, "");
+    if (/[Zz]$|[+-]\d{2}:?\d{2}$/.test(cleaned)) {
+      const ms = new Date(cleaned).getTime();
+      if (!Number.isNaN(ms)) {
+        return utcMsToWallClock(ms, mode, offset);
       }
+    }
+    try {
       const dt = parseDateTime(cleaned);
       const t = toTime(dt);
       return {
@@ -106,33 +198,44 @@
     }
   }
 
+  /** Serializes the picked wall clock as a canonical UTC instant (`...Z`). */
   function formatCombinedIso(
     dateVal: DateValue | undefined,
     timeVal: Time | undefined,
+    mode: TzMode,
+    offset: number,
   ): string {
     if (!dateVal) return "";
-    const calDate = toCalendarDate(dateVal);
     const effectiveTime = timeVal ?? DEFAULT_TIME;
-    const dt = toCalendarDateTime(calDate, effectiveTime);
-    const zoned = toZoned(dt, localTz);
-    return zoned
-      .toString()
-      .replace(/\[.*\]$/, "")
-      .replace(/([+-]\d{2}:\d{2}):\d{2}$/, "$1");
+    return formatUtcIso(wallClockToUtcMs(dateVal, effectiveTime, mode, offset));
   }
 
-  const initial = parseIsoValue(value);
+  /** Human-readable local rendering of the current value, for the hint under the row. */
+  function localHint(raw: string): string {
+    const ms = new Date(raw).getTime();
+    if (Number.isNaN(ms)) return raw;
+    const wall = utcMsToWallClock(ms, "local", localOffsetMinutes);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const cal = toCalendarDate(wall.date);
+    return `${cal.year}-${pad(cal.month)}-${pad(cal.day)} ${pad(
+      wall.time.hour,
+    )}:${pad(wall.time.minute)} ${shortTzName}`;
+  }
+
+  const initial = parseIsoValue(value, "local", localOffsetMinutes);
   let pickerDate = $state<DateValue | undefined>(initial.date);
   let pickerTime = $state<Time | undefined>(initial.time);
   let internalResetKey = $state(0);
 
   $effect(() => {
     const externalValue = value;
+    const mode = tzMode;
+    const offset = offsetMinutes;
     const currentFormatted = untrack(() =>
-      formatCombinedIso(pickerDate, pickerTime),
+      formatCombinedIso(pickerDate, pickerTime, mode, offset),
     );
     if (externalValue !== currentFormatted) {
-      const parsed = parseIsoValue(externalValue);
+      const parsed = parseIsoValue(externalValue, mode, offset);
       pickerDate = parsed.date;
       pickerTime = parsed.time;
       if (!externalValue) {
@@ -158,7 +261,7 @@
     } else if (!nextDate) {
       pickerTime = undefined;
     }
-    value = formatCombinedIso(pickerDate, pickerTime);
+    value = formatCombinedIso(pickerDate, pickerTime, tzMode, offsetMinutes);
   }
 
   function handleTimeChange(nextTime: Time | undefined) {
@@ -167,7 +270,22 @@
       hasPartialInput = true;
     }
     if (pickerDate) {
-      value = formatCombinedIso(pickerDate, pickerTime);
+      value = formatCombinedIso(pickerDate, pickerTime, tzMode, offsetMinutes);
+    }
+  }
+
+  function handleOffsetInput(e: Event) {
+    offsetInput = (e.currentTarget as HTMLInputElement).value;
+    const parsed = offsetToMinutes(offsetInput);
+    if (parsed === null) return;
+    offsetMinutes = parsed;
+    value = formatCombinedIso(pickerDate, pickerTime, tzMode, offsetMinutes);
+  }
+
+  function handleTzModeChange(e: Event) {
+    tzMode = (e.currentTarget as HTMLSelectElement).value as TzMode;
+    if (tzMode === "offset" && offsetToMinutes(offsetInput) === null) {
+      offsetInput = minutesToOffset(offsetMinutes);
     }
   }
 
@@ -217,14 +335,36 @@
     >
       <div class="date-picker-label-row">
         <DatePicker.Label class="field-label">{label}</DatePicker.Label>
-        <span
-          class="tz-badge"
-          title={`Detected local timezone: ${shortTzName} (${localTz}) — defaults to 8:00 PM when time is unset`}
-        >
-          {shortTzName} · {localTz.split("/").pop()?.replace(/_/g, " ") ??
-            localTz}
-        </span>
+        <div class="tz-control">
+          <select
+            class="tz-select"
+            value={tzMode}
+            onchange={handleTzModeChange}
+            aria-label={`${label} time zone`}
+            title="Time zone used to interpret the date and time you enter. Stored as UTC."
+          >
+            <option value="local">Local · {shortTzName}</option>
+            <option value="utc">UTC · Z</option>
+            <option value="offset">Custom offset</option>
+          </select>
+          {#if tzMode === "offset"}
+            <input
+              class="tz-offset-input"
+              aria-label={`${label} UTC offset (for example -05:00)`}
+              value={offsetInput}
+              oninput={handleOffsetInput}
+              placeholder="+00:00"
+              inputmode="text"
+              spellcheck="false"
+              size="7"
+            />
+          {/if}
+        </div>
       </div>
+
+      {#if tzMode !== "local" && value}
+        <span class="tz-hint">= {localHint(value)}</span>
+      {/if}
 
       <div
         class="date-picker-row"
