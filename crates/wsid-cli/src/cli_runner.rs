@@ -654,7 +654,7 @@ fn run_users<W: Write>(
                 OutputMode::Json => {
                     writeln!(out, "{}", serde_json::to_string_pretty(&json!({ "user": norm_user, "kind": norm_kind })).unwrap_or_default())?
                 }
-                _ => writeln!(out, "Set  kind to {norm_kind}.")?,
+                _ => writeln!(out, "Set @{norm_user} kind to {norm_kind}.")?,
             }
         }
         UsersAction::Add { user: new_user } => {
