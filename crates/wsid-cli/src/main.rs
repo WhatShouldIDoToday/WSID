@@ -1552,6 +1552,54 @@ mod tests {
     }
 
     #[test]
+    fn tui_settings_edit_user_kind_and_bulk_mismatch_notice() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("kinds.db");
+        {
+            let mut db = Database::open(&db_path).unwrap();
+            wsid_core::create_task(&mut db, CreateTaskInput { title: "Alice task".to_string(), ..Default::default() }, "alice").unwrap();
+            wsid_core::create_task(&mut db, CreateTaskInput { title: "Bob task".to_string(), ..Default::default() }, "bob").unwrap();
+        }
+        let config = AppConfig { primary_user: "alice".to_string(), default_user: "alice".to_string(), ..Default::default() };
+        let mut app = TuiApp::new_with_config_path(&db_path, config, "alice".to_string(), false, dir.path().join("config.toml")).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+
+        press(&mut app, KeyCode::Char('6'));
+        app.settings.selected = app
+            .settings_rows()
+            .iter()
+            .position(|row| row.label == "@bob")
+            .unwrap();
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(app.settings.mode, SettingsMode::EditUserKind);
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Backspace);
+        }
+        for ch in "jira".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.settings.mode, SettingsMode::Browse, "{}", app.status_message);
+        assert_eq!(
+            wsid_core::list_user_kinds(&app.db)
+                .unwrap()
+                .get("bob")
+                .map(String::as_str),
+            Some("jira")
+        );
+        assert!(
+            app.settings_rows()
+                .iter()
+                .any(|row| row.label == "@bob" && row.value.starts_with("jira · "))
+        );
+
+        // Typing a conflicting kind in the bulk prompt warns live and reports a notice on apply.
+        app.selected_ids = vec![app.all_tasks[0].id.clone()];
+        app.apply_bulk_input("a=human:bob");
+        assert!(app.status_message.contains("warning: @bob is a jira user"), "{}", app.status_message);
+    }
+
+    #[test]
     fn tui_settings_hide_delete_actions_from_non_primary_users() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("non-primary.db");

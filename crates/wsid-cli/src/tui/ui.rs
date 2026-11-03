@@ -899,6 +899,7 @@ fn render_settings_prompt(frame: &mut Frame, area: Rect, app: &TuiApp) {
     let (label, value) = match app.settings.mode {
         SettingsMode::EditFocusLimit => ("Focus queue size (1-50): ", app.settings.focus_limit_input.as_str()),
         SettingsMode::EditDatabasePath => ("Database path or folder: ", app.settings.database_path_input.as_str()),
+        SettingsMode::EditUserKind => ("User kind: ", app.settings.user_kind_input.as_str()),
         SettingsMode::Browse => return,
     };
     let line = Line::from(vec![
@@ -1136,10 +1137,11 @@ fn focus_hints(app: &TuiApp) -> String {
         FocusContext::Tab(ActiveTab::DataEntry) => app.entry_form.hint().to_string(),
         FocusContext::Tab(ActiveTab::Settings) => match app.settings.mode {
             SettingsMode::Browse => {
-                "[1-6] Views | [j/k] Move | [Enter] Change | [a] Accessible | [?] Help | [q] Quit".to_string()
+                "[1-6] Views | [j/k] Move | [Enter] Change | [t] User kind | [a] Accessible | [?] Help | [q] Quit".to_string()
             }
             SettingsMode::EditFocusLimit => "[0-9] Size | [Enter] Save | [Esc] Cancel".to_string(),
             SettingsMode::EditDatabasePath => "[type] Path | [Enter] Open | [Esc] Cancel".to_string(),
+            SettingsMode::EditUserKind => "[type] Kind | [Enter] Save | [Esc] Cancel".to_string(),
         },
     }
 }

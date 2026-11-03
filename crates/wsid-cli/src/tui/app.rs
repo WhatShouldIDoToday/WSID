@@ -219,6 +219,7 @@ pub enum SettingsMode {
     Browse,
     EditFocusLimit,
     EditDatabasePath,
+    EditUserKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,9 +256,12 @@ pub struct SettingsState {
     pub mode: SettingsMode,
     pub focus_limit_input: String,
     pub database_path_input: String,
+    pub user_kind_target: String,
+    pub user_kind_input: String,
     pub delete_confirm: Option<UserDeleteConfirm>,
     focus_limit_history: TextHistory,
     database_path_history: TextHistory,
+    user_kind_history: TextHistory,
 }
 
 pub struct TuiApp {
@@ -2169,6 +2173,14 @@ impl TuiApp {
                             .record(&before, EditKind::Discrete);
                         self.update_database_path_prompt();
                     }
+                    SettingsMode::EditUserKind => {
+                        let before = self.settings.user_kind_input.clone();
+                        self.settings.user_kind_input.push_str(&flat);
+                        self.settings
+                            .user_kind_history
+                            .record(&before, EditKind::Discrete);
+                        self.update_user_kind_prompt();
+                    }
                     SettingsMode::Browse => {}
                 }
             }
@@ -2636,12 +2648,14 @@ impl TuiApp {
             _ => "@",
         };
         let users = suggest_users(&self.db, token.query, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
+        let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
         for user in users.into_iter().take(6) {
-            self.detail_suggestions.push(CommentSuggestion {
-                insert: format!("{scope}{user}"),
-                label: format!("{scope}{user}"),
-                hint: "known user".to_string(),
-            });
+            let hint = match kinds.get(&user) {
+                Some(kind) if kind != wsid_core::DEFAULT_USER_KIND => format!("known user · {kind}"),
+                _ => "known user".to_string(),
+            };
+            self.detail_suggestions
+                .push(CommentSuggestion { insert: format!("{scope}{user}"), label: format!("{scope}{user}"), hint });
         }
         let typed = token.query.trim();
         if !typed.is_empty()
@@ -2885,6 +2899,14 @@ impl TuiApp {
         self.db_path == wsid_core::default_global_db_path()
     }
 
+    /// `kind · ` for a non-default kind, otherwise empty.
+    fn kind_prefix(kinds: &std::collections::BTreeMap<String, String>, user: &str) -> String {
+        match kinds.get(user) {
+            Some(kind) if kind != wsid_core::DEFAULT_USER_KIND => format!("{kind} · "),
+            _ => String::new(),
+        }
+    }
+
     /// Rows rendered by the Settings view and navigated with `j`/`k`.
     pub fn settings_rows(&self) -> Vec<SettingsRow> {
         let mut rows = Vec::new();
@@ -2949,6 +2971,7 @@ impl TuiApp {
         if self.is_primary_user() {
             let mut users = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
             users.sort_by_key(|user| user.to_ascii_lowercase());
+            let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
             if users.is_empty() {
                 rows.push(SettingsRow {
                     section: "User Management",
@@ -2962,14 +2985,14 @@ impl TuiApp {
                     rows.push(SettingsRow {
                         section: "User Management",
                         label: format!("@{known}"),
-                        value: "primary".to_string(),
+                        value: format!("{}primary", Self::kind_prefix(&kinds, &known)),
                         action: SettingsAction::None,
                     });
                 } else {
                     rows.push(SettingsRow {
                         section: "User Management",
                         label: format!("@{known}"),
-                        value: "Enter to delete".to_string(),
+                        value: format!("{}Enter to delete", Self::kind_prefix(&kinds, &known)),
                         action: SettingsAction::DeleteUser(known),
                     });
                 }
@@ -3008,6 +3031,10 @@ impl TuiApp {
             }
             SettingsMode::EditDatabasePath => {
                 self.handle_settings_database_path_key(key);
+                return;
+            }
+            SettingsMode::EditUserKind => {
+                self.handle_settings_user_kind_key(key);
                 return;
             }
             SettingsMode::Browse => {}
@@ -3052,7 +3079,82 @@ impl TuiApp {
             KeyCode::Home | KeyCode::Char('g') => self.settings.selected = 0,
             KeyCode::End | KeyCode::Char('G') => self.settings.selected = len.saturating_sub(1),
             KeyCode::Enter => self.activate_settings_row(),
+            KeyCode::Char('t') => self.begin_user_kind_prompt(),
             _ => {}
+        }
+    }
+
+    fn begin_user_kind_prompt(&mut self) {
+        let rows = self.settings_rows();
+        let Some(row) = rows.get(self.settings.selected) else {
+            return;
+        };
+        let Some(user) = row
+            .section
+            .eq("User Management")
+            .then(|| row.label.strip_prefix('@'))
+            .flatten()
+        else {
+            return;
+        };
+        let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
+        self.settings.user_kind_input = kinds
+            .get(user)
+            .cloned()
+            .unwrap_or_else(|| wsid_core::DEFAULT_USER_KIND.to_string());
+        self.settings.user_kind_target = user.to_string();
+        self.settings.user_kind_history.clear();
+        self.settings.mode = SettingsMode::EditUserKind;
+        self.update_user_kind_prompt();
+    }
+
+    fn update_user_kind_prompt(&mut self) {
+        self.status_message = format!("Kind for @{}: {}_", self.settings.user_kind_target, self.settings.user_kind_input);
+    }
+
+    fn handle_settings_user_kind_key(&mut self, key: KeyEvent) {
+        if let Some(changed) = apply_text_shortcut(&key, &mut self.settings.user_kind_input, &mut self.settings.user_kind_history) {
+            if changed {
+                self.update_user_kind_prompt();
+            }
+            return;
+        }
+        if is_modified_char(&key) {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.settings.mode = SettingsMode::Browse;
+                self.settings.user_kind_input.clear();
+                self.status_message = "Cancelled kind change".to_string();
+            }
+            KeyCode::Backspace => {
+                self.settings.user_kind_input.pop();
+                self.update_user_kind_prompt();
+            }
+            KeyCode::Enter => self.submit_user_kind(),
+            KeyCode::Char(ch) => {
+                self.settings.user_kind_input.push(ch);
+                self.update_user_kind_prompt();
+            }
+            _ => {}
+        }
+    }
+
+    fn submit_user_kind(&mut self) {
+        let user = self.settings.user_kind_target.clone();
+        let kind = self.settings.user_kind_input.clone();
+        // Users known only from task fields have no row yet; validate the kind first, then register.
+        let result = wsid_core::normalize_user_kind(&kind)
+            .and_then(|_| wsid_core::register_user(&mut self.db, &user))
+            .and_then(|_| wsid_core::set_user_kind(&mut self.db, &user, &kind));
+        match result {
+            Ok(()) => {
+                self.settings.mode = SettingsMode::Browse;
+                self.settings.user_kind_input.clear();
+                self.status_message = format!("Set @{user} kind");
+            }
+            Err(err) => self.status_message = format!("Cannot set kind: {err}"),
         }
     }
 
@@ -3190,6 +3292,8 @@ impl TuiApp {
         self.settings.mode = SettingsMode::EditDatabasePath;
         self.settings.database_path_input.clear();
         self.settings.database_path_history.clear();
+        self.settings.user_kind_input.clear();
+        self.settings.user_kind_history.clear();
         self.update_database_path_prompt();
     }
 
@@ -3529,7 +3633,7 @@ impl TuiApp {
         }
     }
 
-    fn apply_bulk_input(&mut self, input: &str) {
+    pub(crate) fn apply_bulk_input(&mut self, input: &str) {
         let ids: Vec<String> =
             if self.selected_ids.is_empty() { self.highlighted_task_id().into_iter().collect() } else { self.selected_ids.clone() };
         if ids.is_empty() {
