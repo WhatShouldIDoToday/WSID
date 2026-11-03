@@ -864,7 +864,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
             "[1-5] Views | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [U] User | [Enter] Inspect | [q] Quit"
         }
         ActiveTab::Eisenhower => {
-            "[1-5] Views | [h/l/Tab] Quadrant | [j/k] Task | [+/-] Imp | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
+            "[1-5] Views | [h/l/Tab/S-Tab] Quadrant | [j/k] Task | [+/-] Imp | [</>] Urgency | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
         }
         ActiveTab::Database => {
             "[1-5] Views | [/] Search | [f] Status | [t] Tag | [u] User | [m] Mine | [o/O] Sort | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [q] Quit"

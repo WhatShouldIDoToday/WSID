@@ -774,7 +774,7 @@ impl TuiApp {
 
     fn handle_eisenhower_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => {
                 self.eisenhower_quadrant = self.eisenhower_quadrant.checked_sub(1).unwrap_or(3);
                 self.eisenhower_row = self.eisenhower_states[self.eisenhower_quadrant]
                     .selected()
@@ -806,6 +806,8 @@ impl TuiApp {
                     self.eisenhower_states[self.eisenhower_quadrant].select(Some(self.eisenhower_row));
                 }
             }
+            KeyCode::Char('<') => self.move_eisenhower_urgency(-1),
+            KeyCode::Char('>') => self.move_eisenhower_urgency(1),
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
                 if let Some(item) = items.get(self.eisenhower_row) {
@@ -869,6 +871,33 @@ impl TuiApp {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Moves the highlighted task to the left (`-1`) or right (`+1`) column of the matrix by
+    /// forcing its urgency. Columns map to urgency, so this is the Eisenhower analogue of
+    /// Kanban's `<`/`>` column move.
+    fn move_eisenhower_urgency(&mut self, direction: i8) {
+        let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
+        let Some(item) = items.get(self.eisenhower_row) else {
+            return;
+        };
+        let id = item.task.id.clone();
+        let target_urgent = direction > 0;
+        if let Err(err) = update_task(&mut self.db, &id, UpdateTaskInput { urgent_override: Some(target_urgent), ..Default::default() }) {
+            self.status_message = format!("Failed to move [{id}]: {err}");
+            return;
+        }
+        let _ = self.refresh_all();
+        match self.eisenhower_items.iter().find(|c| c.task.id == id) {
+            Some(c) if c.is_urgent != target_urgent => {
+                let slack = c.slack_days.unwrap_or(0.0);
+                self.status_message = format!("[{id}] stays urgent: only {slack:.1} day(s) of slack, inside the urgent horizon");
+            }
+            Some(c) => {
+                self.status_message = format!("Moved [{id}] to Q{}", c.quadrant.number());
+            }
+            None => self.status_message = format!("Moved [{id}]"),
         }
     }
 

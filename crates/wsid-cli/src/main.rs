@@ -79,6 +79,71 @@ mod tests {
     use super::*;
     use crate::args::{AddArgs, NextArgs, NoteArgs, SearchArgs};
     use crate::tui::app::{ActiveTab, TuiApp};
+    use wsid_core::{CreateTaskInput, EisenhowerQuadrant};
+
+    #[test]
+    fn tui_eisenhower_shift_tab_wraps_and_urgency_keys_move_columns() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("eisen.db");
+        let task_id = {
+            let mut db = Database::open(&db_path).unwrap();
+            wsid_core::create_task(
+                &mut db,
+                CreateTaskInput {
+                    title: "Quadrant mover".to_string(),
+                    importance: Some(4),
+                    urgent_override: Some(true),
+                    ..Default::default()
+                },
+                "alice",
+            )
+            .unwrap()
+            .id
+        };
+
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+
+        // `3` opens the Eisenhower matrix; Shift+Tab steps back, Tab steps forward.
+        press(&mut app, KeyCode::Char('3'));
+        assert_eq!(app.active_tab, ActiveTab::Eisenhower);
+        assert_eq!(app.eisenhower_quadrant, 0);
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.eisenhower_quadrant, 3, "Shift+Tab moves to the previous quadrant");
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.eisenhower_quadrant, 0);
+
+        let quadrant_of = |app: &TuiApp, id: &str| {
+            app.eisenhower_items
+                .iter()
+                .find(|c| c.task.id == id)
+                .map(|c| c.quadrant)
+        };
+        let focus_quadrant = |app: &mut TuiApp, target: usize| {
+            while app.eisenhower_quadrant != target {
+                press(app, KeyCode::Tab);
+            }
+        };
+        assert_eq!(quadrant_of(&app, &task_id), Some(EisenhowerQuadrant::Q1DoFirst));
+
+        // `<` forces not-urgent (left column), `>` forces urgent (right column).
+        press(&mut app, KeyCode::Char('<'));
+        assert_eq!(quadrant_of(&app, &task_id), Some(EisenhowerQuadrant::Q2Schedule), "{}", app.status_message);
+
+        focus_quadrant(&mut app, 1);
+        press(&mut app, KeyCode::Char('>'));
+        assert_eq!(quadrant_of(&app, &task_id), Some(EisenhowerQuadrant::Q1DoFirst), "{}", app.status_message);
+
+        // Importance still moves between rows, so every quadrant is reachable.
+        focus_quadrant(&mut app, 0);
+        press(&mut app, KeyCode::Char('-'));
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(quadrant_of(&app, &task_id), Some(EisenhowerQuadrant::Q3DelegateQuick));
+
+        focus_quadrant(&mut app, 2);
+        press(&mut app, KeyCode::Char('<'));
+        assert_eq!(quadrant_of(&app, &task_id), Some(EisenhowerQuadrant::Q4Later), "{}", app.status_message);
+    }
 
     #[test]
     fn cli_commands_execute_and_support_accessible_and_json_modes() {
