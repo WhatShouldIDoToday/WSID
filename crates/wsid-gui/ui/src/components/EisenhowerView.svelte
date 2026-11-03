@@ -133,11 +133,10 @@
   }
 
   function handleDragStart(e: DragEvent, entry: EisenhowerClassification) {
-    if (isInteractiveTarget(e.target)) {
+    if (pointerDrag || isInteractiveTarget(e.target)) {
       e.preventDefault();
       return;
     }
-    pointerDrag = null;
     dragIds = dragPayloadFor(entry);
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";

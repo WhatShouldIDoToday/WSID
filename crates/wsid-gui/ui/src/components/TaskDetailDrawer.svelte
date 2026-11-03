@@ -38,6 +38,7 @@
     parseCommentMentions,
     tokenizeCommentBody,
   } from "../lib/ipc";
+  import { subscribeDropzone } from "../lib/filedrop";
 
   interface DraftCommentAttachment {
     id: string;
@@ -110,6 +111,7 @@
   // Task-level attachment state
   let newTaskAttachmentDesc = $state<string>("");
   let isDraggingTaskFile = $state<boolean>(false);
+  let taskDropzoneEl = $state<HTMLDivElement | null>(null);
 
   // Comment composer state
   let commentBody = $state<string>("");
@@ -497,29 +499,38 @@
     }
   }
 
-  async function handleTaskPasteOrDropFiles(
-    files: FileList | File[],
-    fromClipboard: boolean,
-  ) {
+  async function handleTaskDropPaths(paths: string[]) {
+    if (!detail) return;
+    for (const path of paths) {
+      try {
+        const fileName = basenameOfPath(path);
+        await attachFileFromDisk({
+          taskId: detail.task.id,
+          filePath: path,
+          description: newTaskAttachmentDesc.trim() || null,
+        });
+        announce(`Attached ${fileName} to ${detail.task.id}`);
+      } catch (err) {
+        errorMsg = String(err);
+        announce(`Failed to attach file: ${String(err)}`);
+      }
+    }
+    newTaskAttachmentDesc = "";
+    await refreshDetail(detail.task.id);
+    onDataChanged();
+  }
+
+  async function handleTaskPasteFiles(files: FileList | File[]) {
     if (!detail) return;
     for (const file of Array.from(files)) {
       try {
-        const nativePath = (file as File & { path?: string }).path;
-        if (!fromClipboard && nativePath) {
-          await attachFileFromDisk({
-            taskId: detail.task.id,
-            filePath: nativePath,
-            description: newTaskAttachmentDesc.trim() || file.name,
-          });
-        } else {
-          const b64 = await fileToBase64(file);
-          await attachClipboardBytes({
-            taskId: detail.task.id,
-            base64Data: b64,
-            suggestedName: file.name || "clipboard.png",
-            description: newTaskAttachmentDesc.trim() || null,
-          });
-        }
+        const b64 = await fileToBase64(file);
+        await attachClipboardBytes({
+          taskId: detail.task.id,
+          base64Data: b64,
+          suggestedName: file.name || "clipboard.png",
+          description: newTaskAttachmentDesc.trim() || null,
+        });
         announce(
           `Attached ${file.name || "clipboard image"} to ${detail.task.id}`,
         );
@@ -532,6 +543,17 @@
     await refreshDetail(detail.task.id);
     onDataChanged();
   }
+
+  $effect(() =>
+    subscribeDropzone(() => taskDropzoneEl, {
+      onDragChange: (dragging) => {
+        isDraggingTaskFile = dragging;
+      },
+      onDrop: (paths) => {
+        void handleTaskDropPaths(paths);
+      },
+    }),
+  );
 
   async function handleAddRelationFromPicker(entry: SelectedRelationEntry) {
     if (!detail) return;
@@ -1033,25 +1055,14 @@
         />
 
         <div
+          bind:this={taskDropzoneEl}
           class={`dropzone ${isDraggingTaskFile ? "dragging" : ""}`}
           style="margin-top: 0.75rem;"
           role="region"
           aria-label="Attach files to task by drag-and-drop, clipboard paste, or file picker"
-          ondragover={(e) => {
-            e.preventDefault();
-            isDraggingTaskFile = true;
-          }}
-          ondragleave={() => (isDraggingTaskFile = false)}
-          ondrop={(e) => {
-            e.preventDefault();
-            isDraggingTaskFile = false;
-            if (e.dataTransfer?.files?.length) {
-              void handleTaskPasteOrDropFiles(e.dataTransfer.files, false);
-            }
-          }}
           onpaste={(e) => {
             if (e.clipboardData?.files?.length) {
-              void handleTaskPasteOrDropFiles(e.clipboardData.files, true);
+              void handleTaskPasteFiles(e.clipboardData.files);
             }
           }}
         >

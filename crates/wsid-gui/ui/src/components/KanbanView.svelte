@@ -104,11 +104,10 @@
   }
 
   function handleDragStart(e: DragEvent, task: Task) {
-    if (isInteractiveTarget(e.target)) {
+    if (pointerDrag || isInteractiveTarget(e.target)) {
       e.preventDefault();
       return;
     }
-    pointerDrag = null;
     dragIds = dragPayloadFor(task);
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";

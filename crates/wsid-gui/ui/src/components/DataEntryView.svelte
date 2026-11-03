@@ -22,6 +22,7 @@
     validateDeadlines,
     validateUsername,
   } from "../lib/ipc";
+  import { subscribeDropzone } from "../lib/filedrop";
 
   interface DraftAttachmentItem {
     id: string;
@@ -71,6 +72,7 @@
   let pendingAttachments = $state<DraftAttachmentItem[]>([]);
   let nextAttachmentDesc = $state<string>("");
   let isDragging = $state<boolean>(false);
+  let dropzoneEl = $state<HTMLDivElement | null>(null);
 
   let sgdbPartial = $state<boolean>(false);
   let duePartial = $state<boolean>(false);
@@ -332,40 +334,41 @@
     }
   }
 
-  async function handleFilesDropOrPaste(
-    files: FileList | File[],
-    fromClipboard: boolean,
-  ) {
+  function handleDroppedPaths(paths: string[]) {
+    for (const path of paths) {
+      const fileName = basenameOfPath(path);
+      pendingAttachments = [
+        ...pendingAttachments,
+        {
+          id: `${Date.now()}-${Math.random()}`,
+          path,
+          suggestedName: fileName,
+          description: nextAttachmentDesc.trim() || null,
+        },
+      ];
+      announce(`Staged attachment ${fileName}`);
+    }
+    nextAttachmentDesc = "";
+  }
+
+  async function handlePasteFiles(files: FileList | File[]) {
     for (const file of Array.from(files)) {
       try {
-        const nativePath = (file as File & { path?: string }).path;
         const friendlyName =
           file.name ||
           `pasted-image-${new Date().toISOString().slice(11, 19).replace(/:/g, "")}.png`;
-        if (!fromClipboard && nativePath) {
-          pendingAttachments = [
-            ...pendingAttachments,
-            {
-              id: `${Date.now()}-${Math.random()}`,
-              path: nativePath,
-              suggestedName: basenameOfPath(nativePath),
-              description: nextAttachmentDesc.trim() || friendlyName,
-            },
-          ];
-        } else {
-          // Hold pasted or in-memory file in memory until task creation
-          const b64 = await fileToBase64(file);
-          pendingAttachments = [
-            ...pendingAttachments,
-            {
-              id: `${Date.now()}-${Math.random()}`,
-              base64Data: b64,
-              suggestedName: friendlyName,
-              description: nextAttachmentDesc.trim() || friendlyName,
-              previewUrl: file.type.startsWith("image/") ? b64 : undefined,
-            },
-          ];
-        }
+        // Hold pasted or in-memory file in memory until task creation
+        const b64 = await fileToBase64(file);
+        pendingAttachments = [
+          ...pendingAttachments,
+          {
+            id: `${Date.now()}-${Math.random()}`,
+            base64Data: b64,
+            suggestedName: friendlyName,
+            description: nextAttachmentDesc.trim() || friendlyName,
+            previewUrl: file.type.startsWith("image/") ? b64 : undefined,
+          },
+        ];
         announce(`Staged attachment ${friendlyName}`);
       } catch (err) {
         formError = String(err);
@@ -373,6 +376,17 @@
     }
     nextAttachmentDesc = "";
   }
+
+  $effect(() =>
+    subscribeDropzone(() => dropzoneEl, {
+      onDragChange: (dragging) => {
+        isDragging = dragging;
+      },
+      onDrop: (paths) => {
+        handleDroppedPaths(paths);
+      },
+    }),
+  );
 
   function resetForm() {
     if (durationTimer) clearTimeout(durationTimer);
@@ -630,7 +644,7 @@
           bind:value={description}
           onpaste={(e) => {
             if (e.clipboardData?.files?.length) {
-              void handleFilesDropOrPaste(e.clipboardData.files, true);
+              void handlePasteFiles(e.clipboardData.files);
             }
           }}
           placeholder="Detailed acceptance criteria, notes, or context. Paste images directly with Cmd/Ctrl+V."
@@ -825,24 +839,13 @@
         </span>
 
         <div
+          bind:this={dropzoneEl}
           class={`dropzone ${isDragging ? "dragging" : ""}`}
           role="region"
           aria-label="Drop or paste files to attach to this new task"
-          ondragover={(e) => {
-            e.preventDefault();
-            isDragging = true;
-          }}
-          ondragleave={() => (isDragging = false)}
-          ondrop={(e) => {
-            e.preventDefault();
-            isDragging = false;
-            if (e.dataTransfer?.files?.length) {
-              void handleFilesDropOrPaste(e.dataTransfer.files, false);
-            }
-          }}
           onpaste={(e) => {
             if (e.clipboardData?.files?.length) {
-              void handleFilesDropOrPaste(e.clipboardData.files, true);
+              void handlePasteFiles(e.clipboardData.files);
             }
           }}
         >
