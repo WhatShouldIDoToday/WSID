@@ -1,5 +1,6 @@
 <script lang="ts">
   import Select from "./ui/Select.svelte";
+  import UserPill from "./UserPill.svelte";
   import { onMount } from "svelte";
   import AttachmentGallery from "./AttachmentGallery.svelte";
   import DateFieldPicker from "./DateFieldPicker.svelte";
@@ -26,6 +27,7 @@
     describeUserNotice,
     withUserNotices,
     type UserNotice,
+    userKindOf,
     removeTask,
     addCommentNote,
     removeCommentNote,
@@ -768,7 +770,7 @@
 </script>
 
 <div
-  class="modal-backdrop"
+  class="modal-backdrop drawer-scrim"
   role="presentation"
   onclick={(e) => {
     if (e.target === e.currentTarget) requestCloseDrawer();
@@ -798,9 +800,7 @@
     {#if loading && !detail}
       <p>Loading task {taskId}...</p>
     {:else if detail}
-      <header
-        style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.85rem;"
-      >
+      <header class="drawer-header">
         <div>
           <div class="meta-row" style="margin-bottom: 0.35rem;">
             <span class="task-id-badge">{detail.task.id}</span>
@@ -813,6 +813,25 @@
           <h2 id="drawer-task-title" style="margin: 0; font-size: 1.3rem;">
             {detail.task.title}
           </h2>
+          <div class="card-personas drawer-personas">
+            <UserPill
+              user={detail.task.reporter}
+              kind={userKindOf(userKinds, detail.task.reporter)}
+              role="Reporter"
+            />
+            <UserPill
+              user={detail.task.assignee}
+              kind={userKindOf(userKinds, detail.task.assignee)}
+              role="Assignee"
+            />
+            {#if detail.task.evaluator !== detail.task.assignee}
+              <UserPill
+                user={detail.task.evaluator}
+                kind={userKindOf(userKinds, detail.task.evaluator)}
+                role="Evaluator"
+              />
+            {/if}
+          </div>
         </div>
 
         <div class="actions-row">
@@ -887,6 +906,16 @@
             }))}
             onValueChange={(v) => handleStatusChange(v as TaskStatus)}
           />
+
+          {#if detail.task.status === "todo"}
+            <button
+              type="button"
+              class="btn-sm"
+              onclick={() => handleStatusChange("in_progress")}
+            >
+              Start work
+            </button>
+          {/if}
 
           {#if detail.task.status !== "completed"}
             <button

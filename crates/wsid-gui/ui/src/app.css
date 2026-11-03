@@ -225,8 +225,8 @@
   .quadrant-panel,
   .detail-drawer,
   .drawer-panel,
-  .switcher-modal-card,
-  .switcher-modal-option.is-highlighted,
+  .command-palette,
+  .command-palette-item[data-selected],
   .confirm-modal-dialog,
   .date-picker-popover,
   .relation-combobox-content,
@@ -847,10 +847,16 @@ table.db-table th {
   justify-content: flex-end;
 }
 
+/* Lighter scrim than other modals so the board stays readable behind the drawer. */
+.drawer-scrim {
+  background: rgba(0, 0, 0, 0.35);
+}
+
 .detail-drawer,
 .drawer-panel {
   background: var(--bg-surface);
   border-left: 1px solid var(--border-strong);
+  box-shadow: -24px 0 48px -12px rgba(0, 0, 0, 0.5);
   width: min(47.5rem, 95vw);
   height: 100vh;
   overflow-y: auto;
@@ -858,6 +864,31 @@ table.db-table th {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  animation: drawer-slide-in 0.18s ease-out;
+}
+
+@keyframes drawer-slide-in {
+  from {
+    transform: translateX(2rem);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-drawer,
+  .drawer-panel {
+    animation: none;
+  }
+}
+
+.drawer-personas {
+  justify-content: flex-start;
+  margin-left: 0;
+  margin-top: 0.4rem;
 }
 
 .drawer-header {
@@ -875,68 +906,83 @@ table.db-table th {
   gap: 1rem;
 }
 
-/* Active user and project switcher modals (Ctrl+U / Ctrl+P) */
-.switcher-modal-backdrop {
+/* Command palette (Cmd/Ctrl+K, Ctrl+U for users, Ctrl+P for projects; bits-ui Dialog + Command) */
+.command-palette-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(2, 6, 23, 0.68);
+  background: rgba(2, 6, 23, 0.6);
   z-index: 1500;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1.5rem;
 }
 
-.switcher-modal-card {
+.command-palette {
+  position: fixed;
+  top: 12vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1501;
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
-  border-radius: 0.5rem;
-  width: min(26rem, 92vw);
-  padding: 1rem;
+  border-radius: 0.75rem;
+  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.6);
+  width: min(36rem, 92vw);
+  max-height: 70vh;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  overflow: hidden;
 }
 
-.switcher-modal-header {
+.command-palette-root {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.switcher-modal-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 15rem;
+.command-palette-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+  padding: 0.85rem 1rem;
+  font-size: 0.98rem;
+}
+
+.command-palette-list {
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  padding: 0.4rem;
 }
 
-.switcher-modal-input {
-  width: 100%;
+.command-palette-heading {
+  padding: 0.5rem 0.6rem 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
-.switcher-modal-option {
-  width: 100%;
+.command-palette-item {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
-  text-align: left;
-  background: var(--bg-input);
-  padding: 0.45rem 0.65rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 0.4rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-primary);
 }
 
-.switcher-modal-option.is-highlighted {
-  border-color: var(--accent-primary);
-  background: rgba(56, 189, 248, 0.12);
+.command-palette-item[data-selected] {
+  background: var(--bg-elevated);
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
-.switcher-modal-option.is-current {
-  font-weight: 600;
+.command-palette-empty {
+  padding: 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }
 
 /* Confirmation Modal (bits-ui Dialog) */
@@ -1702,6 +1748,44 @@ input[type="text"].tag-compact-input {
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   gap: 1rem;
   align-items: start;
+}
+
+/* New Task form: main column (title, description, relations, attachments) beside a
+   narrower sidebar (status, ratings, personas, tags, project, dates). Collapses to one
+   column when the form itself is narrow. */
+.entry-form {
+  container-type: inline-size;
+}
+
+.entry-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(16rem, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.entry-main,
+.entry-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.entry-sidebar {
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--border-subtle);
+}
+
+@container (max-width: 48rem) {
+  .entry-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .entry-sidebar {
+    padding-left: 0;
+    border-left: none;
+  }
 }
 
 .form-grid-dates {
