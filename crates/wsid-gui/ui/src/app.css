@@ -851,18 +851,6 @@ table.db-table th {
   white-space: nowrap;
 }
 
-.tz-badge {
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  background: var(--bg-input);
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  padding: 0.08rem 0.45rem;
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
 .tz-control {
   display: inline-flex;
   align-items: center;
