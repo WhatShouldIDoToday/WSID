@@ -3,6 +3,7 @@ import {
   describeUserNotice,
   editDistance,
   parseCommentMentions,
+  plainTextPreview,
   suggestKinds,
   withUserNotices,
 } from "./ipc";
@@ -75,5 +76,22 @@ describe("user kinds", () => {
       }),
     ).toBe('@bob is a claude user; "human:" was ignored.');
     expect(withUserNotices("Saved", [])).toBe("Saved");
+  });
+});
+
+describe("plain text preview", () => {
+  test("strips markdown and keeps mentions and task references as plain text", () => {
+    expect(
+      plainTextPreview(
+        "## Plan\n\n- **Ship** the [docs](https://example.test) for @bob, see #AB1234",
+      ),
+    ).toBe("Plan Ship the docs for @bob, see #AB1234");
+  });
+
+  test("truncates with an ellipsis and never exceeds the limit", () => {
+    const preview = plainTextPreview("word ".repeat(100), 20);
+    expect(preview.endsWith("…")).toBe(true);
+    expect(preview.length).toBeLessThanOrEqual(20);
+    expect(plainTextPreview("", 20)).toBe("");
   });
 });

@@ -446,6 +446,7 @@
       {#key viewEpoch}
         <FocusView
           focusData={focusQueue}
+          userKinds={session?.user_kinds ?? {}}
           {blockedTasks}
           knownProjects={session?.known_projects ?? []}
           projectFilter={focusProject}

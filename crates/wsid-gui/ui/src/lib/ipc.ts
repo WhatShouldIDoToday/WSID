@@ -1454,3 +1454,28 @@ export function fileToBase64(file: Blob): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+/**
+ * Markdown-free, single-line preview of a task description for cards. Mentions and task
+ * references are kept as plain `@user` / `#AB1234` text. Truncated with an ellipsis at `max`.
+ */
+export function plainTextPreview(body: string, max = 240): string {
+  const text = body
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-*+]|\d+\.)\s+/gm, "")
+    .replace(/[*_`~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+/** A target offered by a card's "Move to…" menu. */
+export interface CardMoveOption {
+  value: string;
+  label: string;
+}
+
+/** Alt+Arrow direction for keyboard card movement. */
+export type CardMoveDirection = "left" | "right" | "up" | "down";

@@ -591,6 +591,7 @@ select[aria-invalid="true"] {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+  position: relative;
 }
 
 .task-card-header {
@@ -2006,6 +2007,158 @@ input[type="text"].tag-compact-input {
 
 .bulk-spacer {
   flex: 1;
+}
+
+/* TaskCard (components/TaskCard.svelte). The title button stretches over the whole card
+   (stretched-link pattern), so the controls that must stay separate sit above it. */
+.card-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.card-lead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.card-personas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.card-control {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+.card-complete-btn {
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.card-complete-btn:hover:not(:disabled) {
+  color: var(--success);
+  border-color: var(--success);
+  background: transparent;
+}
+
+.card-menu-btn {
+  padding: 0.05rem 0.45rem;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  line-height: 1.3;
+}
+
+.task-card:hover .card-menu-btn,
+.card-menu-btn:focus-visible,
+.card-menu-btn[data-state="open"] {
+  opacity: 1;
+}
+
+.badge-score {
+  background: var(--badge-score-bg);
+  color: var(--badge-score-fg);
+  border-color: var(--badge-score-border);
+  font-weight: 700;
+}
+
+.card-quadrant {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.card-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.card-title-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.card-title-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.task-card:hover .card-title-btn {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+.card-preview {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.card-unblocks {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.card-temporal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin-top: 0.1rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.card-temporal > span {
+  white-space: nowrap;
 }
 
 .task-card.is-selected,

@@ -2,6 +2,7 @@
   import Select from "./ui/Select.svelte";
   import { untrack } from "svelte";
   import {
+    type CardMoveDirection,
     type EisenhowerClassification,
     type EisenhowerQuadrant,
     QUADRANT_META,
@@ -13,7 +14,7 @@
     beginPointerDrag,
     type PointerDragState,
   } from "../lib/pointerdrag";
-  import BoardTaskCard from "./BoardTaskCard.svelte";
+  import TaskCard from "./TaskCard.svelte";
   import BulkActions from "./BulkActions.svelte";
   import DragGhost from "./DragGhost.svelte";
 
@@ -190,6 +191,22 @@
     dragIds = [];
     dropTargetQuadrant = null;
     pointerDrag = null;
+  }
+
+  /** Alt+Arrows move a card one cell in the 2×2 quadrant grid (q1 q2 / q3 q4). */
+  function moveQuadrantByKey(
+    entry: EisenhowerClassification,
+    direction: CardMoveDirection,
+  ) {
+    const index = QUADRANTS.indexOf(entry.quadrant);
+    let row = Math.floor(index / 2);
+    let col = index % 2;
+    if (direction === "up") row -= 1;
+    if (direction === "down") row += 1;
+    if (direction === "left") col -= 1;
+    if (direction === "right") col += 1;
+    if (row < 0 || row > 1 || col < 0 || col > 1) return;
+    void moveIdsToQuadrant([entry.task.id], QUADRANTS[row * 2 + col]);
   }
 
   function handlePointerDown(e: PointerEvent, entry: EisenhowerClassification) {
@@ -384,18 +401,19 @@
           >
             {#each qItems as entry (entry.task.id)}
               <li>
-                <BoardTaskCard
+                <TaskCard
                   task={entry.task}
+                  titleId={`eisenhower-card-${entry.task.id}`}
+                  selectable
                   selected={selection.has(entry.task.id)}
                   dragging={dragIds.includes(entry.task.id)}
                   showStatus
                   showProject={projectFilter === PROJECT_ALL}
-                  urgentLabel={entry.task.urgent_override ? "Override" : ""}
+                  {userKinds}
+                  quadrantLabel={QUADRANT_META[entry.quadrant].badge}
                   deadline={entry.effective_deadline}
                   slackDays={entry.slack_days}
-                  estimatePlaceholder
-                  moveLabel={`Move ${entry.task.id} to quadrant:`}
-                  movePlaceholder="Move…"
+                  moveLabel="Move to quadrant"
                   moveOptions={QUADRANTS.filter(
                     (x) => x !== entry.quadrant,
                   ).map((quadrant) => ({
@@ -407,6 +425,7 @@
                       [entry.task.id],
                       quadrant as EisenhowerQuadrant,
                     )}
+                  onKeyMove={(direction) => moveQuadrantByKey(entry, direction)}
                   onOpen={() => onSelectTask(entry.task.id)}
                   onPointerDown={(e) => handlePointerDown(e, entry)}
                   onSelectClick={(e) =>

@@ -4,6 +4,7 @@
   import {
     type Task,
     type TaskStatus,
+    type CardMoveDirection,
     STATUS_LABELS,
     STATUS_ORDER,
     bulkEditTasks,
@@ -14,7 +15,7 @@
     beginPointerDrag,
     type PointerDragState,
   } from "../lib/pointerdrag";
-  import BoardTaskCard from "./BoardTaskCard.svelte";
+  import TaskCard from "./TaskCard.svelte";
   import BulkActions from "./BulkActions.svelte";
   import DragGhost from "./DragGhost.svelte";
 
@@ -75,6 +76,14 @@
     value: status,
     label: STATUS_LABELS[status],
   }));
+
+  /** Alt+Left/Right moves a card to the neighbouring status column. */
+  function moveStatusByKey(task: Task, direction: CardMoveDirection) {
+    if (direction !== "left" && direction !== "right") return;
+    const index = STATUS_ORDER.indexOf(task.status);
+    const next = STATUS_ORDER[index + (direction === "right" ? 1 : -1)];
+    if (next) void moveTasksToStatus([task.id], next);
+  }
 
   $effect(() => {
     selection.prune(tasks.map((t) => t.id));
@@ -312,18 +321,21 @@
           <ul class="kanban-column-list">
             {#each colTasks as task (task.id)}
               <li>
-                <BoardTaskCard
+                <TaskCard
                   {task}
                   titleId={`kanban-card-${task.id}`}
+                  selectable
                   selected={selection.has(task.id)}
                   dragging={dragIds.includes(task.id)}
                   showProject={projectFilter === PROJECT_ALL}
-                  urgentLabel={task.urgent_override ? "Urgent" : ""}
-                  moveLabel={`Move ${task.id} to column:`}
-                  moveOptions={STATUS_OPTIONS}
-                  moveValue={task.status}
+                  {userKinds}
+                  moveLabel="Move to status"
+                  moveOptions={STATUS_OPTIONS.filter(
+                    (o) => o.value !== task.status,
+                  )}
                   onMove={(status) =>
                     void moveTasksToStatus([task.id], status as TaskStatus)}
+                  onKeyMove={(direction) => moveStatusByKey(task, direction)}
                   onOpen={() => onSelectTask(task.id)}
                   onPointerDown={(e) => handlePointerDown(e, task)}
                   onSelectClick={(e) =>
