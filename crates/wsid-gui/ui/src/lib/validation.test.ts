@@ -5,6 +5,7 @@ import {
   parseDurationInput,
   validateDeadlineOrder,
   validateTag,
+  validateUserRef,
   validateUsername,
 } from "./ipc";
 import {
@@ -145,4 +146,38 @@ describe("filedrop hit-testing and event routing", () => {
     expect(dragging).toBe(false);
     expect(dropped).toEqual(["/Users/alice/Downloads/spec.pdf"]);
   });
+});
+
+describe("typed user references", () => {
+  const ok: [string, string][] = [
+    ["bob", "bob"],
+    ["@Bob", "bob"],
+    ["claude:bob", "claude:bob"],
+    ["@Claude:Bob", "claude:bob"],
+    ["jira:rob_2", "jira:rob_2"],
+  ];
+  for (const [input, normalized] of ok) {
+    test(`accepts ${JSON.stringify(input)}`, () => {
+      const r = validateUserRef(input);
+      expect(r.error).toBeNull();
+      expect(r.normalized).toBe(normalized);
+    });
+  }
+
+  const bad: [string, RegExp][] = [
+    ["claude:bob:x", /single "kind:user"/],
+    [":bob", /Kind cannot be empty/],
+    ["bad kind:bob", /Invalid kind "bad kind"/],
+    ["claude:bo b", /^Username: /],
+    ["takenote:bob", /reserved/],
+    ["claude:all", /Username: .*reserved/],
+    ["all", /reserved/],
+  ];
+  for (const [input, pattern] of bad) {
+    test(`rejects ${JSON.stringify(input)} naming the wrong part`, () => {
+      const r = validateUserRef(input);
+      expect(r.normalized).toBeNull();
+      expect(r.error).toMatch(pattern);
+    });
+  }
 });

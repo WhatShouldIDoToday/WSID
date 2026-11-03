@@ -9,6 +9,8 @@
     bulkEditTasks,
     bulkRemoveTasks,
     summarizeBulk,
+    validateProject,
+    validateUserRef,
   } from "../lib/ipc";
   import ConfirmModal from "./ConfirmModal.svelte";
   import Select from "./ui/Select.svelte";
@@ -38,6 +40,56 @@
 
   let busy = $state(false);
   let confirmDelete = $state(false);
+
+  // Assignee and project accept new names: typed text, suggestions from the datalists.
+  let assigneeDraft = $state("");
+  let projectDraft = $state("");
+  let assigneeError = $state<string | null>(null);
+  let projectError = $state<string | null>(null);
+
+  function commitAssignee() {
+    const raw = assigneeDraft.trim();
+    if (!raw || busy) return;
+    const check = validateUserRef(raw);
+    if (check.error || !check.normalized) {
+      assigneeError = check.error;
+      announce(`Assignee: ${check.error ?? "invalid"}`);
+      return;
+    }
+    assigneeError = null;
+    assigneeDraft = "";
+    void apply({ assignee: check.normalized });
+  }
+
+  function commitProject() {
+    const raw = projectDraft.trim();
+    if (!raw || busy) return;
+    const check = validateProject(raw);
+    if (check.error || !check.normalized) {
+      projectError = check.error;
+      announce(`Project: ${check.error ?? "invalid"}`);
+      return;
+    }
+    projectError = null;
+    projectDraft = "";
+    void apply({ project: check.normalized });
+  }
+
+  /** Enter applies; Escape clears the draft without clearing the selection. */
+  function handleTextKeydown(
+    e: KeyboardEvent,
+    commit: () => void,
+    clear: () => void,
+  ) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      clear();
+    }
+  }
 
   async function apply(patch: BulkTaskPatch) {
     if (busy || ids.length === 0) return;
@@ -75,12 +127,6 @@
   let statusOptions = $derived(
     STATUS_ORDER.map((st) => ({ value: st, label: STATUS_LABELS[st] })),
   );
-  let userOptions = $derived(
-    knownUsers.map((u) => ({ value: u, label: `@${u}` })),
-  );
-  let projectOptions = $derived(
-    knownProjects.map((p) => ({ value: p, label: p })),
-  );
   let importanceOptions = [1, 2, 3, 4, 5].map((n) => ({
     value: String(n),
     label: `${n}/5`,
@@ -117,25 +163,60 @@
       pick(v, (x) => void apply({ status: x as TaskStatus }))}
   />
 
-  <Select
-    size="sm"
-    ariaLabel="Set assignee"
-    placeholder="Assignee…"
-    value=""
-    disabled={busy}
-    options={userOptions}
-    onValueChange={(v) => pick(v, (x) => void apply({ assignee: x }))}
-  />
+  <div class="bulk-text-field">
+    <input
+      type="text"
+      class="bulk-text-input"
+      list="bulk-assignee-options"
+      placeholder="Assignee…"
+      aria-label="Set assignee (type a new name, or claude:name)"
+      autocomplete="off"
+      disabled={busy}
+      bind:value={assigneeDraft}
+      oninput={() => (assigneeError = null)}
+      onkeydown={(e) =>
+        handleTextKeydown(e, commitAssignee, () => {
+          assigneeDraft = "";
+          assigneeError = null;
+        })}
+    />
+    <datalist id="bulk-assignee-options">
+      {#each knownUsers as u (u)}
+        <option value={u}></option>
+      {/each}
+    </datalist>
+    {#if assigneeError}
+      <span class="field-error" role="alert">{assigneeError}</span>
+    {/if}
+  </div>
 
-  <Select
-    size="sm"
-    ariaLabel="Set project"
-    placeholder="Project…"
-    value=""
-    disabled={busy}
-    options={projectOptions}
-    onValueChange={(v) => pick(v, (x) => void apply({ project: x }))}
-  />
+  <div class="bulk-text-field">
+    <input
+      type="text"
+      class="bulk-text-input"
+      list="bulk-project-options"
+      placeholder="Project…"
+      aria-label="Set project (type a new name)"
+      autocomplete="off"
+      spellcheck="false"
+      disabled={busy}
+      bind:value={projectDraft}
+      oninput={() => (projectError = null)}
+      onkeydown={(e) =>
+        handleTextKeydown(e, commitProject, () => {
+          projectDraft = "";
+          projectError = null;
+        })}
+    />
+    <datalist id="bulk-project-options">
+      {#each knownProjects as p (p)}
+        <option value={p}></option>
+      {/each}
+    </datalist>
+    {#if projectError}
+      <span class="field-error" role="alert">{projectError}</span>
+    {/if}
+  </div>
 
   <Select
     size="sm"

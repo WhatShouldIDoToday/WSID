@@ -640,6 +640,54 @@ export function validateUsername(raw: string): {
   return { normalized: trimmed, error: null };
 }
 
+/** Reserved user kind for non-blocking mention notes (mirrors core `RESERVED_USER_KIND`). */
+export const RESERVED_USER_KIND = "takenote";
+
+/**
+ * Validates a user reference that may carry a kind prefix: `bob` or `claude:bob`.
+ * The kind and the username are checked separately, so an error names the part
+ * that is wrong. `normalized` is the lowercased `kind:user` (or plain user) that
+ * core will also accept.
+ */
+export function validateUserRef(raw: string): {
+  normalized: string | null;
+  error: string | null;
+} {
+  const trimmed = raw.trim().replace(/^@/, "").trim();
+  const parts = trimmed.split(":");
+  if (parts.length > 2) {
+    return {
+      normalized: null,
+      error: `Invalid user reference "${raw.trim()}" — use a single "kind:user" prefix at most.`,
+    };
+  }
+  if (parts.length === 1) {
+    return validateUsername(trimmed);
+  }
+  const [kindRaw, userRaw] = parts;
+  const kind = kindRaw.trim().toLowerCase();
+  if (!kind) {
+    return { normalized: null, error: 'Kind cannot be empty before ":".' };
+  }
+  if (!USERNAME_REGEX.test(kind)) {
+    return {
+      normalized: null,
+      error: `Invalid kind "${kindRaw.trim()}" — kinds may only contain letters, numbers, underscores (_), or dashes (-).`,
+    };
+  }
+  if (kind === RESERVED_USER_KIND) {
+    return {
+      normalized: null,
+      error: `'${RESERVED_USER_KIND}' is reserved for note mentions and cannot be used as a user kind.`,
+    };
+  }
+  const user = validateUsername(userRaw);
+  if (user.error) {
+    return { normalized: null, error: `Username: ${user.error}` };
+  }
+  return { normalized: `${kind}:${user.normalized}`, error: null };
+}
+
 /** Mirrors core `DEFAULT_PROJECT`; a blank project name normalizes to it. */
 export const DEFAULT_PROJECT = "default";
 

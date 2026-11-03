@@ -4,7 +4,7 @@
   import {
     type AppSessionSnapshot,
     userKindOf,
-    validateUsername,
+    validateUserRef,
   } from "../lib/ipc";
 
   type PaletteView =
@@ -87,7 +87,7 @@
   /** Offer to create a user or project that does not exist yet, when the typed name is valid. */
   let createUser = $derived.by(() => {
     if (mode === "project" || !needle) return null;
-    const check = validateUsername(needle);
+    const check = validateUserRef(needle);
     if (check.error || !check.normalized) return null;
     return session.known_users.some((u) => u.toLowerCase() === check.normalized)
       ? null

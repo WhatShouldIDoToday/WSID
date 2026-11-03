@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import Select from "./ui/Select.svelte";
   import UserPill from "./UserPill.svelte";
   import { Dialog } from "bits-ui";
@@ -54,7 +55,15 @@
   let kindDrafts = $state<Record<string, string>>({});
   let kindOptions = $derived(knownUserKinds(session.user_kinds));
 
-  async function saveUserKind(username: string) {
+  /** The user whose kind cell is currently an input, if any. */
+  let editingKindUser = $state<string | null>(null);
+
+  function kindButtonId(username: string): string {
+    return `user-kind-btn-${username}`;
+  }
+
+  /** Returns true when the kind was saved. A failure keeps the draft for correction. */
+  async function saveUserKind(username: string): Promise<boolean> {
     const kind = (
       kindDrafts[username] ?? userKindOf(session.user_kinds, username)
     ).trim();
@@ -64,10 +73,48 @@
       delete kindDrafts[username];
       announce(`Set @${username} kind to ${kind.toLowerCase()}.`);
       await onUserKindChanged();
+      return true;
     } catch (err) {
       userMgmtError = String(err);
       announce(`Failed to set kind for @${username}: ${String(err)}`);
+      return false;
     }
+  }
+
+  function startKindEdit(username: string) {
+    kindDrafts[username] = userKindOf(session.user_kinds, username);
+    editingKindUser = username;
+  }
+
+  async function endKindEdit(username: string) {
+    editingKindUser = null;
+    delete kindDrafts[username];
+    await tick();
+    document.getElementById(kindButtonId(username))?.focus();
+  }
+
+  /** Enter or blur saves a changed kind; an unchanged value just closes the editor. */
+  async function commitKindEdit(username: string) {
+    if (editingKindUser !== username) return;
+    const draft = (kindDrafts[username] ?? "").trim();
+    const current = userKindOf(session.user_kinds, username);
+    if (!draft || draft.toLowerCase() === current.toLowerCase()) {
+      await endKindEdit(username);
+      return;
+    }
+    kindDrafts[username] = draft;
+    if (await saveUserKind(username)) {
+      await endKindEdit(username);
+    } else {
+      // Keep the editor open so the typed value can be corrected.
+      await tick();
+      document.getElementById(`user-kind-input-${username}`)?.focus();
+    }
+  }
+
+  function focusAndSelect(node: HTMLInputElement) {
+    node.focus();
+    node.select();
   }
 
   let isMainUser = $derived(
@@ -423,56 +470,89 @@
           {/each}
         </datalist>
 
-        <ul class="user-mgmt-list" aria-label="Registered database users">
-          {#each session.known_users as user (user)}
-            <li class="user-mgmt-row">
-              <div class="user-mgmt-identity">
-                <UserPill {user} kind={userKindOf(session.user_kinds, user)} />
-                {#if user.toLowerCase() === session.primary_user.toLowerCase()}
-                  <span class="badge">Main User</span>
-                {/if}
-                {#if user.toLowerCase() === session.active_user.toLowerCase()}
-                  <span class="badge">Active</span>
-                {/if}
-              </div>
-
-              <form
-                class="user-kind-form"
-                onsubmit={(e) => {
-                  e.preventDefault();
-                  void saveUserKind(user);
-                }}
-              >
-                <label for={`user-kind-${user}`}>Kind for @{user}</label>
-                <input
-                  id={`user-kind-${user}`}
-                  type="text"
-                  list="user-kind-options"
-                  autocomplete="off"
-                  value={kindDrafts[user] ??
-                    userKindOf(session.user_kinds, user)}
-                  oninput={(e) => {
-                    kindDrafts[user] = (
-                      e.currentTarget as HTMLInputElement
-                    ).value;
-                  }}
-                />
-                <button type="submit" class="btn-sm">Save kind</button>
-              </form>
-
-              {#if user.toLowerCase() !== session.primary_user.toLowerCase()}
-                <button
-                  type="button"
-                  class="btn-sm btn-danger"
-                  onclick={() => openDeleteUserDialog(user)}
-                  aria-label={`Delete user @${user} from database`}
-                >
-                  Delete User...
-                </button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
+        <table class="db-table user-table">
+          <caption class="sr-only">Registered database users</caption>
+          <thead>
+            <tr>
+              <th scope="col">User</th>
+              <th scope="col">Kind</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each session.known_users as user (user)}
+              {@const kind = userKindOf(session.user_kinds, user)}
+              <tr>
+                <td>
+                  <div class="user-mgmt-identity">
+                    <UserPill {user} {kind} />
+                    {#if user.toLowerCase() === session.primary_user.toLowerCase()}
+                      <span class="badge">Main User</span>
+                    {/if}
+                    {#if user.toLowerCase() === session.active_user.toLowerCase()}
+                      <span class="badge">Active</span>
+                    {/if}
+                  </div>
+                </td>
+                <td>
+                  {#if editingKindUser === user}
+                    <input
+                      id={`user-kind-input-${user}`}
+                      class="user-kind-input"
+                      type="text"
+                      list="user-kind-options"
+                      autocomplete="off"
+                      aria-label={`Kind for @${user}. Enter saves, Escape cancels.`}
+                      bind:value={kindDrafts[user]}
+                      use:focusAndSelect
+                      onkeydown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void commitKindEdit(user);
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void endKindEdit(user);
+                        }
+                      }}
+                      onblur={() => void commitKindEdit(user)}
+                    />
+                  {:else}
+                    <button
+                      id={kindButtonId(user)}
+                      type="button"
+                      class="inline-edit"
+                      aria-label={`Kind for @${user}: ${kind}. Press Enter to edit.`}
+                      aria-keyshortcuts="Enter F2"
+                      title="Double-click, Enter or F2 to edit"
+                      ondblclick={() => startKindEdit(user)}
+                      onkeydown={(e) => {
+                        if (e.key === "Enter" || e.key === "F2") {
+                          e.preventDefault();
+                          startKindEdit(user);
+                        }
+                      }}
+                    >
+                      {kind}
+                    </button>
+                  {/if}
+                </td>
+                <td class="user-actions">
+                  {#if user.toLowerCase() !== session.primary_user.toLowerCase()}
+                    <button
+                      type="button"
+                      class="btn-sm btn-danger"
+                      onclick={() => openDeleteUserDialog(user)}
+                      aria-label={`Delete user @${user} from database`}
+                    >
+                      Delete User...
+                    </button>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </section>
     {/if}
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Dialog } from "bits-ui";
   import Select from "./ui/Select.svelte";
   import UserPill from "./UserPill.svelte";
   import { onMount } from "svelte";
@@ -44,7 +45,7 @@
     formatDurationMinutes,
     validateDeadlines,
     formatDeadlineDisplay,
-    validateUsername,
+    validateUserRef,
     parseCommentMentions,
     tokenizeCommentBody,
   } from "../lib/ipc";
@@ -99,7 +100,7 @@
   }
 
   // Inline edit state
-  let editFormElement = $state<HTMLFormElement | null>(null);
+  let editFormElement = $state<HTMLElement | null>(null);
   let editingTask = $state<boolean>(false);
   let editTitle = $state<string>("");
   let editDescription = $state<string>("");
@@ -148,6 +149,83 @@
   );
 
   let drawerElement = $state<HTMLElement | null>(null);
+
+  const SIDE_WIDTH_KEY = "wsid.task-modal.sidebar-width.v1";
+  const SIDE_WIDTH_DEFAULT_REM = 22;
+  const SIDE_WIDTH_MIN_REM = 16;
+  const SIDE_WIDTH_MAX_REM = 36;
+
+  function clampSideWidth(rem: number): number {
+    return Math.min(SIDE_WIDTH_MAX_REM, Math.max(SIDE_WIDTH_MIN_REM, rem));
+  }
+
+  function loadSideWidth(): number {
+    try {
+      const stored = Number(window.localStorage.getItem(SIDE_WIDTH_KEY));
+      if (Number.isFinite(stored) && stored > 0) return clampSideWidth(stored);
+    } catch {
+      // Storage may be unavailable; fall back to the default width.
+    }
+    return SIDE_WIDTH_DEFAULT_REM;
+  }
+
+  let sideWidthRem = $state<number>(loadSideWidth());
+
+  function setSideWidth(rem: number) {
+    sideWidthRem = clampSideWidth(rem);
+    try {
+      window.localStorage.setItem(SIDE_WIDTH_KEY, String(sideWidthRem));
+    } catch {
+      // Ignore storage write errors; the width still applies for this session.
+    }
+  }
+
+  function remToPx(): number {
+    return parseFloat(getComputedStyle(document.documentElement).fontSize);
+  }
+
+  let sideHandleDragging = $state<boolean>(false);
+
+  function handleSideDragStart(e: PointerEvent) {
+    if (e.button !== 0) return;
+    sideHandleDragging = true;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+
+  function handleSideDragMove(e: PointerEvent) {
+    if (!sideHandleDragging || !editFormElement) return;
+    const bodyRight = editFormElement.getBoundingClientRect().right;
+    setSideWidth((bodyRight - e.clientX) / remToPx());
+  }
+
+  function handleSideDragEnd(e: PointerEvent) {
+    if (!sideHandleDragging) return;
+    sideHandleDragging = false;
+    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+  }
+
+  function handleSideHandleKeydown(e: KeyboardEvent) {
+    // The handle sits on the sidebar's left edge: ArrowLeft widens the sidebar.
+    const step = e.shiftKey ? 4 : 1;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setSideWidth(sideWidthRem + step);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setSideWidth(sideWidthRem - step);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setSideWidth(SIDE_WIDTH_MAX_REM);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setSideWidth(SIDE_WIDTH_MIN_REM);
+    }
+  }
+
+  function resetSideWidth() {
+    setSideWidth(SIDE_WIDTH_DEFAULT_REM);
+  }
 
   function basenameOfPath(rawPath: string): string {
     const parts = rawPath.split(/[/\\]/);
@@ -320,8 +398,17 @@
     editingTask = false;
   }
 
+  function hasUnsavedChanges(): boolean {
+    return (
+      isEditDirty() ||
+      commentBody.trim() !== "" ||
+      pendingCommentAttachments.length > 0 ||
+      newTaskAttachmentDesc.trim() !== ""
+    );
+  }
+
   function requestCloseDrawer() {
-    if (editingTask && isEditDirty()) {
+    if (hasUnsavedChanges()) {
       confirmDiscardAction = "close_drawer";
       confirmDiscardOpen = true;
       return;
@@ -359,20 +446,6 @@
       e.preventDefault();
       e.stopPropagation();
       void saveEdits();
-      return;
-    }
-    if (e.key === "Escape") {
-      const target = e.target as HTMLElement | null;
-      if (
-        target?.closest(
-          "[data-combobox-input], [data-date-field-input], [data-time-field-input], [data-select-trigger], [data-select-content]",
-        )
-      ) {
-        return;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      cancelEditingWithConfirm();
       return;
     }
     if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
@@ -449,7 +522,7 @@
       ["Evaluator", editEvaluator],
       ["Reporter", editReporter],
     ] as const) {
-      const check = validateUsername(val);
+      const check = validateUserRef(val);
       if (check.error) {
         errorMsg = `${label}: ${check.error}`;
         announce(errorMsg);
@@ -769,910 +842,968 @@
   }
 </script>
 
-<div
-  class="modal-backdrop drawer-scrim"
-  role="presentation"
-  onclick={(e) => {
-    if (e.target === e.currentTarget) requestCloseDrawer();
+<Dialog.Root
+  open={true}
+  onOpenChange={(nextOpen) => {
+    if (!nextOpen) requestCloseDrawer();
   }}
 >
-  <div
-    bind:this={drawerElement}
-    class="detail-drawer"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="drawer-task-title"
-    tabindex="-1"
-    onkeydown={(e) => {
-      if (e.key === "Escape") {
+  <Dialog.Portal>
+    <Dialog.Overlay class="detail-modal-overlay" />
+    <Dialog.Content
+      bind:ref={drawerElement}
+      class="detail-modal"
+      aria-labelledby="drawer-task-title"
+      onInteractOutside={(e) => {
+        // Clicking the backdrop must not discard work; Esc and Close are the exits.
+        e.preventDefault();
+      }}
+      onEscapeKeydown={(e) => {
         const target = e.target as HTMLElement | null;
         if (
           target?.closest(
             "[data-combobox-input], [data-date-field-input], [data-time-field-input], [data-select-trigger], [data-select-content]",
           )
         ) {
-          return;
+          e.preventDefault();
         }
-        requestCloseDrawer();
-      }
-    }}
-  >
-    {#if loading && !detail}
-      <p>Loading task {taskId}...</p>
-    {:else if detail}
-      <header class="drawer-header">
-        <div>
-          <div class="meta-row" style="margin-bottom: 0.35rem;">
-            <span class="task-id-badge">{detail.task.id}</span>
-            <span class="badge">{STATUS_LABELS[detail.task.status]}</span>
-            <span class="badge">Origin: {detail.task.origin_kind}</span>
-            {#if detail.task.urgent_override}
-              <span class="badge badge-urgent">Urgent Override</span>
-            {/if}
-          </div>
-          <h2 id="drawer-task-title" style="margin: 0; font-size: 1.3rem;">
-            {detail.task.title}
-          </h2>
-          <div class="card-personas drawer-personas">
-            <UserPill
-              user={detail.task.reporter}
-              kind={userKindOf(userKinds, detail.task.reporter)}
-              role="Reporter"
-            />
-            <UserPill
-              user={detail.task.assignee}
-              kind={userKindOf(userKinds, detail.task.assignee)}
-              role="Assignee"
-            />
-            {#if detail.task.evaluator !== detail.task.assignee}
-              <UserPill
-                user={detail.task.evaluator}
-                kind={userKindOf(userKinds, detail.task.evaluator)}
-                role="Evaluator"
-              />
-            {/if}
-          </div>
-        </div>
-
-        <div class="actions-row">
-          <button
-            type="button"
-            class="btn-sm"
-            onclick={() => {
-              if (editingTask) {
-                cancelEditingWithConfirm();
-              } else {
-                editingTask = true;
-              }
-            }}
-          >
-            {editingTask ? "Cancel Edit" : "Edit Fields"}
-          </button>
-          <button
-            type="button"
-            class="btn-sm btn-danger"
-            onclick={handleDeleteTask}
-          >
-            Delete Task
-          </button>
-          <button
-            type="button"
-            onclick={requestCloseDrawer}
-            aria-label="Close task detail drawer"
-          >
-            Close (Esc)
-          </button>
-        </div>
-      </header>
-
-      {#each userNoticeAlerts as alert (alert)}
-        <div class="banner-alert" role="alert">
-          <span>{alert}</span>
-          <button
-            type="button"
-            class="btn-sm"
-            onclick={() =>
-              (userNoticeAlerts = userNoticeAlerts.filter((a) => a !== alert))}
-          >
-            Dismiss
-          </button>
-        </div>
-      {/each}
-
-      {#if errorMsg}
-        <div class="banner-alert" role="alert">
-          <span>{errorMsg}</span>
-          <button
-            type="button"
-            class="btn-sm"
-            onclick={() => (errorMsg = null)}
-          >
-            Dismiss
-          </button>
-        </div>
-      {/if}
-
-      <!-- Accessible Status Action Bar -->
-      <section aria-label="Task Status Transition">
-        <div class="control-inline" style="flex-wrap: wrap; gap: 0.5rem;">
-          <label for="drawer-status-select">Transition Status:</label>
-          <Select
-            id="drawer-status-select"
-            size="sm"
-            value={detail.task.status}
-            options={STATUS_ORDER.map((st) => ({
-              value: st,
-              label: STATUS_LABELS[st],
-            }))}
-            onValueChange={(v) => handleStatusChange(v as TaskStatus)}
-          />
-
-          {#if detail.task.status === "todo"}
-            <button
-              type="button"
-              class="btn-sm"
-              onclick={() => handleStatusChange("in_progress")}
-            >
-              Start work
-            </button>
-          {/if}
-
-          {#if detail.task.status !== "completed"}
-            <button
-              type="button"
-              class="btn-primary btn-sm"
-              onclick={() => handleStatusChange("completed")}
-            >
-              {detail.task.assignee.toLowerCase() !==
-              detail.task.evaluator.toLowerCase()
-                ? `Submit for Review (@${detail.task.evaluator})`
-                : "Mark Completed"}
-            </button>
-          {/if}
-        </div>
-      </section>
-
-      {#if editingTask}
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <form
-          bind:this={editFormElement}
-          onsubmit={handleSaveEdits}
-          onkeydown={handleEditFormKeydown}
-          class="card"
-          style="display: flex; flex-direction: column; gap: 0.85rem;"
-          novalidate
-        >
-          <h3 style="margin: 0; font-size: 1.05rem;">Edit Task Fields</h3>
-          <div class="form-field">
-            <label for="edit-title">Title *</label>
-            <input
-              id="edit-title"
-              type="text"
-              bind:value={editTitle}
-              required
-            />
-          </div>
-
-          <div class="form-field">
-            <label for="edit-desc">Description</label>
-            <RichTextField
-              id="edit-desc"
-              rows={4}
-              bind:value={editDescription}
-              {knownUsers}
-              {userKinds}
-              mode="description"
-            />
-          </div>
-
-          <div class="form-grid-dates">
-            <DateFieldPicker
-              id="edit-sgdb"
-              label="SGDB Date (Soft Deadline)"
-              bind:value={editSgdbDate}
-              invalid={Boolean(editSgdbError)}
-              errorMessage={editSgdbError}
-              onBlur={() => {
-                validateEditDatesNow();
-              }}
-            />
-
-            <DateFieldPicker
-              id="edit-due"
-              label="Hard Due Date"
-              bind:value={editDueDate}
-              minDate={editSgdbDate}
-              invalid={Boolean(editDueError)}
-              errorMessage={editDueError}
-              onBlur={() => {
-                validateEditDatesNow();
-              }}
-            />
-          </div>
-
-          <div class="form-grid">
-            <div class="form-field">
-              <div class="date-picker-label-row">
-                <label for="edit-est">Time Estimate</label>
-                {#if editDurationPreview && !editDurationError}
-                  <span class="duration-preview-badge"
-                    >{editDurationPreview}</span
-                  >
-                {/if}
-              </div>
-              <input
-                id="edit-est"
-                type="text"
-                bind:value={editEstimateInput}
-                onblur={() => {
-                  validateEditDurationNow(true);
-                }}
-                placeholder="e.g. 1w 2d 3h 20m, 2h 30m, 45m"
-                aria-invalid={editDurationError ? "true" : "false"}
-                aria-describedby={editDurationError
-                  ? "edit-dur-err"
-                  : undefined}
-              />
-              {#if editDurationError}
-                <span id="edit-dur-err" class="field-error" role="alert">
-                  {editDurationError}
-                </span>
+      }}
+    >
+      {#if loading && !detail}
+        <p>Loading task {taskId}...</p>
+      {:else if detail}
+        <header class="detail-modal-header">
+          <div class="detail-modal-heading">
+            <div class="meta-row">
+              <span class="badge">{STATUS_LABELS[detail.task.status]}</span>
+              {#if detail.task.urgent_override}
+                <span class="badge badge-urgent">Urgent Override</span>
               {/if}
             </div>
-
-            <RatingSlider
-              id="edit-imp"
-              label="Importance (1–5)"
-              bind:value={editImportance}
-              min={1}
-              max={5}
-              step={1}
-            />
-
-            <RatingSlider
-              id="edit-diff"
-              label="Difficulty (1–5)"
-              bind:value={editDifficulty}
-              min={1}
-              max={5}
-              step={1}
-            />
-
-            <RatingSlider
-              id="edit-prio"
-              label="Manual Priority (1–5)"
-              bind:value={editManualPriority}
-              min={1}
-              max={5}
-              step={1}
-            />
-
-            <div class="form-field">
-              <label for="edit-assignee">Assignee</label>
-              <input id="edit-assignee" type="text" bind:value={editAssignee} />
-            </div>
-            <div class="form-field">
-              <label for="edit-evaluator">Evaluator</label>
-              <input
-                id="edit-evaluator"
-                type="text"
-                bind:value={editEvaluator}
-              />
-            </div>
-            <div class="form-field">
-              <label for="edit-reporter">Reporter</label>
-              <input id="edit-reporter" type="text" bind:value={editReporter} />
-            </div>
-          </div>
-
-          <TagChipsInput id="edit-tags" bind:tags={editTags} {knownTags} />
-
-          <div class="form-field">
-            <label for="edit-project">Project</label>
-            <input
-              id="edit-project"
-              type="text"
-              bind:value={editProject}
-              list="edit-project-datalist"
-              spellcheck="false"
-              pattern="[A-Za-z0-9_-]+"
-            />
-            <datalist id="edit-project-datalist">
-              {#each knownProjects as p}
-                <option value={p}></option>
-              {/each}
-            </datalist>
-          </div>
-
-          <div class="control-inline">
-            <input
-              id="edit-urgent"
-              type="checkbox"
-              bind:checked={editUrgentOverride}
-            />
-            <label for="edit-urgent">Urgent Override</label>
+            <h2 id="drawer-task-title" class="detail-modal-title">
+              <span class="task-id">{detail.task.id}</span>{editingTask
+                ? " · Editing"
+                : `: ${detail.task.title}`}
+            </h2>
           </div>
 
           <div class="actions-row">
-            <button
-              type="submit"
-              class="btn-primary"
-              title="Save Changes (Cmd/Ctrl+Enter)"
-            >
-              Save Changes
-            </button>
-            <button type="button" onclick={cancelEditingWithConfirm}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      {:else}
-        <section class="card" aria-label="Task Details">
-          <div class="meta-row" style="margin-bottom: 0.75rem;">
-            <span><strong>Assignee:</strong> @{detail.task.assignee}</span>
-            <span>· <strong>Evaluator:</strong> @{detail.task.evaluator}</span>
-            <span>· <strong>Reporter:</strong> @{detail.task.reporter}</span>
-            <span
-              >· <strong>Importance:</strong> {detail.task.importance}/5</span
-            >
-            <span
-              >· <strong>Difficulty:</strong> {detail.task.difficulty}/5</span
-            >
-            <span
-              >· <strong>Priority:</strong>
-              {detail.task.manual_priority}/5</span
-            >
-            <span>
-              · <strong>Estimate:</strong>
-              {formatDurationMinutes(detail.task.time_estimate_minutes)}
-            </span>
-            {#if detail.task.sgdb_date}
-              <span>
-                · <strong>SGDB:</strong>
-                {formatDeadlineDisplay(detail.task.sgdb_date)}
-              </span>
-            {/if}
-            {#if detail.task.due_date}
-              <span>
-                · <strong>Due:</strong>
-                {formatDeadlineDisplay(detail.task.due_date)}
-              </span>
-            {/if}
-          </div>
-
-          {#if detail.task.tags.length > 0}
-            <div class="meta-row" style="margin-bottom: 0.75rem;">
-              {#each detail.task.tags as tag}
-                <span class="badge badge-tag">#{tag}</span>
-              {/each}
-            </div>
-          {/if}
-
-          <div class="meta-row" style="margin-bottom: 0.75rem;">
-            <span class="project-badge" title="Project">
-              {detail.task.project}
-            </span>
-          </div>
-
-          <RichTextDisplay
-            body={detail.task.description}
-            {knownUsers}
-            {userKinds}
-            mode="description"
-            {onSelectTask}
-          />
-        </section>
-      {/if}
-
-      <!-- Task-Level Attachments -->
-      <section class="card" aria-labelledby="drawer-attachments-heading">
-        <h3
-          id="drawer-attachments-heading"
-          style="margin: 0 0 0.75rem 0; font-size: 1.02rem;"
-        >
-          Task Attachments ({detail.task.attachments.length})
-        </h3>
-
-        <AttachmentGallery
-          attachments={detail.task.attachments}
-          editable={editingTask}
-          onChanged={() => {
-            if (detail) void refreshDetail(detail.task.id);
-            onDataChanged();
-          }}
-          {announce}
-        />
-
-        {#if editingTask}
-          <div
-            bind:this={taskDropzoneEl}
-            class={`dropzone ${isDraggingTaskFile ? "dragging" : ""}`}
-            style="margin-top: 0.75rem;"
-            role="region"
-            aria-label="Attach files to task by drag-and-drop, clipboard paste, or file picker"
-            onpaste={(e) => {
-              if (e.clipboardData?.files?.length) {
-                void handleTaskPasteFiles(e.clipboardData.files);
-              }
-            }}
-          >
-            <div class="form-grid" style="align-items: end; text-align: left;">
-              <div class="form-field">
-                <label for="task-att-desc">
-                  Optional Alt Text / Description for New Attachment
-                </label>
-                <input
-                  id="task-att-desc"
-                  type="text"
-                  bind:value={newTaskAttachmentDesc}
-                  placeholder="Defaults to filename if left blank"
-                />
-              </div>
-              <div class="actions-row">
-                <button
-                  type="button"
-                  class="btn-sm"
-                  onclick={handlePickTaskAttachment}
-                >
-                  Choose File from Disk...
-                </button>
-                <span class="field-hint">
-                  Or drag-and-drop / paste (Cmd/Ctrl+V) a file here
-                </span>
-              </div>
-            </div>
-          </div>
-        {/if}
-      </section>
-
-      <!-- Task Relations & Blocker Cleanup -->
-      <section class="card" aria-labelledby="drawer-relations-heading">
-        <h3
-          id="drawer-relations-heading"
-          style="margin: 0 0 0.75rem 0; font-size: 1.02rem;"
-        >
-          Task Dependencies & Graph Links
-        </h3>
-
-        <div
-          style="display: flex; flex-direction: column; gap: 0.65rem; margin-bottom: 0.85rem;"
-        >
-          {#if detail.blockers.length > 0}
-            <div>
-              <strong>Blocked By ({detail.blockers.length}):</strong>
-              <ul class="relation-group-list">
-                {#each detail.blockers as b}
-                  <li class="relation-row">
-                    <button
-                      type="button"
-                      class="btn-sm"
-                      onclick={() => onSelectTask(b.id)}
-                    >
-                      {b.id}: {b.title} ({STATUS_LABELS[b.status]}, @{b.assignee})
-                    </button>
-                    {#if b.origin_kind === "mention" || b.origin_kind === "review"}
-                      <button
-                        type="button"
-                        class="btn-sm"
-                        onclick={() => handleUnblockSubtask(b.id, true)}
-                      >
-                        Dismiss & Complete Subtask
-                      </button>
-                      <button
-                        type="button"
-                        class="btn-sm"
-                        onclick={() => handleUnblockSubtask(b.id, false)}
-                      >
-                        Convert to Non-Blocking Related
-                      </button>
-                    {:else}
-                      <RelationTypeSelect
-                        value="blocked_by"
-                        label={`Relation type for ${b.id}`}
-                        onChange={(kind) =>
-                          handleChangeRelation("blocked_by", kind, b.id)}
-                      />
-                      <button
-                        type="button"
-                        class="btn-sm btn-danger"
-                        aria-label={`Unlink blocked by relation to ${b.id}`}
-                        onclick={() => handleUnlink("blocked_by", b.id)}
-                      >
-                        ×
-                      </button>
-                    {/if}
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-
-          {#if detail.blocking.length > 0}
-            <div>
-              <strong>Blocks ({detail.blocking.length}):</strong>
-              <ul class="relation-group-list">
-                {#each detail.blocking as t}
-                  <li class="relation-row">
-                    <button
-                      type="button"
-                      class="btn-sm"
-                      onclick={() => onSelectTask(t.id)}
-                    >
-                      {t.id}: {t.title}
-                    </button>
-                    <RelationTypeSelect
-                      value="blocks"
-                      label={`Relation type for ${t.id}`}
-                      onChange={(kind) =>
-                        handleChangeRelation("blocks", kind, t.id)}
-                    />
-                    <button
-                      type="button"
-                      class="btn-sm btn-danger"
-                      aria-label={`Unlink blocks relation to ${t.id}`}
-                      onclick={() => handleUnlink("blocks", t.id)}
-                    >
-                      ×
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-
-          {#if detail.parents.length > 0}
-            <div>
-              <strong>Sub-task Of ({detail.parents.length}):</strong>
-              <ul class="relation-group-list">
-                {#each detail.parents as t}
-                  <li class="relation-row">
-                    <button
-                      type="button"
-                      class="btn-sm"
-                      onclick={() => onSelectTask(t.id)}
-                    >
-                      {t.id}: {t.title}
-                    </button>
-                    <RelationTypeSelect
-                      value="sub_task_of"
-                      label={`Relation type for ${t.id}`}
-                      onChange={(kind) =>
-                        handleChangeRelation("sub_task_of", kind, t.id)}
-                    />
-                    <button
-                      type="button"
-                      class="btn-sm btn-danger"
-                      aria-label={`Unlink sub-task relation to ${t.id}`}
-                      onclick={() => handleUnlink("sub_task_of", t.id)}
-                    >
-                      ×
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-
-          {#if detail.subtasks.length > 0}
-            <div>
-              <strong>Subtasks ({detail.subtasks.length}):</strong>
-              <ul class="relation-group-list">
-                {#each detail.subtasks as t}
-                  <li class="relation-row">
-                    <button
-                      type="button"
-                      class="btn-sm"
-                      onclick={() => onSelectTask(t.id)}
-                    >
-                      {t.id}: {t.title} ({STATUS_LABELS[t.status]})
-                    </button>
-                    <RelationTypeSelect
-                      value="parent_task_of"
-                      label={`Relation type for subtask ${t.id}`}
-                      onChange={(kind) =>
-                        handleChangeRelation("parent_task_of", kind, t.id)}
-                    />
-                    <button
-                      type="button"
-                      class="btn-sm btn-danger"
-                      aria-label={`Unlink subtask relation to ${t.id}`}
-                      onclick={() => handleUnlink("parent_task_of", t.id)}
-                    >
-                      ×
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-
-          {#if detail.parallel.length > 0}
-            <div>
-              <strong>Parallel Tasks ({detail.parallel.length}):</strong>
-              <ul class="relation-group-list">
-                {#each detail.parallel as t}
-                  <li class="relation-row">
-                    <button
-                      type="button"
-                      class="btn-sm"
-                      onclick={() => onSelectTask(t.id)}
-                    >
-                      {t.id}: {t.title}
-                    </button>
-                    <RelationTypeSelect
-                      value="parallel"
-                      label={`Relation type for ${t.id}`}
-                      onChange={(kind) =>
-                        handleChangeRelation("parallel", kind, t.id)}
-                    />
-                    <button
-                      type="button"
-                      class="btn-sm btn-danger"
-                      aria-label={`Unlink parallel relation to ${t.id}`}
-                      onclick={() => handleUnlink("parallel", t.id)}
-                    >
-                      ×
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-
-          {#if detail.related.length > 0}
-            <div>
-              <strong>Related Tasks ({detail.related.length}):</strong>
-              <ul class="relation-group-list">
-                {#each detail.related as t}
-                  <li class="relation-row">
-                    <button
-                      type="button"
-                      class="btn-sm"
-                      onclick={() => onSelectTask(t.id)}
-                    >
-                      {t.id}: {t.title}
-                    </button>
-                    <RelationTypeSelect
-                      value="related"
-                      label={`Relation type for ${t.id}`}
-                      onChange={(kind) =>
-                        handleChangeRelation("related", kind, t.id)}
-                    />
-                    <button
-                      type="button"
-                      class="btn-sm btn-danger"
-                      aria-label={`Unlink related relation to ${t.id}`}
-                      onclick={() => handleUnlink("related", t.id)}
-                    >
-                      ×
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-        </div>
-
-        <RelationPicker
-          excludeTaskId={detail.task.id}
-          buttonLabel="Link Task"
-          onAdd={(entry) => void handleAddRelationFromPicker(entry)}
-        />
-      </section>
-
-      <!-- Notes & Comment Mention Thread -->
-      <section class="card" aria-labelledby="drawer-notes-heading">
-        <h3
-          id="drawer-notes-heading"
-          style="margin: 0 0 0.75rem 0; font-size: 1.02rem;"
-        >
-          Comments & Review Thread ({detail.notes.length})
-        </h3>
-
-        {#if detail.notes.length === 0}
-          <p class="field-hint">
-            No comments yet. Mention <code>@user</code> to spawn an urgent
-            blocking subtask, <code>@takenote:user</code> for a non-blocking
-            related note, or <code>#AB1234</code> to cross-link another task.
-          </p>
-        {:else}
-          <div
-            style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem;"
-          >
-            {#each detail.notes as note (note.id)}
-              <article
-                style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 0.5rem; padding: 0.75rem;"
+            {#if editingTask}
+              <button
+                type="button"
+                class="btn-primary btn-sm"
+                title="Save Changes (Cmd/Ctrl+Enter)"
+                onclick={() => void saveEdits()}
               >
-                <div
-                  style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;"
-                >
-                  <span
-                    style="font-size: 0.84rem; color: var(--text-secondary);"
-                  >
-                    <strong>@{note.author}</strong> · {note.created_at}
-                  </span>
-                  <button
-                    type="button"
-                    class="btn-sm btn-danger"
-                    onclick={() => handleDeleteNote(note.id)}
-                    aria-label={`Delete comment ${note.id} by ${note.author}`}
-                  >
-                    Delete Note
-                  </button>
-                </div>
-                <RichTextDisplay
-                  body={note.body}
-                  {knownUsers}
-                  {userKinds}
-                  mode="comment"
-                  {onSelectTask}
-                  class="comment-note-body"
-                />
-                {#if note.attachments.length > 0}
-                  <AttachmentGallery
-                    attachments={note.attachments}
-                    editable={editingTask}
-                    onChanged={() => {
-                      if (detail) void refreshDetail(detail.task.id);
-                      onDataChanged();
-                    }}
-                    {announce}
-                  />
-                {/if}
-              </article>
-            {/each}
-          </div>
-        {/if}
-
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <form
-          onsubmit={handlePostComment}
-          onkeydown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              e.stopPropagation();
-              void postComment();
-            } else if (
-              e.key === "Enter" &&
-              (e.target as HTMLElement | null)?.tagName === "INPUT" &&
-              (e.target as HTMLInputElement).type === "text"
-            ) {
-              e.preventDefault();
-            }
-          }}
-          style="display: flex; flex-direction: column; gap: 0.65rem;"
-        >
-          <div class="form-field">
-            <label for="new-comment-body">
-              Add Comment (as @{activeUser})
-            </label>
-            <RichTextField
-              id="new-comment-body"
-              rows={3}
-              bind:value={commentBody}
-              {knownUsers}
-              {userKinds}
-              mode="comment"
-              onPasteFiles={handleCommentPasteFiles}
-              placeholder="Write a comment... Use @user for blocking subtasks, @takenote:user for non-blocking heads-up, or #AB1234 to link tasks. Paste images directly with Cmd/Ctrl+V."
-            />
-
-            {#if commentMentionTokens.length > 0}
-              <div
-                class="comment-mention-preview"
-                role="status"
-                aria-live="polite"
-                aria-label="Detected user mentions in comment"
-              >
-                <span class="comment-mention-preview-label">Mentions:</span>
-                {#each commentMentionTokens as token (token.rawToken)}
-                  <span
-                    class={`comment-mention-pill mention-${token.kind} ${token.exists ? "mention-exists" : "mention-missing"}`}
-                    data-tooltip={token.tooltip}
-                    title={token.tooltip}
-                  >
-                    <strong>{token.rawToken}</strong>
-                    {#if token.kind === "invalid"}
-                      <span class="comment-mention-pill-meta">
-                        Invalid username (ignored)
-                      </span>
-                    {:else if token.exists}
-                      <span class="comment-mention-pill-meta">
-                        ✓ Existing user · {token.kind === "takenote"
-                          ? "Take-note"
-                          : "Blocking subtask"}
-                      </span>
-                    {:else}
-                      <span class="comment-mention-pill-meta">
-                        + Does not exist yet (will create @{token.username})
-                      </span>
-                    {/if}
-                  </span>
-                {/each}
-              </div>
-            {/if}
-          </div>
-
-          {#if pendingCommentAttachments.length > 0}
-            <ul class="draft-attachments-list">
-              {#each pendingCommentAttachments as att (att.id)}
-                <li class="draft-attachment-item">
-                  <div class="draft-attachment-info">
-                    {#if att.previewUrl}
-                      <img
-                        src={att.previewUrl}
-                        alt={att.description ?? att.suggestedName}
-                        class="draft-attachment-thumb"
-                      />
-                    {/if}
-                    <div>
-                      <strong>{att.suggestedName}</strong>
-                      {#if att.description && att.description !== att.suggestedName}
-                        <span class="field-hint"> — "{att.description}"</span>
-                      {/if}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    class="btn-sm btn-danger"
-                    onclick={() => {
-                      pendingCommentAttachments =
-                        pendingCommentAttachments.filter(
-                          (a) => a.id !== att.id,
-                        );
-                    }}
-                  >
-                    Remove
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-
-          <div class="actions-row" style="justify-content: space-between;">
-            <div class="actions-row">
-              <input
-                id="comment-att-desc"
-                type="text"
-                bind:value={pendingCommentDesc}
-                placeholder="Alt text for next comment attachment"
-                style="width: 15rem;"
-                aria-label="Alt text description for comment attachment"
-              />
+                Save Changes
+              </button>
               <button
                 type="button"
                 class="btn-sm"
-                onclick={handlePickCommentAttachment}
+                onclick={cancelEditingWithConfirm}
               >
-                Attach File to Comment...
+                Cancel
               </button>
-              <label
-                style="display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem;"
+            {:else}
+              <button
+                type="button"
+                class="btn-sm"
+                onclick={() => {
+                  editingTask = true;
+                }}
               >
-                <input type="checkbox" bind:checked={commentSpawnSubtasks} />
-                Auto-spawn @mention subtasks
-              </label>
-            </div>
-
+                Edit Fields
+              </button>
+            {/if}
             <button
-              type="submit"
-              class="btn-primary"
-              title="Post Comment (Cmd/Ctrl+Enter)"
+              type="button"
+              class="btn-sm btn-danger"
+              onclick={handleDeleteTask}
             >
-              Post Comment
+              Delete Task
+            </button>
+            <button
+              type="button"
+              onclick={requestCloseDrawer}
+              aria-label="Close task detail"
+            >
+              Close (Esc)
             </button>
           </div>
-        </form>
-      </section>
-    {/if}
-  </div>
-</div>
+        </header>
+
+        {#each userNoticeAlerts as alert (alert)}
+          <div class="banner-alert" role="alert">
+            <span>{alert}</span>
+            <button
+              type="button"
+              class="btn-sm"
+              onclick={() =>
+                (userNoticeAlerts = userNoticeAlerts.filter(
+                  (a) => a !== alert,
+                ))}
+            >
+              Dismiss
+            </button>
+          </div>
+        {/each}
+
+        {#if errorMsg}
+          <div class="banner-alert" role="alert">
+            <span>{errorMsg}</span>
+            <button
+              type="button"
+              class="btn-sm"
+              onclick={() => (errorMsg = null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        {/if}
+
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="detail-modal-body"
+          style="--detail-side-width: {sideWidthRem}rem"
+          bind:this={editFormElement}
+          onkeydown={handleEditFormKeydown}
+        >
+          <aside class="detail-modal-side" aria-label="Task details">
+            <!-- Accessible Status Action Bar -->
+            <section class="side-block" aria-label="Task Status Transition">
+              <h3 class="side-heading">Status</h3>
+              <div class="side-stack">
+                <Select
+                  id="drawer-status-select"
+                  size="sm"
+                  ariaLabel="Transition status"
+                  value={detail.task.status}
+                  options={STATUS_ORDER.map((st) => ({
+                    value: st,
+                    label: STATUS_LABELS[st],
+                  }))}
+                  onValueChange={(v) => handleStatusChange(v as TaskStatus)}
+                />
+              </div>
+            </section>
+
+            <section class="side-block" aria-labelledby="drawer-people-heading">
+              <h3 id="drawer-people-heading" class="side-heading">People</h3>
+              {#if editingTask}
+                <div class="side-field">
+                  <label for="edit-reporter">Reporter</label>
+                  <input
+                    id="edit-reporter"
+                    type="text"
+                    bind:value={editReporter}
+                  />
+                </div>
+                <div class="side-field">
+                  <label for="edit-assignee">Assignee</label>
+                  <input
+                    id="edit-assignee"
+                    type="text"
+                    bind:value={editAssignee}
+                  />
+                </div>
+                <div class="side-field">
+                  <label for="edit-evaluator">Evaluator</label>
+                  <input
+                    id="edit-evaluator"
+                    type="text"
+                    bind:value={editEvaluator}
+                  />
+                </div>
+              {:else}
+                <dl class="side-list">
+                  <dt>Reporter</dt>
+                  <dd>
+                    <UserPill
+                      user={detail.task.reporter}
+                      kind={userKindOf(userKinds, detail.task.reporter)}
+                      role="Reporter"
+                    />
+                  </dd>
+                  <dt>Assignee</dt>
+                  <dd>
+                    <UserPill
+                      user={detail.task.assignee}
+                      kind={userKindOf(userKinds, detail.task.assignee)}
+                      role="Assignee"
+                    />
+                  </dd>
+                  <dt>Evaluator</dt>
+                  <dd>
+                    <UserPill
+                      user={detail.task.evaluator}
+                      kind={userKindOf(userKinds, detail.task.evaluator)}
+                      role="Evaluator"
+                    />
+                  </dd>
+                </dl>
+              {/if}
+            </section>
+
+            <section class="side-block" aria-labelledby="drawer-timing-heading">
+              <h3 id="drawer-timing-heading" class="side-heading">Timing</h3>
+              {#if editingTask}
+                <DateFieldPicker
+                  id="edit-sgdb"
+                  label="SGDB (soft)"
+                  bind:value={editSgdbDate}
+                  invalid={Boolean(editSgdbError)}
+                  errorMessage={editSgdbError}
+                  onBlur={() => {
+                    validateEditDatesNow();
+                  }}
+                />
+                <DateFieldPicker
+                  id="edit-due"
+                  label="Hard due"
+                  bind:value={editDueDate}
+                  minDate={editSgdbDate}
+                  invalid={Boolean(editDueError)}
+                  errorMessage={editDueError}
+                  onBlur={() => {
+                    validateEditDatesNow();
+                  }}
+                />
+                <div class="side-field">
+                  <div class="date-picker-label-row">
+                    <label for="edit-est">Estimate</label>
+                    {#if editDurationPreview && !editDurationError}
+                      <span class="duration-preview-badge"
+                        >{editDurationPreview}</span
+                      >
+                    {/if}
+                  </div>
+                  <input
+                    id="edit-est"
+                    type="text"
+                    bind:value={editEstimateInput}
+                    onblur={() => {
+                      validateEditDurationNow(true);
+                    }}
+                    placeholder="e.g. 2h 30m"
+                    aria-invalid={editDurationError ? "true" : "false"}
+                    aria-describedby={editDurationError
+                      ? "edit-dur-err"
+                      : undefined}
+                  />
+                  {#if editDurationError}
+                    <span id="edit-dur-err" class="field-error" role="alert">
+                      {editDurationError}
+                    </span>
+                  {/if}
+                </div>
+              {:else}
+                <dl class="side-list">
+                  <dt>SGDB</dt>
+                  <dd>
+                    {detail.task.sgdb_date
+                      ? formatDeadlineDisplay(detail.task.sgdb_date)
+                      : "—"}
+                  </dd>
+                  <dt>Hard due</dt>
+                  <dd>
+                    {detail.task.due_date
+                      ? formatDeadlineDisplay(detail.task.due_date)
+                      : "—"}
+                  </dd>
+                  <dt>Estimate</dt>
+                  <dd>
+                    {formatDurationMinutes(detail.task.time_estimate_minutes)}
+                  </dd>
+                </dl>
+              {/if}
+            </section>
+
+            <section
+              class="side-block"
+              aria-labelledby="drawer-metrics-heading"
+            >
+              <h3 id="drawer-metrics-heading" class="side-heading">Metrics</h3>
+              {#if editingTask}
+                <RatingSlider
+                  id="edit-imp"
+                  label="Importance (1–5)"
+                  bind:value={editImportance}
+                  min={1}
+                  max={5}
+                  step={1}
+                />
+                <RatingSlider
+                  id="edit-diff"
+                  label="Difficulty (1–5)"
+                  bind:value={editDifficulty}
+                  min={1}
+                  max={5}
+                  step={1}
+                />
+                <RatingSlider
+                  id="edit-prio"
+                  label="Priority (1–5)"
+                  bind:value={editManualPriority}
+                  min={1}
+                  max={5}
+                  step={1}
+                />
+              {:else}
+                <dl class="side-list">
+                  <dt>Importance</dt>
+                  <dd>{detail.task.importance}/5</dd>
+                  <dt>Difficulty</dt>
+                  <dd>{detail.task.difficulty}/5</dd>
+                  <dt>Priority</dt>
+                  <dd>{detail.task.manual_priority}/5</dd>
+                </dl>
+              {/if}
+            </section>
+
+            <section class="side-block" aria-labelledby="drawer-tags-heading">
+              <h3 id="drawer-tags-heading" class="side-heading">
+                Tags & Project
+              </h3>
+              {#if editingTask}
+                <div class="side-field">
+                  <label for="edit-project">Project</label>
+                  <input
+                    id="edit-project"
+                    type="text"
+                    bind:value={editProject}
+                    list="edit-project-datalist"
+                    spellcheck="false"
+                    pattern="[A-Za-z0-9_-]+"
+                  />
+                  <datalist id="edit-project-datalist">
+                    {#each knownProjects as p}
+                      <option value={p}></option>
+                    {/each}
+                  </datalist>
+                </div>
+                <TagChipsInput
+                  id="edit-tags"
+                  bind:tags={editTags}
+                  {knownTags}
+                />
+                <div class="control-inline">
+                  <input
+                    id="edit-urgent"
+                    type="checkbox"
+                    bind:checked={editUrgentOverride}
+                  />
+                  <label for="edit-urgent">Urgent override</label>
+                </div>
+              {:else}
+                <div class="side-stack">
+                  <span class="project-badge" title="Project">
+                    {detail.task.project}
+                  </span>
+                  {#if detail.task.tags.length > 0}
+                    <div class="meta-row">
+                      {#each detail.task.tags as tag}
+                        <span class="badge badge-tag">#{tag}</span>
+                      {/each}
+                    </div>
+                  {/if}
+                  <p class="side-muted">Origin: {detail.task.origin_kind}</p>
+                </div>
+              {/if}
+            </section>
+          </aside>
+
+          <!-- A focusable separator is the ARIA window-splitter pattern. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <div
+            class="detail-modal-handle"
+            class:is-dragging={sideHandleDragging}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize details sidebar"
+            aria-valuemin={SIDE_WIDTH_MIN_REM}
+            aria-valuemax={SIDE_WIDTH_MAX_REM}
+            aria-valuenow={Math.round(sideWidthRem)}
+            aria-keyshortcuts="ArrowLeft ArrowRight Home End"
+            title="Drag or use arrow keys to resize. Double-click to reset."
+            tabindex="0"
+            onpointerdown={handleSideDragStart}
+            onpointermove={handleSideDragMove}
+            onpointerup={handleSideDragEnd}
+            onpointercancel={handleSideDragEnd}
+            ondblclick={resetSideWidth}
+            onkeydown={handleSideHandleKeydown}
+          ></div>
+
+          <div class="detail-modal-main">
+            {#if editingTask}
+              <section class="detail-section" aria-label="Edit task">
+                <div class="side-field">
+                  <label for="edit-title">Title *</label>
+                  <input
+                    id="edit-title"
+                    type="text"
+                    bind:value={editTitle}
+                    required
+                  />
+                </div>
+                <h3 class="section-heading">Description</h3>
+                <RichTextField
+                  id="edit-desc"
+                  rows={6}
+                  bind:value={editDescription}
+                  {knownUsers}
+                  {userKinds}
+                  mode="description"
+                />
+              </section>
+            {:else}
+              <section
+                class="detail-section"
+                aria-labelledby="drawer-description-heading"
+              >
+                <h3 id="drawer-description-heading" class="section-heading">
+                  Description
+                </h3>
+                <RichTextDisplay
+                  body={detail.task.description}
+                  {knownUsers}
+                  {userKinds}
+                  mode="description"
+                  {onSelectTask}
+                />
+              </section>
+            {/if}
+
+            <!-- Task-Level Attachments -->
+            {#if editingTask || detail.task.attachments.length > 0}
+              <section
+                class="card"
+                aria-labelledby="drawer-attachments-heading"
+              >
+                <h3
+                  id="drawer-attachments-heading"
+                  style="margin: 0 0 0.75rem 0; font-size: 1.02rem;"
+                >
+                  Task Attachments ({detail.task.attachments.length})
+                </h3>
+
+                <AttachmentGallery
+                  attachments={detail.task.attachments}
+                  editable={editingTask}
+                  onChanged={() => {
+                    if (detail) void refreshDetail(detail.task.id);
+                    onDataChanged();
+                  }}
+                  {announce}
+                />
+
+                {#if editingTask}
+                  <div
+                    bind:this={taskDropzoneEl}
+                    class={`dropzone ${isDraggingTaskFile ? "dragging" : ""}`}
+                    style="margin-top: 0.75rem;"
+                    role="region"
+                    aria-label="Attach files to task by drag-and-drop, clipboard paste, or file picker"
+                    onpaste={(e) => {
+                      if (e.clipboardData?.files?.length) {
+                        void handleTaskPasteFiles(e.clipboardData.files);
+                      }
+                    }}
+                  >
+                    <div
+                      class="form-grid"
+                      style="align-items: end; text-align: left;"
+                    >
+                      <div class="form-field">
+                        <label for="task-att-desc">
+                          Optional Alt Text / Description for New Attachment
+                        </label>
+                        <input
+                          id="task-att-desc"
+                          type="text"
+                          bind:value={newTaskAttachmentDesc}
+                          placeholder="Defaults to filename if left blank"
+                        />
+                      </div>
+                      <div class="actions-row">
+                        <button
+                          type="button"
+                          class="btn-sm"
+                          onclick={handlePickTaskAttachment}
+                        >
+                          Choose File from Disk...
+                        </button>
+                        <span class="field-hint">
+                          Or drag-and-drop / paste (Cmd/Ctrl+V) a file here
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+              </section>
+            {/if}
+
+            <!-- Task Relations & Blocker Cleanup -->
+            <section class="card" aria-labelledby="drawer-relations-heading">
+              <h3
+                id="drawer-relations-heading"
+                style="margin: 0 0 0.75rem 0; font-size: 1.02rem;"
+              >
+                Task Dependencies & Graph Links
+              </h3>
+
+              <div
+                style="display: flex; flex-direction: column; gap: 0.65rem; margin-bottom: 0.85rem;"
+              >
+                {#if detail.blockers.length > 0}
+                  <div>
+                    <strong>Blocked By ({detail.blockers.length}):</strong>
+                    <ul class="relation-group-list">
+                      {#each detail.blockers as b}
+                        <li class="relation-row">
+                          <button
+                            type="button"
+                            class="btn-sm"
+                            onclick={() => onSelectTask(b.id)}
+                          >
+                            {b.id}: {b.title} ({STATUS_LABELS[b.status]}, @{b.assignee})
+                          </button>
+                          {#if b.origin_kind === "mention" || b.origin_kind === "review"}
+                            <button
+                              type="button"
+                              class="btn-sm"
+                              onclick={() => handleUnblockSubtask(b.id, true)}
+                            >
+                              Dismiss & Complete Subtask
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-sm"
+                              onclick={() => handleUnblockSubtask(b.id, false)}
+                            >
+                              Convert to Non-Blocking Related
+                            </button>
+                          {:else}
+                            <RelationTypeSelect
+                              value="blocked_by"
+                              label={`Relation type for ${b.id}`}
+                              onChange={(kind) =>
+                                handleChangeRelation("blocked_by", kind, b.id)}
+                            />
+                            <button
+                              type="button"
+                              class="btn-sm btn-danger"
+                              aria-label={`Unlink blocked by relation to ${b.id}`}
+                              onclick={() => handleUnlink("blocked_by", b.id)}
+                            >
+                              ×
+                            </button>
+                          {/if}
+                        </li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+
+                {#if detail.blocking.length > 0}
+                  <div>
+                    <strong>Blocks ({detail.blocking.length}):</strong>
+                    <ul class="relation-group-list">
+                      {#each detail.blocking as t}
+                        <li class="relation-row">
+                          <button
+                            type="button"
+                            class="btn-sm"
+                            onclick={() => onSelectTask(t.id)}
+                          >
+                            {t.id}: {t.title}
+                          </button>
+                          <RelationTypeSelect
+                            value="blocks"
+                            label={`Relation type for ${t.id}`}
+                            onChange={(kind) =>
+                              handleChangeRelation("blocks", kind, t.id)}
+                          />
+                          <button
+                            type="button"
+                            class="btn-sm btn-danger"
+                            aria-label={`Unlink blocks relation to ${t.id}`}
+                            onclick={() => handleUnlink("blocks", t.id)}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+
+                {#if detail.parents.length > 0}
+                  <div>
+                    <strong>Sub-task Of ({detail.parents.length}):</strong>
+                    <ul class="relation-group-list">
+                      {#each detail.parents as t}
+                        <li class="relation-row">
+                          <button
+                            type="button"
+                            class="btn-sm"
+                            onclick={() => onSelectTask(t.id)}
+                          >
+                            {t.id}: {t.title}
+                          </button>
+                          <RelationTypeSelect
+                            value="sub_task_of"
+                            label={`Relation type for ${t.id}`}
+                            onChange={(kind) =>
+                              handleChangeRelation("sub_task_of", kind, t.id)}
+                          />
+                          <button
+                            type="button"
+                            class="btn-sm btn-danger"
+                            aria-label={`Unlink sub-task relation to ${t.id}`}
+                            onclick={() => handleUnlink("sub_task_of", t.id)}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+
+                {#if detail.subtasks.length > 0}
+                  <div>
+                    <strong>Subtasks ({detail.subtasks.length}):</strong>
+                    <ul class="relation-group-list">
+                      {#each detail.subtasks as t}
+                        <li class="relation-row">
+                          <button
+                            type="button"
+                            class="btn-sm"
+                            onclick={() => onSelectTask(t.id)}
+                          >
+                            {t.id}: {t.title} ({STATUS_LABELS[t.status]})
+                          </button>
+                          <RelationTypeSelect
+                            value="parent_task_of"
+                            label={`Relation type for subtask ${t.id}`}
+                            onChange={(kind) =>
+                              handleChangeRelation(
+                                "parent_task_of",
+                                kind,
+                                t.id,
+                              )}
+                          />
+                          <button
+                            type="button"
+                            class="btn-sm btn-danger"
+                            aria-label={`Unlink subtask relation to ${t.id}`}
+                            onclick={() => handleUnlink("parent_task_of", t.id)}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+
+                {#if detail.parallel.length > 0}
+                  <div>
+                    <strong>Parallel Tasks ({detail.parallel.length}):</strong>
+                    <ul class="relation-group-list">
+                      {#each detail.parallel as t}
+                        <li class="relation-row">
+                          <button
+                            type="button"
+                            class="btn-sm"
+                            onclick={() => onSelectTask(t.id)}
+                          >
+                            {t.id}: {t.title}
+                          </button>
+                          <RelationTypeSelect
+                            value="parallel"
+                            label={`Relation type for ${t.id}`}
+                            onChange={(kind) =>
+                              handleChangeRelation("parallel", kind, t.id)}
+                          />
+                          <button
+                            type="button"
+                            class="btn-sm btn-danger"
+                            aria-label={`Unlink parallel relation to ${t.id}`}
+                            onclick={() => handleUnlink("parallel", t.id)}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+
+                {#if detail.related.length > 0}
+                  <div>
+                    <strong>Related Tasks ({detail.related.length}):</strong>
+                    <ul class="relation-group-list">
+                      {#each detail.related as t}
+                        <li class="relation-row">
+                          <button
+                            type="button"
+                            class="btn-sm"
+                            onclick={() => onSelectTask(t.id)}
+                          >
+                            {t.id}: {t.title}
+                          </button>
+                          <RelationTypeSelect
+                            value="related"
+                            label={`Relation type for ${t.id}`}
+                            onChange={(kind) =>
+                              handleChangeRelation("related", kind, t.id)}
+                          />
+                          <button
+                            type="button"
+                            class="btn-sm btn-danger"
+                            aria-label={`Unlink related relation to ${t.id}`}
+                            onclick={() => handleUnlink("related", t.id)}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+              </div>
+
+              <RelationPicker
+                excludeTaskId={detail.task.id}
+                buttonLabel="Link Task"
+                onAdd={(entry) => void handleAddRelationFromPicker(entry)}
+              />
+            </section>
+
+            <!-- Notes & Comment Mention Thread -->
+            <section class="card" aria-labelledby="drawer-notes-heading">
+              <h3
+                id="drawer-notes-heading"
+                style="margin: 0 0 0.75rem 0; font-size: 1.02rem;"
+              >
+                Comments & Review Thread ({detail.notes.length})
+              </h3>
+
+              {#if detail.notes.length === 0}
+                <p class="field-hint">
+                  No comments yet. Mention <code>@user</code> to spawn an urgent
+                  blocking subtask, <code>@takenote:user</code> for a
+                  non-blocking related note, or <code>#AB1234</code> to cross-link
+                  another task.
+                </p>
+              {:else}
+                <div
+                  style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem;"
+                >
+                  {#each detail.notes as note (note.id)}
+                    <article
+                      style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 0.5rem; padding: 0.75rem;"
+                    >
+                      <div
+                        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;"
+                      >
+                        <span
+                          style="font-size: 0.84rem; color: var(--text-secondary);"
+                        >
+                          <strong>@{note.author}</strong> · {note.created_at}
+                        </span>
+                        <button
+                          type="button"
+                          class="btn-sm btn-danger"
+                          onclick={() => handleDeleteNote(note.id)}
+                          aria-label={`Delete comment ${note.id} by ${note.author}`}
+                        >
+                          Delete Note
+                        </button>
+                      </div>
+                      <RichTextDisplay
+                        body={note.body}
+                        {knownUsers}
+                        {userKinds}
+                        mode="comment"
+                        {onSelectTask}
+                        class="comment-note-body"
+                      />
+                      {#if note.attachments.length > 0}
+                        <AttachmentGallery
+                          attachments={note.attachments}
+                          editable={editingTask}
+                          onChanged={() => {
+                            if (detail) void refreshDetail(detail.task.id);
+                            onDataChanged();
+                          }}
+                          {announce}
+                        />
+                      {/if}
+                    </article>
+                  {/each}
+                </div>
+              {/if}
+
+              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+              <form
+                onsubmit={handlePostComment}
+                onkeydown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void postComment();
+                  } else if (
+                    e.key === "Enter" &&
+                    (e.target as HTMLElement | null)?.tagName === "INPUT" &&
+                    (e.target as HTMLInputElement).type === "text"
+                  ) {
+                    e.preventDefault();
+                  }
+                }}
+                style="display: flex; flex-direction: column; gap: 0.65rem;"
+              >
+                <div class="form-field">
+                  <label for="new-comment-body">
+                    Add Comment (as @{activeUser})
+                  </label>
+                  <RichTextField
+                    id="new-comment-body"
+                    rows={3}
+                    bind:value={commentBody}
+                    {knownUsers}
+                    {userKinds}
+                    mode="comment"
+                    onPasteFiles={handleCommentPasteFiles}
+                    placeholder="Write a comment... Use @user for blocking subtasks, @takenote:user for non-blocking heads-up, or #AB1234 to link tasks. Paste images directly with Cmd/Ctrl+V."
+                  />
+
+                  {#if commentMentionTokens.length > 0}
+                    <div
+                      class="comment-mention-preview"
+                      role="status"
+                      aria-live="polite"
+                      aria-label="Detected user mentions in comment"
+                    >
+                      <span class="comment-mention-preview-label"
+                        >Mentions:</span
+                      >
+                      {#each commentMentionTokens as token (token.rawToken)}
+                        <span
+                          class={`comment-mention-pill mention-${token.kind} ${token.exists ? "mention-exists" : "mention-missing"}`}
+                          data-tooltip={token.tooltip}
+                          title={token.tooltip}
+                        >
+                          <strong>{token.rawToken}</strong>
+                          {#if token.kind === "invalid"}
+                            <span class="comment-mention-pill-meta">
+                              Invalid username (ignored)
+                            </span>
+                          {:else if token.exists}
+                            <span class="comment-mention-pill-meta">
+                              ✓ Existing user · {token.kind === "takenote"
+                                ? "Take-note"
+                                : "Blocking subtask"}
+                            </span>
+                          {:else}
+                            <span class="comment-mention-pill-meta">
+                              + Does not exist yet (will create @{token.username})
+                            </span>
+                          {/if}
+                        </span>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+
+                {#if pendingCommentAttachments.length > 0}
+                  <ul class="draft-attachments-list">
+                    {#each pendingCommentAttachments as att (att.id)}
+                      <li class="draft-attachment-item">
+                        <div class="draft-attachment-info">
+                          {#if att.previewUrl}
+                            <img
+                              src={att.previewUrl}
+                              alt={att.description ?? att.suggestedName}
+                              class="draft-attachment-thumb"
+                            />
+                          {/if}
+                          <div>
+                            <strong>{att.suggestedName}</strong>
+                            {#if att.description && att.description !== att.suggestedName}
+                              <span class="field-hint">
+                                — "{att.description}"</span
+                              >
+                            {/if}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          class="btn-sm btn-danger"
+                          onclick={() => {
+                            pendingCommentAttachments =
+                              pendingCommentAttachments.filter(
+                                (a) => a.id !== att.id,
+                              );
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+
+                <div class="comment-actions">
+                  <div class="comment-attach-row">
+                    <input
+                      id="comment-att-desc"
+                      type="text"
+                      bind:value={pendingCommentDesc}
+                      placeholder="Alt text for next comment attachment"
+                      aria-label="Alt text description for comment attachment"
+                    />
+                    <button
+                      type="button"
+                      class="btn-sm"
+                      onclick={handlePickCommentAttachment}
+                    >
+                      Attach File to Comment...
+                    </button>
+                    <label class="comment-spawn-toggle">
+                      <input
+                        type="checkbox"
+                        bind:checked={commentSpawnSubtasks}
+                      />
+                      Auto-spawn @mention subtasks
+                    </label>
+                  </div>
+
+                  <button
+                    type="submit"
+                    class="btn-primary"
+                    title="Post Comment (Cmd/Ctrl+Enter)"
+                  >
+                    Post Comment
+                  </button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </div>
+      {/if}
+    </Dialog.Content>
+  </Dialog.Portal>
+</Dialog.Root>
 
 <ConfirmModal
   bind:open={confirmDiscardOpen}
   title="Discard Unsaved Changes?"
   description={confirmDiscardAction === "close_drawer"
-    ? "You have unsaved changes to this task. Discard changes and close the drawer?"
+    ? "You have unsaved changes to this task. Discard them and close?"
     : "You have unsaved changes to this task. Discard your edits?"}
   confirmLabel="Discard Changes"
   cancelLabel="Keep Editing"

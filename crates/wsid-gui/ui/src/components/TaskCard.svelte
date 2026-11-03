@@ -116,42 +116,46 @@
   }}
 >
   <div class="card-top">
-    <div class="card-lead">
-      {#if selectable}
-        <span class="card-control">
-          <input
-            type="checkbox"
-            class="select-check"
-            aria-label={`Select ${task.id}`}
-            checked={selected}
-            onclick={(e) => {
-              e.stopPropagation();
-              onSelectClick?.(e);
-            }}
-          />
-        </span>
-      {/if}
-      {#if onComplete}
-        <span class="card-control">
-          <button
-            type="button"
-            class="card-complete-btn"
-            aria-label={completeLabel}
-            title={completeLabel}
-            onclick={(e) => {
-              e.stopPropagation();
-              onComplete();
-            }}
-          >
-            <span aria-hidden="true">✓</span>
-          </button>
-        </span>
-      {/if}
+    {#if selectable || onComplete}
+      <div class="card-controls">
+        {#if selectable}
+          <span class="card-control">
+            <input
+              type="checkbox"
+              class="select-check"
+              aria-label={`Select ${task.id}`}
+              checked={selected}
+              onclick={(e) => {
+                e.stopPropagation();
+                onSelectClick?.(e);
+              }}
+            />
+          </span>
+        {/if}
+        {#if onComplete}
+          <span class="card-control">
+            <button
+              type="button"
+              class="card-complete-btn"
+              aria-label={completeLabel}
+              title={completeLabel}
+              onclick={(e) => {
+                e.stopPropagation();
+                onComplete();
+              }}
+            >
+              <span aria-hidden="true">✓</span>
+            </button>
+          </span>
+        {/if}
+      </div>
+    {/if}
+
+    <div class="card-badges">
       {#if rank !== undefined && score !== undefined}
         <span class="badge badge-score">#{rank} · Score {score.toFixed(1)}</span
         >
       {/if}
-      <span class="task-id-badge">{task.id}</span>
       {#if showStatus}
         <span class="badge">{STATUS_LABELS[task.status]}</span>
       {/if}
@@ -166,46 +170,32 @@
       {/if}
     </div>
 
-    <div class="card-personas">
-      <UserPill
-        user={task.assignee}
-        kind={userKindOf(userKinds, task.assignee)}
-        role="Assignee"
-      />
-      {#if task.evaluator !== task.assignee}
-        <UserPill
-          user={task.evaluator}
-          kind={userKindOf(userKinds, task.evaluator)}
-          role="Evaluator"
-        />
-      {/if}
-      {#if moveOptions.length > 0 && onMove}
-        <span class="card-control">
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              class="card-menu-btn"
-              aria-label={`${moveLabel} for ${task.id}`}
-              aria-keyshortcuts="m"
-              data-card-menu-trigger
-            >
-              <span aria-hidden="true">⋯</span>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content class="ui-select-content" sideOffset={4}>
-                {#each moveOptions as option (option.value)}
-                  <DropdownMenu.Item
-                    class="ui-select-item"
-                    onSelect={() => onMove(option.value)}
-                  >
-                    {option.label}
-                  </DropdownMenu.Item>
-                {/each}
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-        </span>
-      {/if}
-    </div>
+    {#if moveOptions.length > 0 && onMove}
+      <span class="card-control card-menu">
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="card-menu-btn"
+            aria-label={`${moveLabel} for ${task.id}`}
+            aria-keyshortcuts="m"
+            data-card-menu-trigger
+          >
+            <span aria-hidden="true">⋯</span>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content class="ui-select-content" sideOffset={4}>
+              {#each moveOptions as option (option.value)}
+                <DropdownMenu.Item
+                  class="ui-select-item"
+                  onSelect={() => onMove(option.value)}
+                >
+                  {option.label}
+                </DropdownMenu.Item>
+              {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </span>
+    {/if}
   </div>
 
   <h3 class="card-title">
@@ -224,7 +214,7 @@
           );
       }}
     >
-      {task.title}
+      <span class="task-id">{task.id}</span>: {task.title}
     </button>
   </h3>
 
@@ -239,6 +229,21 @@
       {/each}
     </div>
   {/if}
+
+  <div class="card-personas">
+    <UserPill
+      user={task.assignee}
+      kind={userKindOf(userKinds, task.assignee)}
+      role="Assignee"
+    />
+    {#if task.evaluator !== task.assignee}
+      <UserPill
+        user={task.evaluator}
+        kind={userKindOf(userKinds, task.evaluator)}
+        role="Evaluator"
+      />
+    {/if}
+  </div>
 
   {#if unblocksCount > 0}
     <p class="card-unblocks">Unblocks {unblocksCount}</p>

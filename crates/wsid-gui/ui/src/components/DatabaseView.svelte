@@ -47,7 +47,8 @@
     | "assignee"
     | "importance"
     | "difficulty"
-    | "due_date";
+    | "due_date"
+    | "urgent";
 
   let query = $state<string>("");
   let statusFilter = $state<string>("");
@@ -130,6 +131,9 @@
           break;
         case "difficulty":
           cmp = a.task.difficulty - b.task.difficulty;
+          break;
+        case "urgent":
+          cmp = Number(a.task.urgent_override) - Number(b.task.urgent_override);
           break;
         case "due_date": {
           const da = a.task.sgdb_date ?? a.task.due_date ?? "9999-99-99";
@@ -346,7 +350,15 @@
             </button>
           </th>
           <th scope="col">Tags</th>
-          <th scope="col">Actions</th>
+          <th scope="col" aria-sort={ariaSortFor("urgent")}>
+            <button
+              type="button"
+              class="sort-btn"
+              onclick={() => toggleSort("urgent")}
+            >
+              Urgent {sortCol === "urgent" ? (sortAsc ? "▲" : "▼") : ""}
+            </button>
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -372,25 +384,29 @@
                 />
               </td>
               <td>
-                <span class="task-id-badge">{hit.task.id}</span>
+                <button
+                  type="button"
+                  class="link-btn"
+                  onclick={() => onSelectTask(hit.task.id)}
+                >
+                  <span class="task-id">{hit.task.id}</span>
+                </button>
               </td>
               <td>
-                <strong>{hit.task.title}</strong>
-                {#if hit.task.urgent_override}
-                  <span
-                    class="badge badge-urgent"
-                    style="margin-left: 0.35rem;"
-                  >
-                    Urgent
-                  </span>
-                {/if}
+                <button
+                  type="button"
+                  class="link-btn link-btn-title"
+                  onclick={() => onSelectTask(hit.task.id)}
+                >
+                  {hit.task.title}
+                </button>
                 {#if hit.task.attachments.length > 0}
-                  <span class="badge" style="margin-left: 0.35rem;">
+                  <span class="badge title-meta">
                     {hit.task.attachments.length} file(s)
                   </span>
                 {/if}
               </td>
-              <td>
+              <td class="db-status">
                 <span class="badge">{STATUS_LABELS[hit.task.status]}</span>
               </td>
               <td>
@@ -421,13 +437,9 @@
                 {/each}
               </td>
               <td>
-                <button
-                  type="button"
-                  class="btn-sm"
-                  onclick={() => onSelectTask(hit.task.id)}
-                >
-                  Details
-                </button>
+                {#if hit.task.urgent_override}
+                  <span class="badge badge-urgent">Urgent</span>
+                {/if}
               </td>
             </tr>
           {/each}

@@ -26,7 +26,7 @@
     fileToBase64,
     parseDurationInput,
     validateDeadlines,
-    validateUsername,
+    validateUserRef,
   } from "../lib/ipc";
   import { subscribeDropzone } from "../lib/filedrop";
 
@@ -573,7 +573,7 @@
       ["Evaluator", evaluator.trim() || activeUser],
       ["Reporter", reporter.trim() || activeUser],
     ] as const) {
-      const check = validateUsername(raw);
+      const check = validateUserRef(raw);
       if (check.error) {
         formError = `${label}: ${check.error}`;
         announce(formError);
