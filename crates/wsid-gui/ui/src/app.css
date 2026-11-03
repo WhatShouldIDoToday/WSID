@@ -1781,3 +1781,32 @@ input[type="text"].tag-compact-input {
     font-weight: 700;
   }
 }
+
+/* Floating stand-in for the card being dragged (native HTML5 drags are
+   intercepted by the Tauri file-drop handler, so the views draw their own). */
+.drag-ghost {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  opacity: 0.92;
+  font-size: 0.92rem;
+}
+
+.drag-ghost strong {
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.drag-ghost-meta {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}

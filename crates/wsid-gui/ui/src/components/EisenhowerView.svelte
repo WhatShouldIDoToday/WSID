@@ -8,7 +8,13 @@
     formatDurationMinutes,
   } from "../lib/ipc";
   import { Selection } from "../lib/selection.svelte";
+  import {
+    advancePointerDrag,
+    beginPointerDrag,
+    type PointerDragState,
+  } from "../lib/pointerdrag";
   import BulkActions from "./BulkActions.svelte";
+  import DragGhost from "./DragGhost.svelte";
 
   interface Props {
     items: EisenhowerClassification[];
@@ -46,12 +52,9 @@
   let dragIds = $state<string[]>([]);
   let dropTargetQuadrant = $state<EisenhowerQuadrant | null>(null);
   let deadlineWarning = $state<string | null>(null);
-  let pointerDrag = $state<{
-    entry: EisenhowerClassification;
-    startX: number;
-    startY: number;
-    active: boolean;
-  } | null>(null);
+  let pointerDrag = $state<PointerDragState<EisenhowerClassification> | null>(
+    null,
+  );
 
   $effect(() => {
     selection.prune(items.map((i) => i.task.id));
@@ -188,23 +191,17 @@
 
   function handlePointerDown(e: PointerEvent, entry: EisenhowerClassification) {
     if (e.button !== 0 || isInteractiveTarget(e.target)) return;
-    pointerDrag = {
-      entry,
-      startX: e.clientX,
-      startY: e.clientY,
-      active: false,
-    };
+    pointerDrag = beginPointerDrag(entry, e, e.currentTarget as Element | null);
   }
 
   function handleWindowPointerMove(e: PointerEvent) {
     if (!pointerDrag) return;
-    const dx = e.clientX - pointerDrag.startX;
-    const dy = e.clientY - pointerDrag.startY;
-    if (!pointerDrag.active && Math.hypot(dx, dy) > 6) {
-      pointerDrag.active = true;
-      dragIds = dragPayloadFor(pointerDrag.entry);
+    const wasActive = pointerDrag.active;
+    const active = advancePointerDrag(pointerDrag, e);
+    if (!wasActive && active) {
+      dragIds = dragPayloadFor(pointerDrag.item);
     }
-    if (pointerDrag.active) {
+    if (active) {
       e.preventDefault();
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const quadEl = el?.closest("[data-drop-quadrant]") as HTMLElement | null;
@@ -233,6 +230,19 @@
   onpointerup={handleWindowPointerUp}
   onpointercancel={handleDragEnd}
 />
+
+{#if pointerDrag?.active}
+  <DragGhost
+    x={pointerDrag.x}
+    y={pointerDrag.y}
+    offsetX={pointerDrag.offsetX}
+    offsetY={pointerDrag.offsetY}
+    width={pointerDrag.width}
+    taskId={pointerDrag.item.task.id}
+    title={pointerDrag.item.task.title}
+    subtitle={`@${pointerDrag.item.task.assignee} · ${QUADRANT_META[pointerDrag.item.quadrant].badge}`}
+  />
+{/if}
 
 <section aria-labelledby="eisenhower-view-heading">
   <div

@@ -8,7 +8,13 @@
     formatDurationMinutes,
   } from "../lib/ipc";
   import { Selection } from "../lib/selection.svelte";
+  import {
+    advancePointerDrag,
+    beginPointerDrag,
+    type PointerDragState,
+  } from "../lib/pointerdrag";
   import BulkActions from "./BulkActions.svelte";
+  import DragGhost from "./DragGhost.svelte";
 
   interface Props {
     tasks: Task[];
@@ -44,12 +50,7 @@
 
   let filterMyTasksOnly = $state<boolean>(false);
   let dropTargetStatus = $state<TaskStatus | null>(null);
-  let pointerDrag = $state<{
-    task: Task;
-    startX: number;
-    startY: number;
-    active: boolean;
-  } | null>(null);
+  let pointerDrag = $state<PointerDragState<Task> | null>(null);
 
   let filteredTasks = $derived(
     filterMyTasksOnly
@@ -159,23 +160,17 @@
 
   function handlePointerDown(e: PointerEvent, task: Task) {
     if (e.button !== 0 || isInteractiveTarget(e.target)) return;
-    pointerDrag = {
-      task,
-      startX: e.clientX,
-      startY: e.clientY,
-      active: false,
-    };
+    pointerDrag = beginPointerDrag(task, e, e.currentTarget as Element | null);
   }
 
   function handleWindowPointerMove(e: PointerEvent) {
     if (!pointerDrag) return;
-    const dx = e.clientX - pointerDrag.startX;
-    const dy = e.clientY - pointerDrag.startY;
-    if (!pointerDrag.active && Math.hypot(dx, dy) > 6) {
-      pointerDrag.active = true;
-      dragIds = dragPayloadFor(pointerDrag.task);
+    const wasActive = pointerDrag.active;
+    const active = advancePointerDrag(pointerDrag, e);
+    if (!wasActive && active) {
+      dragIds = dragPayloadFor(pointerDrag.item);
     }
-    if (pointerDrag.active) {
+    if (active) {
       e.preventDefault();
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const colEl = el?.closest("[data-drop-column]") as HTMLElement | null;
@@ -203,6 +198,19 @@
   onpointerup={handleWindowPointerUp}
   onpointercancel={handleDragEnd}
 />
+
+{#if pointerDrag?.active}
+  <DragGhost
+    x={pointerDrag.x}
+    y={pointerDrag.y}
+    offsetX={pointerDrag.offsetX}
+    offsetY={pointerDrag.offsetY}
+    width={pointerDrag.width}
+    taskId={pointerDrag.item.id}
+    title={pointerDrag.item.title}
+    subtitle={`@${pointerDrag.item.assignee} · ${STATUS_LABELS[pointerDrag.item.status]}`}
+  />
+{/if}
 
 <section aria-labelledby="kanban-view-heading" class="kanban-view">
   <div
