@@ -15,12 +15,12 @@ use crate::attachments::{attach_existing_file, attach_existing_file_in_tx};
 use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::normalize_task_id;
-use crate::models::{AttachmentInput, CreateTaskInput, RelationInputKind, Task, TaskStatus, UpdateTaskInput};
+use crate::models::{AttachmentInput, CreateTaskInput, RelationInputKind, Task, TaskStatus, UpdateTaskInput, UserNotice};
 use crate::relations::{link_tasks, link_tasks_in_tx};
 use crate::search::{SearchQuery, search_tasks};
 use crate::tasks::{
-    create_task_in_tx, get_task, get_task_conn, list_known_users, normalize_project, normalize_tags, normalize_user,
-    parse_deadline_datetime, parse_duration_minutes, update_task, validate_dates, validate_not_past, validate_time_estimate,
+    create_task_in_tx, get_task, get_task_conn, list_known_users, normalize_project, normalize_tags, parse_deadline_datetime,
+    parse_duration_minutes, parse_user_ref, update_task_with_notices, validate_dates, validate_not_past, validate_time_estimate,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -298,8 +298,9 @@ fn resolve(conn: &Connection, draft: &TaskDraft, default_user: &str) -> (Option<
     let known = list_known_users_conn(conn);
     let mut user = |field: TaskField, raw: &Option<String>| -> Option<String> {
         let value = blank(raw)?;
-        match normalize_user(value) {
-            Ok(u) => {
+        match parse_user_ref(value) {
+            Ok(user_ref) => {
+                let u = user_ref.username;
                 if !u.eq_ignore_ascii_case(default_user) && !known.contains(&u) {
                     issues.push(FieldIssue::info(field, format!("@{u} is new and will be created")));
                 }
@@ -385,13 +386,19 @@ pub fn validate_task_draft(db: &Database, draft: &TaskDraft, default_user: &str)
 /// Validates and creates the task, its relations, and its attachments in one transaction.
 /// On any problem nothing is written and [`WsidError::DraftRejected`] carries the issues.
 pub fn create_task_from_draft(db: &mut Database, draft: &TaskDraft, default_user: &str) -> Result<Task> {
+    create_task_from_draft_with_notices(db, draft, default_user).map(|(task, _)| task)
+}
+
+/// Like [`create_task_from_draft`], also returning notices for typed user references (`@kind:user`).
+pub fn create_task_from_draft_with_notices(db: &mut Database, draft: &TaskDraft, default_user: &str) -> Result<(Task, Vec<UserNotice>)> {
     let (resolved, issues) = resolve(&db.conn, draft, default_user);
     let Some(resolved) = resolved else {
         return Err(WsidError::DraftRejected(issues));
     };
 
     let tx = db.conn.transaction()?;
-    let id = match create_task_in_tx(&tx, resolved.input, default_user) {
+    let mut notices = Vec::new();
+    let id = match create_task_in_tx(&tx, resolved.input, default_user, &mut notices) {
         Ok(id) => id,
         Err(e) => return Err(WsidError::DraftRejected(vec![FieldIssue::error(TaskField::Title, strip_prefix(&e))])),
     };
@@ -406,13 +413,23 @@ pub fn create_task_from_draft(db: &mut Database, draft: &TaskDraft, default_user
         }
     }
     tx.commit()?;
-    get_task(db, &id)
+    Ok((get_task(db, &id)?, notices))
 }
 
 /// Validates a draft and applies it to an existing task: scalar fields, tags, new relations, and
 /// newly added attachments. Existing attachments are kept untouched (they are managed from the
 /// task detail view), so only paths not already attached are added.
 pub fn update_task_from_draft(db: &mut Database, raw_id: &str, draft: &TaskDraft, default_user: &str) -> Result<Task> {
+    update_task_from_draft_with_notices(db, raw_id, draft, default_user).map(|(task, _)| task)
+}
+
+/// Like [`update_task_from_draft`], also returning notices for typed user references (`@kind:user`).
+pub fn update_task_from_draft_with_notices(
+    db: &mut Database,
+    raw_id: &str,
+    draft: &TaskDraft,
+    default_user: &str,
+) -> Result<(Task, Vec<UserNotice>)> {
     let (resolved, issues) = resolve(&db.conn, draft, default_user);
     let Some(resolved) = resolved else {
         return Err(WsidError::DraftRejected(issues));
@@ -441,7 +458,8 @@ pub fn update_task_from_draft(db: &mut Database, raw_id: &str, draft: &TaskDraft
         assignee: resolved.input.assignee,
         evaluator: resolved.input.evaluator,
     };
-    let id = update_task(db, &current.id, input)?.id;
+    let (updated, notices) = update_task_with_notices(db, &current.id, input)?;
+    let id = updated.id;
 
     for (i, (kind, target)) in resolved.relations.iter().enumerate() {
         if let Err(e) = link_tasks(db, &id, *kind, target) {
@@ -456,7 +474,7 @@ pub fn update_task_from_draft(db: &mut Database, raw_id: &str, draft: &TaskDraft
             return Err(WsidError::DraftRejected(vec![FieldIssue::error(TaskField::Attachments, strip_prefix(&e)).at(i)]));
         }
     }
-    get_task(db, &id)
+    Ok((get_task(db, &id)?, notices))
 }
 
 /// Tasks matching `query` (ID or title/fuzzy) for relation-target typeahead.

@@ -24,6 +24,8 @@
     activeProject: string;
     knownTags: string[];
     knownUsers: string[];
+    /** Account kind per user (`human` unless set); drives typed-mention hints. */
+    userKinds?: Record<string, string>;
     knownProjects: string[];
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
@@ -36,6 +38,7 @@
     activeProject,
     knownTags,
     knownUsers,
+    userKinds = {},
     knownProjects,
     onSelectTask,
     onDataChanged,

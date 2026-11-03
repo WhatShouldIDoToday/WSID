@@ -6,11 +6,11 @@ use serde_json::{Map, Value, json};
 use wsid_core::{
     AppConfig, AttachmentInput, BulkTaskPatch, Database, FocusPreset, RelationDraft, RelationInputKind, Scalar, SearchQuery, Task,
     TaskDraft, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, bulk_delete_tasks,
-    bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft, delete_task, delete_task_note, get_blocked_tasks,
-    get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks,
-    get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_task_relations, list_user_kinds,
-    parse_deadline_datetime, parse_duration_minutes, register_user, remove_attachment, search_tasks, set_user_kind, transition_task_status,
-    unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
+    bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft_with_notices, delete_task, delete_task_note,
+    get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
+    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_task_relations,
+    list_user_kinds, parse_deadline_datetime, parse_duration_minutes, register_user, remove_attachment, search_tasks, set_user_kind,
+    transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task_with_notices,
 };
 
 use crate::protocol::CallToolResult;
@@ -414,12 +414,13 @@ fn handle_create_task(db: &mut Database, config: &AppConfig, args: CreateTaskArg
     };
 
     // Atomic: the task, its relations, and its attachments are created together or not at all.
-    let created = create_task_from_draft(db, &draft, &config.default_user)?;
+    let (created, user_notices) = create_task_from_draft_with_notices(db, &draft, &config.default_user)?;
     let relations = list_task_relations(db, &created.id)?;
 
     Ok(CallToolResult::ok_json(&json!({
         "task": created,
         "relations": relations,
+        "user_notices": user_notices,
     })))
 }
 
@@ -454,7 +455,7 @@ fn handle_update_task(db: &mut Database, args_val: Value) -> Result<CallToolResu
     let assignee = parse_optional_string(obj, "assignee")?;
     let evaluator = parse_optional_string(obj, "evaluator")?;
 
-    let updated = update_task(
+    let (updated, user_notices) = update_task_with_notices(
         db,
         id,
         UpdateTaskInput {
@@ -476,7 +477,10 @@ fn handle_update_task(db: &mut Database, args_val: Value) -> Result<CallToolResu
         },
     )?;
 
-    Ok(CallToolResult::ok_json(&updated))
+    // Task fields stay at the top level; typed-reference notices ride along beside them.
+    let mut value = serde_json::to_value(&updated).unwrap_or_default();
+    value["user_notices"] = json!(user_notices);
+    Ok(CallToolResult::ok_json(&value))
 }
 
 fn parse_optional_string(obj: &Map<String, Value>, key: &str) -> Result<Option<String>, WsidError> {

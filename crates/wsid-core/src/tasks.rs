@@ -10,8 +10,9 @@ use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::{ShortIdGenerator, normalize_task_id};
 use crate::models::{
-    CreateTaskInput, OriginKind, Task, TaskStatus, UpdateTaskInput, UserAffectedTask, UserDeletionOutcome, UserDeletionPreview,
+    CreateTaskInput, OriginKind, Task, TaskStatus, UpdateTaskInput, UserAffectedTask, UserDeletionOutcome, UserDeletionPreview, UserNotice,
 };
+use crate::notes::canonicalize_user_mentions;
 
 /// Normalizes a single tag into a lowercase token matching `^[a-z0-9_-]+$`.
 pub fn normalize_tag(raw: &str) -> Result<String> {
@@ -161,6 +162,66 @@ pub fn set_user_kind(db: &mut Database, raw_user: &str, raw_kind: &str) -> Resul
         return Err(WsidError::Validation(format!("user '{user}' does not exist")));
     }
     Ok(())
+}
+
+/// A user reference as typed by people or agents: `user` or `kind:user`, with an optional leading `@`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserRef {
+    pub username: String,
+    pub kind: Option<String>,
+}
+
+/// Parses `[@][kind:]user` (for example `@bob`, `claude:bob`, `@claude:bob`).
+pub fn parse_user_ref(raw: &str) -> Result<UserRef> {
+    let trimmed = raw.trim();
+    let trimmed = trimmed.strip_prefix('@').unwrap_or(trimmed).trim();
+    match trimmed.split_once(':') {
+        Some((kind, user)) => Ok(UserRef { username: normalize_user(user)?, kind: Some(normalize_user_kind(kind)?) }),
+        None => Ok(UserRef { username: normalize_user(trimmed)?, kind: None }),
+    }
+}
+
+fn user_kind_in_use(conn: &Connection, kind: &str) -> Result<bool> {
+    let found: Option<i64> = conn
+        .query_row("SELECT 1 FROM users WHERE kind = ?1 LIMIT 1", params![kind], |row| row.get(0))
+        .optional()?;
+    Ok(found.is_some())
+}
+
+/// Resolves a typed reference to the stored username. Unknown users are created with the requested
+/// kind (default `human`); an existing user keeps their kind and a conflicting request is reported.
+/// Plain references create silently; only typed references produce a [`UserNotice`].
+pub(crate) fn resolve_user_ref_conn(conn: &Connection, user_ref: &UserRef, notices: &mut Vec<UserNotice>) -> Result<String> {
+    let username = user_ref.username.clone();
+    let existing_kind: Option<String> = conn
+        .query_row("SELECT kind FROM users WHERE username = ?1", params![username], |row| row.get(0))
+        .optional()?;
+    match (existing_kind, &user_ref.kind) {
+        (Some(actual), Some(requested)) if *requested != actual => {
+            notices.push(UserNotice::KindMismatch { user: username.clone(), requested: requested.clone(), actual });
+        }
+        (Some(_), _) => {}
+        (None, requested) => {
+            let kind = requested
+                .clone()
+                .unwrap_or_else(|| DEFAULT_USER_KIND.to_string());
+            let kind_known = kind == DEFAULT_USER_KIND || user_kind_in_use(conn, &kind)?;
+            conn.execute(
+                "INSERT INTO users (username, created_at, kind) VALUES (?1, ?2, ?3)",
+                params![username, format_utc(Utc::now()), kind],
+            )?;
+            if requested.is_some() {
+                notices.push(UserNotice::Created { user: username.clone(), kind, new_kind: !kind_known });
+            }
+        }
+    }
+    Ok(username)
+}
+
+/// Resolves a persona field (`reporter`, `assignee`, `evaluator`, note author) to a stored username.
+pub(crate) fn resolve_persona_conn(conn: &Connection, raw: &str, notices: &mut Vec<UserNotice>) -> Result<String> {
+    let user_ref = parse_user_ref(raw)?;
+    resolve_user_ref_conn(conn, &user_ref, notices)
 }
 
 /// Maps every known user to its kind (users without an explicit kind are `human`).
@@ -639,14 +700,25 @@ pub fn validate_time_estimate(time_estimate_minutes: Option<i64>) -> Result<()> 
 }
 
 pub fn create_task(db: &mut Database, input: CreateTaskInput, default_user: &str) -> Result<Task> {
-    let tx = db.conn.transaction()?;
-    let id = create_task_in_tx(&tx, input, default_user)?;
-    tx.commit()?;
-
-    get_task(db, &id)
+    create_task_with_notices(db, input, default_user).map(|(task, _)| task)
 }
 
-pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, default_user: &str) -> Result<String> {
+/// Like [`create_task`], also returning notices for typed user references (`@kind:user`).
+pub fn create_task_with_notices(db: &mut Database, input: CreateTaskInput, default_user: &str) -> Result<(Task, Vec<UserNotice>)> {
+    let tx = db.conn.transaction()?;
+    let mut notices = Vec::new();
+    let id = create_task_in_tx(&tx, input, default_user, &mut notices)?;
+    tx.commit()?;
+
+    Ok((get_task(db, &id)?, notices))
+}
+
+pub(crate) fn create_task_in_tx(
+    conn: &Connection,
+    input: CreateTaskInput,
+    default_user: &str,
+    notices: &mut Vec<UserNotice>,
+) -> Result<String> {
     let title = input.title.trim().to_string();
     if title.is_empty() {
         return Err(WsidError::Validation("task title cannot be empty".to_string()));
@@ -685,17 +757,18 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
 
     let fallback_user = normalize_user(default_user)?;
     let reporter = match input.reporter.as_deref() {
-        Some(r) if !r.trim().is_empty() => normalize_user(r)?,
+        Some(r) if !r.trim().is_empty() => resolve_persona_conn(conn, r, notices)?,
         _ => fallback_user.clone(),
     };
     let assignee = match input.assignee.as_deref() {
-        Some(a) if !a.trim().is_empty() => normalize_user(a)?,
+        Some(a) if !a.trim().is_empty() => resolve_persona_conn(conn, a, notices)?,
         _ => fallback_user.clone(),
     };
     let evaluator = match input.evaluator.as_deref() {
-        Some(e) if !e.trim().is_empty() => normalize_user(e)?,
+        Some(e) if !e.trim().is_empty() => resolve_persona_conn(conn, e, notices)?,
         _ => fallback_user,
     };
+    let description = canonicalize_user_mentions(conn, &description, notices)?;
 
     let tags = normalize_tags(&input.tags)?;
     let project = normalize_project(input.project.as_deref().unwrap_or_default())?;
@@ -743,9 +816,6 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     )?;
 
     sync_task_tags(conn, &id, &tags)?;
-    let _ = register_user_conn(conn, &reporter);
-    let _ = register_user_conn(conn, &assignee);
-    let _ = register_user_conn(conn, &evaluator);
     crate::notes::apply_rich_text_references(conn, &id, &description)?;
     Ok(id)
 }
@@ -804,6 +874,11 @@ pub(crate) fn list_tasks_conn(conn: &Connection) -> Result<Vec<Task>> {
 }
 
 pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> Result<Task> {
+    update_task_with_notices(db, raw_id, input).map(|(task, _)| task)
+}
+
+/// Like [`update_task`], also returning notices for typed user references (`@kind:user`).
+pub fn update_task_with_notices(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> Result<(Task, Vec<UserNotice>)> {
     let current = get_task(db, raw_id)?;
 
     let title = match input.title {
@@ -839,19 +914,6 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
     let project = match input.project {
         Some(p) => normalize_project(&p)?,
         None => current.project.clone(),
-    };
-
-    let reporter = match input.reporter {
-        Some(r) => normalize_user(&r)?,
-        None => current.reporter,
-    };
-    let assignee = match input.assignee {
-        Some(a) => normalize_user(&a)?,
-        None => current.assignee,
-    };
-    let evaluator = match input.evaluator {
-        Some(e) => normalize_user(&e)?,
-        None => current.evaluator,
     };
 
     validate_dates(sgdb_str.as_deref(), due_str.as_deref())?;
@@ -891,6 +953,20 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
     };
 
     let tx = db.conn.transaction()?;
+    let mut notices = Vec::new();
+    let reporter = match input.reporter {
+        Some(r) => resolve_persona_conn(&tx, &r, &mut notices)?,
+        None => current.reporter,
+    };
+    let assignee = match input.assignee {
+        Some(a) => resolve_persona_conn(&tx, &a, &mut notices)?,
+        None => current.assignee,
+    };
+    let evaluator = match input.evaluator {
+        Some(e) => resolve_persona_conn(&tx, &e, &mut notices)?,
+        None => current.evaluator,
+    };
+    let description = canonicalize_user_mentions(&tx, &description, &mut notices)?;
     tx.execute(
         "UPDATE tasks SET
             title = ?1,
@@ -935,13 +1011,10 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
         sync_task_tags(&tx, &current.id, &tags)?;
     }
 
-    let _ = register_user_conn(&tx, &reporter);
-    let _ = register_user_conn(&tx, &assignee);
-    let _ = register_user_conn(&tx, &evaluator);
     crate::notes::apply_rich_text_references(&tx, &current.id, &description)?;
 
     tx.commit()?;
-    get_task(db, &current.id)
+    Ok((get_task(db, &current.id)?, notices))
 }
 
 pub fn delete_task(db: &mut Database, raw_id: &str) -> Result<()> {
@@ -1320,6 +1393,70 @@ mod tests {
         // Deleting the user removes the kind row with it
         delete_user_from_db(&mut db, "bob", "davidb", true, None).unwrap();
         assert!(!list_user_kinds(&db).unwrap().contains_key("bob"));
+    }
+
+    #[test]
+    fn typed_user_references_resolve_canonicalize_and_report_notices() {
+        let mut db = open_in_memory_db().unwrap();
+
+        assert_eq!(parse_user_ref("@Claude:Bob").unwrap(), UserRef { username: "bob".to_string(), kind: Some("claude".to_string()) });
+        assert_eq!(parse_user_ref("@bob").unwrap(), UserRef { username: "bob".to_string(), kind: None });
+        assert!(parse_user_ref("takenote:bob").is_err());
+        assert!(parse_user_ref("claude:").is_err());
+
+        // A typed persona creates the user with that kind; typed mentions in the description are rewritten.
+        let (task, notices) = create_task_with_notices(
+            &mut db,
+            CreateTaskInput {
+                title: "Typed".to_string(),
+                description: Some("ping @claude:alice and @takenote:claude:dana".to_string()),
+                assignee: Some("claude:alice".to_string()),
+                ..Default::default()
+            },
+            "davidb",
+        )
+        .unwrap();
+        assert_eq!(task.description, "ping @alice and @takenote:dana");
+        assert_eq!(task.assignee, "alice");
+        assert!(notices.contains(&UserNotice::Created { user: "alice".to_string(), kind: "claude".to_string(), new_kind: true }));
+        assert!(notices.contains(&UserNotice::Created { user: "dana".to_string(), kind: "claude".to_string(), new_kind: false }));
+        assert_eq!(
+            list_user_kinds(&db)
+                .unwrap()
+                .get("alice")
+                .map(String::as_str),
+            Some("claude")
+        );
+
+        // A conflicting kind keeps the stored kind and raises a mismatch notice.
+        let (task, notices) = update_task_with_notices(
+            &mut db,
+            &task.id,
+            UpdateTaskInput { description: Some("@human:alice please look".to_string()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(task.description, "@alice please look");
+        assert_eq!(
+            notices,
+            vec![UserNotice::KindMismatch { user: "alice".to_string(), requested: "human".to_string(), actual: "claude".to_string() }]
+        );
+        assert_eq!(
+            list_user_kinds(&db)
+                .unwrap()
+                .get("alice")
+                .map(String::as_str),
+            Some("claude")
+        );
+
+        // Comments resolve the author and mentions the same way.
+        let outcome = crate::notes::add_task_note(&mut db, &task.id, "claude:erin", "hi @claude:frank", false).unwrap();
+        assert_eq!(outcome.note.author, "erin");
+        assert_eq!(outcome.note.body, "hi @frank");
+        assert!(outcome.user_notices.contains(&UserNotice::Created {
+            user: "frank".to_string(),
+            kind: "claude".to_string(),
+            new_kind: false
+        }));
     }
 
     #[test]

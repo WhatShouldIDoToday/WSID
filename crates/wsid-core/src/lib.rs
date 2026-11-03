@@ -31,15 +31,16 @@ pub use config::{
 };
 pub use db::{Database, DbChangeDetector, open_db, open_in_memory_db, run_migrations};
 pub use draft::{
-    FieldIssue, IssueLevel, RelationDraft, Scalar, TaskDraft, TaskField, create_task_from_draft, search_relation_targets, suggest_users,
-    summarize_issues, update_task_from_draft, validate_task_draft,
+    FieldIssue, IssueLevel, RelationDraft, Scalar, TaskDraft, TaskField, create_task_from_draft, create_task_from_draft_with_notices,
+    search_relation_targets, suggest_users, summarize_issues, update_task_from_draft, update_task_from_draft_with_notices,
+    validate_task_draft,
 };
 pub use error::{Result, WsidError};
 pub use id::{SHORT_ID_LETTERS, ShortId, ShortIdGenerator, is_valid_task_id, normalize_task_id};
 pub use models::{
     AddTaskNoteOutcome, AttachmentInput, CreateTaskInput, FocusPreset, OriginKind, RelationInputKind, RelationType,
     StatusTransitionOutcome, Task, TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, UserAffectedTask,
-    UserDeletionOutcome, UserDeletionPreview,
+    UserDeletionOutcome, UserDeletionPreview, UserNotice,
 };
 pub use notes::{
     ParsedNoteTokens, add_task_note, delete_task_note, delete_task_note_with_attachments_dir, list_task_notes, parse_note_tokens,
@@ -58,10 +59,10 @@ pub use scoring::{
 };
 pub use search::{SearchHit, SearchQuery, query_fts_trigram_ids, search_tasks};
 pub use tasks::{
-    ALL_PROJECTS, ALL_USERS, DEFAULT_PROJECT, DEFAULT_USER_KIND, create_task, delete_task, delete_task_with_attachments_dir,
-    delete_user_from_db, format_deadline_date, format_deadline_display, format_duration_minutes, get_task, list_known_projects,
-    list_known_users, list_tasks, list_user_kinds, local_tz_abbr, normalize_project, normalize_tag, normalize_tags, normalize_user,
-    normalize_user_kind, parse_deadline_datetime, parse_deadline_naive_date, parse_duration_minutes, preview_user_deletion, register_user,
-    set_user_kind, update_task, validate_dates, validate_difficulty, validate_importance, validate_manual_priority, validate_not_past,
-    validate_time_estimate,
+    ALL_PROJECTS, ALL_USERS, DEFAULT_PROJECT, DEFAULT_USER_KIND, UserRef, create_task, create_task_with_notices, delete_task,
+    delete_task_with_attachments_dir, delete_user_from_db, format_deadline_date, format_deadline_display, format_duration_minutes,
+    get_task, list_known_projects, list_known_users, list_tasks, list_user_kinds, local_tz_abbr, normalize_project, normalize_tag,
+    normalize_tags, normalize_user, normalize_user_kind, parse_deadline_datetime, parse_deadline_naive_date, parse_duration_minutes,
+    parse_user_ref, preview_user_deletion, register_user, set_user_kind, update_task, update_task_with_notices, validate_dates,
+    validate_difficulty, validate_importance, validate_manual_priority, validate_not_past, validate_time_estimate,
 };

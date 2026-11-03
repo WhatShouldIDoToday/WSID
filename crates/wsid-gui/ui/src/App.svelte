@@ -468,6 +468,7 @@
           {activeProject}
           knownTags={session?.known_tags ?? []}
           knownUsers={session?.known_users ?? []}
+          userKinds={session?.user_kinds ?? {}}
           knownProjects={session?.known_projects ?? []}
           onSelectTask={openTaskDetail}
           onDataChanged={refreshAllData}
@@ -491,6 +492,7 @@
           }}
           knownTags={session?.known_tags ?? []}
           knownUsers={session?.known_users ?? []}
+          userKinds={session?.user_kinds ?? {}}
           knownProjects={session?.known_projects ?? []}
           onSelectTask={openTaskDetail}
           onDataChanged={refreshAllData}
@@ -502,6 +504,7 @@
         <DatabaseView
           knownTags={session?.known_tags ?? []}
           knownUsers={session?.known_users ?? []}
+          userKinds={session?.user_kinds ?? {}}
           knownProjects={session?.known_projects ?? []}
           {refreshTrigger}
           onSelectTask={openTaskDetail}
@@ -514,6 +517,7 @@
         activeUser={session?.active_user ?? "human"}
         {activeProject}
         knownUsers={session?.known_users ?? []}
+        userKinds={session?.user_kinds ?? {}}
         knownTags={session?.known_tags ?? []}
         knownProjects={session?.known_projects ?? []}
         bind:isDirty={entryFormDirty}
@@ -583,6 +587,7 @@
     activeUser={session.active_user}
     knownTags={session.known_tags}
     knownUsers={session.known_users}
+    userKinds={session.user_kinds}
     knownProjects={session.known_projects}
     onClose={closeTaskDetail}
     onSelectTask={openTaskDetail}

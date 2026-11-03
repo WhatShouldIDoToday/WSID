@@ -4,6 +4,8 @@
   interface Props {
     body: string;
     knownUsers: string[];
+    /** Account kind per user (`human` unless set); drives typed-mention hints. */
+    userKinds?: Record<string, string>;
     /** Descriptions only create users; comments also spawn subtasks. */
     mode?: "comment" | "description";
     /** Called when a `#AB1234` reference is activated. */
@@ -15,13 +17,16 @@
   let {
     body,
     knownUsers,
+    userKinds = {},
     mode = "description",
     onSelectTask,
     emptyText = "No description provided.",
     class: className = "",
   }: Props = $props();
 
-  let segments = $derived(tokenizeCommentBody(body, knownUsers, mode));
+  let segments = $derived(
+    tokenizeCommentBody(body, knownUsers, mode, userKinds),
+  );
 
   function mentionClass(seg: (typeof segments)[number]): string {
     if (seg.type !== "mention" || !seg.mention) return "";

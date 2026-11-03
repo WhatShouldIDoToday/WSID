@@ -8,7 +8,7 @@ use wsid_core::{
     AppConfig, BulkTaskPatch, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FieldIssue, FocusPreset,
     FocusQueueResponse, SearchHit, SearchQuery, Task, TaskAttachment, TaskNote, TaskStatus, UpdateTaskInput, UserDeletionPreview,
     WsidError, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue_in_project,
-    create_task_from_draft, delete_task, delete_task_note, delete_user_from_db, get_attachment, get_direct_blocked_tasks,
+    create_task_from_draft_with_notices, delete_task, delete_task_note, delete_user_from_db, get_attachment, get_direct_blocked_tasks,
     get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, list_eisenhower_matrix,
     list_known_users, list_task_notes, list_tasks, normalize_project, normalize_user, open_file_in_os, parse_note_tokens,
     preview_user_deletion, register_user, remove_attachment, save_clipboard_attachment, search_relation_targets, search_tasks,
@@ -2219,11 +2219,11 @@ impl TuiApp {
             self.submit_edited_task(&id, &draft);
             return;
         }
-        match create_task_from_draft(&mut self.db, &draft, &self.user) {
-            Ok(created) => {
+        match create_task_from_draft_with_notices(&mut self.db, &draft, &self.user) {
+            Ok((created, notices)) => {
                 self.entry_form = DataEntryForm::new_for(&self.user, &self.active_project);
                 let _ = self.refresh_all();
-                self.status_message = format!("Created task [{}] {}", created.id, created.title);
+                self.status_message = Self::with_user_notices(format!("Created task [{}] {}", created.id, created.title), &notices);
             }
             Err(WsidError::DraftRejected(issues)) => {
                 self.form_errors = Some(
@@ -2245,10 +2245,17 @@ impl TuiApp {
         }
     }
 
+    /// Appends typed-reference notices (`@kind:user`) to a status message.
+    fn with_user_notices(message: String, notices: &[wsid_core::UserNotice]) -> String {
+        notices
+            .iter()
+            .fold(message, |acc, notice| format!("{acc}. {}", notice.message()))
+    }
+
     /// Applies an edited form to the task it was opened for and returns to its detail modal.
     fn submit_edited_task(&mut self, id: &str, draft: &wsid_core::TaskDraft) {
-        match wsid_core::update_task_from_draft(&mut self.db, id, draft, &self.user) {
-            Ok(updated) => {
+        match wsid_core::update_task_from_draft_with_notices(&mut self.db, id, draft, &self.user) {
+            Ok((updated, notices)) => {
                 self.editing_task_id = None;
                 self.entry_form = DataEntryForm::new_for(&self.user, &self.active_project);
                 if let Some(tab) = self.editing_return_tab.take() {
@@ -2256,7 +2263,7 @@ impl TuiApp {
                 }
                 let _ = self.refresh_all();
                 self.open_detail_for(&updated.id);
-                self.status_message = format!("Updated task [{}] {}", updated.id, updated.title);
+                self.status_message = Self::with_user_notices(format!("Updated task [{}] {}", updated.id, updated.title), &notices);
             }
             Err(WsidError::DraftRejected(issues)) => {
                 self.form_errors = Some(
@@ -2737,11 +2744,14 @@ impl TuiApp {
                 match add_task_note(&mut self.db, &snapshot.task.id, &self.user, &input, true) {
                     Ok(outcome) => {
                         let _ = self.refresh_all();
-                        self.status_message = format!(
-                            "Posted note #{} on [{}] (spawned {} task(s))",
-                            outcome.note.id,
-                            snapshot.task.id,
-                            outcome.spawned_tasks.len()
+                        self.status_message = Self::with_user_notices(
+                            format!(
+                                "Posted note #{} on [{}] (spawned {} task(s))",
+                                outcome.note.id,
+                                snapshot.task.id,
+                                outcome.spawned_tasks.len()
+                            ),
+                            &outcome.user_notices,
                         );
                     }
                     Err(err) => {

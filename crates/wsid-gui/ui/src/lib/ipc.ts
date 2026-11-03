@@ -274,6 +274,35 @@ export interface AddTaskNoteOutcome {
   spawned_tasks: Task[];
   reused_tasks: Task[];
   completed_review_tasks: Task[];
+  user_notices: UserNotice[];
+}
+
+/** Something to tell the user about a typed reference such as `@claude:bob`. */
+export type UserNotice =
+  | { type: "created"; user: string; kind: string; new_kind: boolean }
+  | { type: "kind_mismatch"; user: string; requested: string; actual: string };
+
+export interface TaskSaveOutcome {
+  task: Task;
+  user_notices: UserNotice[];
+}
+
+export function describeUserNotice(notice: UserNotice): string {
+  if (notice.type === "kind_mismatch") {
+    return `@${notice.user} is a ${notice.actual} user; "${notice.requested}:" was ignored.`;
+  }
+  if (notice.new_kind) {
+    return `Created @${notice.user} with new user kind "${notice.kind}".`;
+  }
+  return `Created @${notice.user} as ${notice.kind}.`;
+}
+
+/** Appends user-notice sentences to a status message for the live region. */
+export function withUserNotices(
+  message: string,
+  notices: UserNotice[],
+): string {
+  return [message, ...notices.map(describeUserNotice)].join(" ");
 }
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -668,12 +697,52 @@ export function isPastDeadline(
   return ms !== null && ms < nowMs;
 }
 
+/** Edit distance between two strings (insert, delete, substitute each cost 1). */
+export function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitution = previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1);
+      current.push(Math.min(previous[j] + 1, current[j - 1] + 1, substitution));
+    }
+    previous = current;
+  }
+  return previous[b.length];
+}
+
+/**
+ * Known kinds close to a typed kind (`claud` -> `claude`), nearest first. Never auto-applied:
+ * callers show these as suggestions only. An exact match returns no suggestions.
+ */
+export function suggestKinds(
+  typed: string,
+  knownKinds: string[],
+  maxDistance = 2,
+): string[] {
+  const needle = typed.trim().toLowerCase();
+  if (!needle) return [];
+  return knownKinds
+    .filter((kind) => kind !== needle)
+    .map((kind) => ({ kind, distance: editDistance(needle, kind) }))
+    .filter(({ distance }) => distance <= maxDistance)
+    .sort((x, y) => x.distance - y.distance || x.kind.localeCompare(y.kind))
+    .slice(0, 3)
+    .map(({ kind }) => kind);
+}
+
 export interface ParsedCommentMention {
   rawToken: string;
   kind: "blocking" | "takenote" | "invalid";
   username: string;
   exists: boolean;
   tooltip: string;
+  /** Kind typed before the user (`claude` in `@claude:bob`), or null. */
+  typedKind: string | null;
+  /** Stored kind when the user exists with a different kind than typed; the typed kind is ignored. */
+  kindMismatch: string | null;
+  /** Close known kinds offered for a typed kind that is not known yet. Never applied automatically. */
+  kindSuggestions: string[];
 }
 
 export interface CommentBodySegment {
@@ -701,9 +770,14 @@ export function tokenizeCommentBody(
   body: string,
   knownUsers: string[],
   mode: "comment" | "description" = "comment",
+  userKinds: Record<string, string> = {},
 ): CommentBodySegment[] {
   if (!body) return [];
   const knownSet = new Set(knownUsers.map((u) => u.toLowerCase()));
+  const kindsByUser = new Map(
+    Object.entries(userKinds).map(([user, kind]) => [user.toLowerCase(), kind]),
+  );
+  const knownKinds = knownUserKinds(userKinds);
   const segments: CommentBodySegment[] = [];
   const tokenRegex = /(^|[^a-zA-Z0-9_-])(@\S+|#[A-Za-z]{2}\d{4}\b)/g;
 
@@ -748,8 +822,19 @@ export function tokenizeCommentBody(
       candidate = afterAt.slice("takenote:".length);
     }
 
+    let typedKind: string | null = null;
+    const kindParts = candidate.split(":");
+    if (kindParts.length === 2) {
+      typedKind = kindParts[0].toLowerCase();
+      candidate = kindParts[1];
+    }
+
     const lowerCandidate = candidate.toLowerCase();
-    const isValid = USERNAME_REGEX.test(lowerCandidate);
+    const isValid =
+      kindParts.length <= 2 &&
+      USERNAME_REGEX.test(lowerCandidate) &&
+      (typedKind === null ||
+        (typedKind !== "takenote" && USERNAME_REGEX.test(typedKind)));
     if (!isValid) {
       const mention: ParsedCommentMention = {
         rawToken: core,
@@ -757,6 +842,9 @@ export function tokenizeCommentBody(
         username: candidate,
         exists: false,
         tooltip: `Invalid username "${core}": usernames may only contain letters, numbers, underscores (_), or dashes (-). Will not spawn a task.`,
+        typedKind: null,
+        kindMismatch: null,
+        kindSuggestions: [],
       };
       segments.push({
         type: "mention",
@@ -777,9 +865,28 @@ export function tokenizeCommentBody(
           : kind === "takenote"
             ? "spawn a non-blocking related task"
             : "spawn an urgent blocking subtask";
-      const tooltip = exists
+      const storedKind = exists
+        ? (kindsByUser.get(lowerCandidate) ?? DEFAULT_USER_KIND)
+        : null;
+      const kindMismatch =
+        typedKind !== null && storedKind !== null && storedKind !== typedKind
+          ? storedKind
+          : null;
+      const kindSuggestions =
+        typedKind !== null && !knownKinds.includes(typedKind)
+          ? suggestKinds(typedKind, knownKinds)
+          : [];
+      let tooltip = exists
         ? `Existing user @${lowerCandidate} in database — ${actionDesc}.`
         : `User @${lowerCandidate} does not exist in this database yet — saving will create @${lowerCandidate} and ${newUserAction}.`;
+      if (kindMismatch !== null) {
+        tooltip = `@${lowerCandidate} is a ${kindMismatch} user; "${typedKind}:" will be ignored.`;
+      } else if (typedKind !== null && !exists) {
+        tooltip += ` It will be created as a ${typedKind} user.`;
+      }
+      if (kindSuggestions.length > 0) {
+        tooltip += ` Did you mean ${kindSuggestions.map((k) => `"${k}"`).join(" or ")}?`;
+      }
       const mention: ParsedCommentMention = {
         rawToken:
           kind === "takenote"
@@ -789,6 +896,9 @@ export function tokenizeCommentBody(
         username: lowerCandidate,
         exists,
         tooltip,
+        typedKind,
+        kindMismatch,
+        kindSuggestions,
       };
       segments.push({
         type: "mention",
@@ -816,8 +926,9 @@ export function tokenizeCommentBody(
 export function parseCommentMentions(
   body: string,
   knownUsers: string[],
+  userKinds: Record<string, string> = {},
 ): ParsedCommentMention[] {
-  const segments = tokenizeCommentBody(body, knownUsers);
+  const segments = tokenizeCommentBody(body, knownUsers, "comment", userKinds);
   const seen = new Set<string>();
   const out: ParsedCommentMention[] = [];
   for (const seg of segments) {
@@ -963,8 +1074,8 @@ export async function getTaskDetailData(id: string): Promise<TaskFullDetail> {
 
 export async function createNewTask(
   payload: GuiCreateTaskPayload,
-): Promise<Task> {
-  return invoke<Task>("create_new_task", { payload });
+): Promise<TaskSaveOutcome> {
+  return invoke<TaskSaveOutcome>("create_new_task", { payload });
 }
 
 export interface FieldIssue {
@@ -983,8 +1094,8 @@ export async function validateNewTask(
 
 export async function updateExistingTask(
   payload: GuiUpdateTaskPayload,
-): Promise<Task> {
-  return invoke<Task>("update_existing_task", { payload });
+): Promise<TaskSaveOutcome> {
+  return invoke<TaskSaveOutcome>("update_existing_task", { payload });
 }
 
 export async function transitionStatus(

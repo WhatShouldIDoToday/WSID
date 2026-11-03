@@ -23,6 +23,9 @@
     getTaskDetailData,
     transitionStatus,
     updateExistingTask,
+    describeUserNotice,
+    withUserNotices,
+    type UserNotice,
     removeTask,
     addCommentNote,
     removeCommentNote,
@@ -58,6 +61,8 @@
     taskId: string;
     activeUser: string;
     knownUsers?: string[];
+    /** Account kind per user (`human` unless set); drives typed-mention hints. */
+    userKinds?: Record<string, string>;
     knownTags?: string[];
     knownProjects?: string[];
     onClose: () => void;
@@ -70,6 +75,7 @@
     taskId,
     activeUser,
     knownUsers = [],
+    userKinds = {},
     knownTags = [],
     knownProjects = [],
     onClose,
@@ -81,6 +87,14 @@
   let detail = $state<TaskFullDetail | null>(null);
   let loading = $state<boolean>(true);
   let errorMsg = $state<string | null>(null);
+  // Kind conflicts from typed user references (`@kind:user`) that need a visible, dismissible alert.
+  let userNoticeAlerts = $state<string[]>([]);
+
+  function setUserNoticeAlerts(notices: UserNotice[]) {
+    userNoticeAlerts = notices
+      .filter((n) => n.type === "kind_mismatch")
+      .map(describeUserNotice);
+  }
 
   // Inline edit state
   let editFormElement = $state<HTMLFormElement | null>(null);
@@ -128,7 +142,7 @@
   let pendingCommentDesc = $state<string>("");
 
   let commentMentionTokens = $derived.by(() =>
-    parseCommentMentions(commentBody, knownUsers),
+    parseCommentMentions(commentBody, knownUsers, userKinds),
   );
 
   let drawerElement = $state<HTMLElement | null>(null);
@@ -444,7 +458,7 @@
     const parsedDur = parseDurationInput(editEstimateInput);
 
     try {
-      await updateExistingTask({
+      const saved = await updateExistingTask({
         id: detail.task.id,
         title: editTitle,
         description: editDescription,
@@ -462,7 +476,13 @@
         reporter: editReporter,
       });
       editingTask = false;
-      announce(`Saved changes to task ${detail.task.id}`);
+      setUserNoticeAlerts(saved.user_notices);
+      announce(
+        withUserNotices(
+          `Saved changes to task ${detail.task.id}`,
+          saved.user_notices,
+        ),
+      );
       await refreshDetail(detail.task.id);
       onDataChanged();
     } catch (err) {
@@ -712,10 +732,14 @@
 
       const spawnedCount = outcome.spawned_tasks.length;
       const reusedCount = outcome.reused_tasks.length;
+      setUserNoticeAlerts(outcome.user_notices);
       announce(
-        `Posted note on ${detail.task.id}${
-          spawnedCount > 0 ? ` (${spawnedCount} subtask(s) spawned)` : ""
-        }${reusedCount > 0 ? ` (${reusedCount} open subtask(s) updated)` : ""}`,
+        withUserNotices(
+          `Posted note on ${detail.task.id}${
+            spawnedCount > 0 ? ` (${spawnedCount} subtask(s) spawned)` : ""
+          }${reusedCount > 0 ? ` (${reusedCount} open subtask(s) updated)` : ""}`,
+          outcome.user_notices,
+        ),
       );
       await refreshDetail(detail.task.id);
       onDataChanged();
@@ -822,6 +846,20 @@
         </div>
       </header>
 
+      {#each userNoticeAlerts as alert (alert)}
+        <div class="banner-alert" role="alert">
+          <span>{alert}</span>
+          <button
+            type="button"
+            class="btn-sm"
+            onclick={() =>
+              (userNoticeAlerts = userNoticeAlerts.filter((a) => a !== alert))}
+          >
+            Dismiss
+          </button>
+        </div>
+      {/each}
+
       {#if errorMsg}
         <div class="banner-alert" role="alert">
           <span>{errorMsg}</span>
@@ -893,6 +931,7 @@
               rows={4}
               bind:value={editDescription}
               {knownUsers}
+              {userKinds}
               mode="description"
             />
           </div>
@@ -1089,6 +1128,7 @@
           <RichTextDisplay
             body={detail.task.description}
             {knownUsers}
+            {userKinds}
             mode="description"
             {onSelectTask}
           />
@@ -1434,6 +1474,7 @@
                 <RichTextDisplay
                   body={note.body}
                   {knownUsers}
+                  {userKinds}
                   mode="comment"
                   {onSelectTask}
                   class="comment-note-body"
@@ -1481,6 +1522,7 @@
               rows={3}
               bind:value={commentBody}
               {knownUsers}
+              {userKinds}
               mode="comment"
               onPasteFiles={handleCommentPasteFiles}
               placeholder="Write a comment... Use @user for blocking subtasks, @takenote:user for non-blocking heads-up, or #AB1234 to link tasks. Paste images directly with Cmd/Ctrl+V."

@@ -16,6 +16,8 @@
   interface Props {
     knownTags: string[];
     knownUsers: string[];
+    /** Account kind per user (`human` unless set); drives typed-mention hints. */
+    userKinds?: Record<string, string>;
     knownProjects: string[];
     refreshTrigger: number;
     onSelectTask: (id: string) => void;
@@ -26,6 +28,7 @@
   let {
     knownTags,
     knownUsers,
+    userKinds = {},
     knownProjects,
     refreshTrigger,
     onSelectTask,

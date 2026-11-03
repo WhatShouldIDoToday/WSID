@@ -18,6 +18,7 @@
     STATUS_ORDER,
     RELATION_LABELS,
     createNewTask,
+    withUserNotices,
     validateNewTask,
     type FieldIssue,
     pickAttachmentFileDialog,
@@ -42,6 +43,8 @@
     activeUser: string;
     activeProject: string;
     knownUsers: string[];
+    /** Account kind per user (`human` unless set); drives typed-mention hints. */
+    userKinds?: Record<string, string>;
     knownTags: string[];
     knownProjects: string[];
     isDirty?: boolean;
@@ -53,6 +56,7 @@
     activeUser,
     activeProject,
     knownUsers,
+    userKinds = {},
     knownTags,
     knownProjects,
     isDirty = $bindable(false),
@@ -599,7 +603,7 @@
         }
       }
 
-      const created = await createNewTask({
+      const { task: created, user_notices: userNotices } = await createNewTask({
         title: title.trim(),
         description: description.trim() || null,
         status,
@@ -622,7 +626,12 @@
         })),
       });
 
-      announce(`Created task ${created.id}: ${created.title}`);
+      announce(
+        withUserNotices(
+          `Created task ${created.id}: ${created.title}.`,
+          userNotices,
+        ),
+      );
       resetForm();
       onCreated(created.id);
     } catch (err) {
@@ -704,6 +713,7 @@
           rows={4}
           bind:value={description}
           {knownUsers}
+          {userKinds}
           mode="description"
           onPasteFiles={handlePasteFiles}
           placeholder="Detailed acceptance criteria, notes, or context. Paste images directly with Cmd/Ctrl+V."
