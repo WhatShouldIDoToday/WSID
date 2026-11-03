@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
+use ratatui::layout::{Alignment, Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -52,6 +52,10 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp) {
 
     if app.about_modal_open {
         render_about_modal(frame, frame.area(), app);
+    }
+
+    if app.project_modal_open {
+        render_project_modal(frame, frame.area(), app);
     }
 
     if app.form_errors.is_some() {
@@ -108,7 +112,33 @@ fn render_header(frame: &mut Frame, area: Rect, app: &TuiApp) {
         )
         .divider(if app.accessible_mode { "  " } else { " │ " });
 
-    frame.render_widget(tabs, area);
+    if area.width < 70 {
+        frame.render_widget(tabs, area);
+        return;
+    }
+
+    // Keep the active project visible on every list view, not just after pressing P.
+    let [tabs_area, project_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(30)]).areas(area);
+    frame.render_widget(tabs, tabs_area);
+
+    let project = app.current_project_filter();
+    let indicator = Paragraph::new(Line::from(vec![
+        Span::styled("Project: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            project,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]))
+    .alignment(Alignment::Right)
+    .block(
+        Block::default()
+            .borders(panel_borders(Borders::BOTTOM, app.accessible_mode))
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(indicator, project_area);
 }
 
 fn render_focus_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
@@ -487,6 +517,10 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         .search_tag_filter
         .as_ref()
         .map_or_else(String::new, |t| format!(" | Tag: #{t}"));
+    let project_label = app
+        .search_project_filter
+        .as_ref()
+        .map_or_else(String::new, |p| format!(" | Project: {p}"));
     let sort_dir = if app.search_sort_asc { "ASC" } else { "DESC" };
 
     let query_prefix = " Search: ";
@@ -494,20 +528,22 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         format!("{}{} ", query_prefix, app.search_query)
     } else if app.search_query.is_empty() {
         format!(
-            " Search: <All tasks> | Status: {} | Assignee: {}{} | Sort: {} ({})",
+            " Search: <All tasks> | Status: {} | Assignee: {}{}{} | Column: {} ({})",
             status_filter_label,
             mine_label,
             tag_label,
+            project_label,
             app.search_sort_col.label(),
             sort_dir
         )
     } else {
         format!(
-            " Search: '{}' | Status: {} | Assignee: {}{} | Sort: {} ({})",
+            " Search: '{}' | Status: {} | Assignee: {}{}{} | Column: {} ({})",
             app.search_query,
             status_filter_label,
             mine_label,
             tag_label,
+            project_label,
             app.search_sort_col.label(),
             sort_dir
         )
@@ -648,14 +684,15 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
 
     let widths = [
         Constraint::Length(8),
+        Constraint::Fill(2),
+        Constraint::Length(12),
+        Constraint::Length(10),
+        Constraint::Length(12),
+        Constraint::Length(5),
+        Constraint::Length(5),
+        Constraint::Length(11),
+        Constraint::Length(11),
         Constraint::Fill(1),
-        Constraint::Length(12),
-        Constraint::Length(12),
-        Constraint::Length(5),
-        Constraint::Length(5),
-        Constraint::Length(11),
-        Constraint::Length(11),
-        Constraint::Percentage(15),
     ];
 
     let table = Table::new(rows, widths)
@@ -875,16 +912,16 @@ fn looks_like_error(msg: &str) -> bool {
 fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
     let hints = match app.active_tab {
         ActiveTab::Focus => {
-            "[1-5] Views | [j/k] Select | [Enter] Inspect | [p] Preset | [s] Start | [d] Done | [x] Stuck | [b] Blocked | [U] User | [?] Help & Status | [q] Quit"
+            "[1-5] Views | [P] Project | [j/k] Select | [Enter] Inspect | [p] Preset | [s] Start | [d] Done | [x] Stuck | [b] Blocked | [U] User | [q] Quit"
         }
         ActiveTab::Kanban => {
-            "[1-5] Views | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [U] User | [Enter] Inspect | [q] Quit"
+            "[1-5] Views | [P] Project | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [U] User | [Enter] Inspect | [q] Quit"
         }
         ActiveTab::Eisenhower => {
             "[1-5] Views | [P] Project | [h/l/Tab/S-Tab] Quadrant | [j/k] Task | [+/-] Imp | [</>] Urgency | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
         }
         ActiveTab::Database => {
-            "[1-5] Views | [/] Search | [f] Status | [t] Tag | [u] User | [m] Mine | [o/O] Sort | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [q] Quit"
+            "[1-5] Views | [P] Project | [/] Search/filter column | [f] Status | [t] Tag | [u] User | [m] Mine | [o] Column | [O] Asc/Desc | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [q] Quit"
         }
         ActiveTab::DataEntry => app.entry_form.hint(),
     };
@@ -1093,7 +1130,33 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     let inner_area = modal_block.inner(popup_area);
     frame.render_widget(modal_block, popup_area);
 
-    let [body_area, prompt_area] = Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(inner_area);
+    // `@` / `#` completions plus resolved-token preview for the comment prompt.
+    let suggestion_lines: Vec<Line> = if app.detail_prompt_kind == DetailPromptKind::AddComment {
+        let mut lines: Vec<Line> = Vec::new();
+        for (idx, suggestion) in app.detail_suggestions.iter().enumerate() {
+            let selected = idx == app.detail_suggestion_index;
+            let style = if selected { Style::default().fg(Color::Black).bg(Color::Cyan) } else { Style::default().fg(Color::Gray) };
+            let marker = if selected { "▶ " } else { "  " };
+            lines.push(Line::from(Span::styled(format!("{marker}{}  ({})", suggestion.label, suggestion.hint), style)));
+        }
+        if !app.detail_comment_preview.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("  ↳ {}", app.detail_comment_preview.join("  ·  ")),
+                Style::default().fg(Color::Green),
+            )));
+        }
+        lines
+    } else {
+        Vec::new()
+    };
+    let suggestion_rows = suggestion_lines.len() as u16;
+
+    let [body_area, suggestion_area, prompt_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(suggestion_rows), Constraint::Length(3)]).areas(inner_area);
+
+    if suggestion_rows > 0 {
+        frame.render_widget(Paragraph::new(suggestion_lines), suggestion_area);
+    }
 
     let max_scroll = (lines.len() as u16).saturating_sub(body_area.height);
     detail.scroll = detail.scroll.min(max_scroll);
@@ -1215,6 +1278,71 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .min(prompt_inner.right().saturating_sub(1));
         frame.set_cursor_position(Position::new(cursor_x, prompt_inner.y));
     }
+}
+
+fn render_project_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    let popup_area = centered_rect(56, 64, area);
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Project Filter ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(panel_borders(Borders::ALL, app.accessible_mode))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+    if inner.height < 3 || inner.width < 8 {
+        return;
+    }
+
+    let [input_area, list_area] = Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(inner);
+
+    let input = Paragraph::new(Line::from(format!(" Search: {}_", app.project_modal_query)).style(Style::default().fg(Color::Yellow)))
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+    frame.render_widget(input, input_area);
+    let cursor_x = input_area
+        .x
+        .saturating_add((" Search: ".len() + app.project_modal_query.chars().count()) as u16)
+        .min(input_area.right().saturating_sub(1));
+    frame.set_cursor_position(Position::new(cursor_x, input_area.y));
+
+    let options = app.filtered_project_options();
+    let current = app.current_project_filter();
+    let lines: Vec<Line> = if options.is_empty() {
+        vec![Line::from(Span::styled("  No matching projects", Style::default().fg(Color::DarkGray)))]
+    } else {
+        options
+            .iter()
+            .enumerate()
+            .map(|(idx, (value, label))| {
+                let selected = idx == app.project_modal_selected;
+                let active = *value == current;
+                let marker = if selected { "▶ " } else { "  " };
+                let check = if active { "✓ " } else { "  " };
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else if active {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default()
+                };
+                Line::from(Span::styled(format!("{marker}{check}{label}"), style))
+            })
+            .collect()
+    };
+    frame.render_widget(Paragraph::new(lines), list_area);
 }
 
 fn render_about_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {

@@ -16,6 +16,7 @@ use wsid_core::{
 /// How long the active field must be idle before it is validated.
 pub const VALIDATION_DEBOUNCE: Duration = Duration::from_millis(400);
 
+const DESCRIPTION: usize = 1;
 const DUE_DATE: usize = 2;
 const SGDB_DATE: usize = 3;
 const TIME_ESTIMATE: usize = 4;
@@ -301,6 +302,54 @@ fn file_name(path: &str) -> String {
         .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
+/// One `@user` / `@takenote:user` / `#ID` completion offered while typing a comment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentSuggestion {
+    /// Text that replaces the trailing token (includes its `@` / `#` sigil).
+    pub insert: String,
+    /// Primary text shown in the suggestion list.
+    pub label: String,
+    /// Secondary hint: task status, "known user", or "new user".
+    pub hint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentTokenKind {
+    Mention,
+    TakeNote,
+    TaskRef,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TrailingCommentToken<'a> {
+    pub raw: &'a str,
+    pub query: &'a str,
+    pub kind: CommentTokenKind,
+}
+
+fn is_comment_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '@' || c == '#' || c == ':'
+}
+
+/// Returns the incomplete `@…`, `@takenote:…`, or `#…` token at the end of `input`.
+pub fn trailing_comment_token(input: &str) -> Option<TrailingCommentToken<'_>> {
+    let start = input
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_comment_token_char(*c))
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let raw = &input[start..];
+    if let Some(rest) = raw.strip_prefix('#') {
+        return Some(TrailingCommentToken { raw, query: rest, kind: CommentTokenKind::TaskRef });
+    }
+    let lower = raw.to_ascii_lowercase();
+    if lower.starts_with("@takenote:") {
+        return Some(TrailingCommentToken { raw, query: &raw["@takenote:".len()..], kind: CommentTokenKind::TakeNote });
+    }
+    raw.strip_prefix('@')
+        .map(|rest| TrailingCommentToken { raw, query: rest, kind: CommentTokenKind::Mention })
+}
+
 /// What accepting a dropdown row does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Choice {
@@ -310,6 +359,8 @@ pub enum Choice {
     Target(String),
     /// Replaces the input text (a known user or a path; paths ending in `/` keep the dropdown open).
     Text(String),
+    /// Completes the trailing `@…` / `#…` token in place.
+    Token(String),
     /// A committed list item in the manage dropdown.
     Item(usize),
 }
@@ -513,6 +564,7 @@ impl DataEntryForm {
 
     pub fn refresh_dropdown(&mut self, db: &Database, user: &str) {
         self.dropdown = match self.active_index {
+            DESCRIPTION => self.comment_dropdown(db, user),
             RELATIONS => self.relation_dropdown(db),
             ATTACHMENTS if self.pending_attachment.is_none() => self.path_dropdown(),
             12..=14 => {
@@ -528,6 +580,41 @@ impl DataEntryForm {
             }
             _ => None,
         };
+    }
+
+    /// In-place `@user` / `@takenote:user` / `#ID` completion for the description field.
+    fn comment_dropdown(&self, db: &Database, user: &str) -> Option<Dropdown> {
+        let token = trailing_comment_token(&self.fields[DESCRIPTION])?;
+        let mut items: Vec<(String, Choice)> = Vec::new();
+        match token.kind {
+            CommentTokenKind::TaskRef => {
+                if token.query.trim().is_empty() {
+                    return None;
+                }
+                for task in search_relation_targets(db, token.query, MAX_DROPDOWN_ROWS).unwrap_or_default() {
+                    items.push((format!("#{}  {}", task.id, task.title), Choice::Token(format!("#{}", task.id))));
+                }
+            }
+            kind => {
+                let scope = if kind == CommentTokenKind::TakeNote { "@takenote:" } else { "@" };
+                for name in suggest_users(db, token.query, &[user])
+                    .unwrap_or_default()
+                    .into_iter()
+                    .take(MAX_DROPDOWN_ROWS)
+                {
+                    items.push((format!("{scope}{name}"), Choice::Token(format!("{scope}{name}"))));
+                }
+                let typed = token.query.trim();
+                if !typed.is_empty()
+                    && !items
+                        .iter()
+                        .any(|(label, _)| label.eq_ignore_ascii_case(&format!("{scope}{typed}")))
+                {
+                    items.push((format!("{scope}{typed}  (new user)"), Choice::Token(format!("{scope}{typed}"))));
+                }
+            }
+        }
+        Dropdown::new(items, false)
     }
 
     fn relation_dropdown(&self, db: &Database) -> Option<Dropdown> {
@@ -732,6 +819,15 @@ impl DataEntryForm {
                 } else if (12..=14).contains(&idx) {
                     self.refresh_notes(db, user);
                 }
+            }
+            Choice::Token(replacement) => {
+                if let Some(keep) = trailing_comment_token(&self.fields[idx]).map(|t| self.fields[idx].len() - t.raw.len()) {
+                    self.fields[idx].truncate(keep);
+                }
+                self.fields[idx].push_str(&replacement);
+                self.fields[idx].push(' ');
+                self.errors[idx] = None;
+                self.refresh_dropdown(db, user);
             }
             Choice::Item(_) => {}
         }
@@ -1092,5 +1188,48 @@ mod tests {
 
         form.set_active_index(&db, "alice", 5);
         assert_eq!(form.fields[4], "3h 20m");
+    }
+
+    #[test]
+    fn detects_trailing_comment_tokens_at_word_boundaries() {
+        let mention = trailing_comment_token("please review @bo").expect("mention token");
+        assert_eq!((mention.raw, mention.query, mention.kind), ("@bo", "bo", CommentTokenKind::Mention));
+
+        let takenote = trailing_comment_token("ping @takenote:ali").expect("takenote token");
+        assert_eq!(takenote.query, "ali");
+        assert_eq!(takenote.kind, CommentTokenKind::TakeNote);
+
+        let reference = trailing_comment_token("see #YW43").expect("task token");
+        assert_eq!((reference.raw, reference.query, reference.kind), ("#YW43", "YW43", CommentTokenKind::TaskRef));
+
+        // A finished token followed by a space is not being typed any more.
+        assert!(trailing_comment_token("@alice ").is_none());
+        // Plain words and mid-sentence sigils that started a new word are not tokens.
+        assert!(trailing_comment_token("hello world").is_none());
+        assert!(trailing_comment_token("a#b").is_none());
+    }
+
+    #[test]
+    fn description_dropdown_completes_user_and_task_tokens_in_place() {
+        let mut db = Database::open_in_memory().unwrap();
+        wsid_core::create_task(&mut db, wsid_core::CreateTaskInput { title: "Ship release".to_string(), ..Default::default() }, "alice")
+            .unwrap();
+        let mut form = DataEntryForm::new("alice");
+        form.set_active_index(&db, "alice", DESCRIPTION);
+        form.fields[DESCRIPTION] = "please review @bo".to_string();
+        form.refresh_dropdown(&db, "alice");
+        let dd = form.dropdown.as_ref().expect("user suggestions");
+        assert!(dd.labels.iter().any(|l| l.starts_with("@bo")));
+        form.accept_choice(&db, "alice", Choice::Token("@bob".to_string()));
+        assert_eq!(form.fields[DESCRIPTION], "please review @bob ");
+
+        form.fields[DESCRIPTION] = "see #ship".to_string();
+        form.refresh_dropdown(&db, "alice");
+        let dd = form.dropdown.as_ref().expect("task suggestions");
+        assert!(
+            dd.labels
+                .iter()
+                .any(|l| l.starts_with('#') && l.contains("Ship release"))
+        );
     }
 }

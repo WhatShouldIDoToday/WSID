@@ -10,13 +10,13 @@ use wsid_core::{
     attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft, delete_task,
     delete_task_note, get_attachment, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks,
     get_parallel_peers, get_related_tasks, get_task, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user,
-    open_file_in_os, register_user, remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status,
-    unblock_or_dismiss_subtask, update_attachment_description, update_task,
+    open_file_in_os, parse_note_tokens, register_user, remove_attachment, save_clipboard_attachment, search_relation_targets, search_tasks,
+    suggest_users, transition_task_status, unblock_or_dismiss_subtask, update_attachment_description, update_task,
 };
 
 use crate::cli_runner::read_system_clipboard_attachment;
-use crate::tui::form;
 pub use crate::tui::form::DataEntryForm;
+use crate::tui::form::{self, CommentSuggestion, CommentTokenKind, trailing_comment_token};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
@@ -66,18 +66,36 @@ pub enum DatabaseSortColumn {
 }
 
 impl DatabaseSortColumn {
+    /// Cycles in the same left-to-right order as the results table, so `o`
+    /// always moves to the next visible column.
     pub const fn next(self) -> Self {
         match self {
             Self::Relevance => Self::Id,
             Self::Id => Self::Title,
             Self::Title => Self::Status,
             Self::Status => Self::Project,
-            Self::Project => Self::DueDate,
-            Self::DueDate => Self::SgdbDate,
-            Self::SgdbDate => Self::Importance,
+            Self::Project => Self::Assignee,
+            Self::Assignee => Self::Importance,
             Self::Importance => Self::Difficulty,
-            Self::Difficulty => Self::Assignee,
-            Self::Assignee => Self::Relevance,
+            Self::Difficulty => Self::SgdbDate,
+            Self::SgdbDate => Self::DueDate,
+            Self::DueDate => Self::Relevance,
+        }
+    }
+
+    /// Filter-token field name used when `/` prefills from the highlighted column.
+    pub const fn filter_field(self) -> Option<&'static str> {
+        match self {
+            Self::Relevance => None,
+            Self::Id => Some("id"),
+            Self::Title => Some("title"),
+            Self::Status => Some("status"),
+            Self::Project => Some("project"),
+            Self::Assignee => Some("assignee"),
+            Self::Importance => Some("imp"),
+            Self::Difficulty => Some("diff"),
+            Self::SgdbDate => Some("sgdb"),
+            Self::DueDate => Some("due"),
         }
     }
 
@@ -133,6 +151,26 @@ pub enum DetailPromptKind {
     ConfirmDeleteNote,
 }
 
+/// Modifiers that turn a keystroke into a shortcut or a terminal/OS action
+/// (`Ctrl+V` paste, `Alt+F`, `Cmd+K`, ...) rather than text.
+const SHORTCUT_MODIFIERS: KeyModifiers = KeyModifiers::CONTROL
+    .union(KeyModifiers::ALT)
+    .union(KeyModifiers::SUPER)
+    .union(KeyModifiers::HYPER)
+    .union(KeyModifiers::META);
+
+/// True when the event is a printable character that may be inserted into a text
+/// field: unmodified, or Shift-only.
+fn is_text_input(key: &KeyEvent) -> bool {
+    !key.modifiers.intersects(SHORTCUT_MODIFIERS) && matches!(key.code, KeyCode::Char(ch) if !ch.is_control())
+}
+
+/// True when a `Char` event carries shortcut modifiers, so it must neither be
+/// typed nor trigger a single-letter action.
+fn is_modified_char(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char(_)) && !is_text_input(key)
+}
+
 pub struct TuiApp {
     pub db: Database,
     pub db_path: PathBuf,
@@ -171,6 +209,11 @@ pub struct TuiApp {
     /// Project shown by the Eisenhower matrix (`all` = every project).
     pub eisenhower_project: String,
 
+    // Project filter modal (shared by Focus, Kanban, Eisenhower, and Database)
+    pub project_modal_open: bool,
+    pub project_modal_query: String,
+    pub project_modal_selected: usize,
+
     // Database Search View state
     pub search_query: String,
     pub search_editing: bool,
@@ -198,6 +241,13 @@ pub struct TuiApp {
     pub detail_modal: Option<TaskDetailSnapshot>,
     pub detail_prompt_kind: DetailPromptKind,
     pub detail_prompt_input: String,
+    /// `@` / `#` completions for the active comment prompt.
+    pub detail_suggestions: Vec<CommentSuggestion>,
+    pub detail_suggestion_index: usize,
+    /// Set once the user navigates the list, so Enter completes instead of submitting.
+    pub detail_suggestion_navigated: bool,
+    /// Resolved mentions / task links shown under the suggestion list.
+    pub detail_comment_preview: Vec<String>,
     pub detail_note_cursor: usize,
     pub attachment_focused: bool,
     pub attachment_cursor: usize,
@@ -266,6 +316,9 @@ impl TuiApp {
             eisenhower_row: 0,
             eisenhower_states: std::array::from_fn(|_| ListState::default()),
             eisenhower_project: wsid_core::DEFAULT_PROJECT.to_string(),
+            project_modal_open: false,
+            project_modal_query: String::new(),
+            project_modal_selected: 0,
             search_query: String::new(),
             search_editing: false,
             search_status_filter: None,
@@ -286,6 +339,10 @@ impl TuiApp {
             detail_modal: None,
             detail_prompt_kind: DetailPromptKind::None,
             detail_prompt_input: String::new(),
+            detail_suggestions: Vec::new(),
+            detail_suggestion_index: 0,
+            detail_suggestion_navigated: false,
+            detail_comment_preview: Vec::new(),
             detail_note_cursor: 0,
             attachment_focused: false,
             attachment_cursor: 0,
@@ -456,6 +513,7 @@ impl TuiApp {
                 self.attachment_marked.clear();
                 self.detail_prompt_kind = DetailPromptKind::None;
                 self.detail_prompt_input.clear();
+                self.clear_comment_suggestions();
             }
             Err(err) => {
                 self.status_message = format!("Error loading task {task_id}: {err}");
@@ -487,6 +545,12 @@ impl TuiApp {
         // 0. If the About / Licenses modal is open, route keys to it
         if self.about_modal_open {
             self.handle_about_modal_key(key);
+            return;
+        }
+
+        // 0a. Project filter modal captures typing
+        if self.project_modal_open {
+            self.handle_project_modal_key(key);
             return;
         }
 
@@ -529,7 +593,12 @@ impl TuiApp {
             return;
         }
 
-        // 4. Global navigation keys across Focus, Kanban, Eisenhower, Database
+        // 4. Global navigation keys across Focus, Kanban, Eisenhower, Database.
+        // Modified characters belong to the terminal/OS, so they never fire
+        // single-letter shortcuts (e.g. Ctrl+A does not toggle accessible mode).
+        if is_modified_char(&key) {
+            return;
+        }
         match key.code {
             KeyCode::Char('q') => {
                 self.should_quit = true;
@@ -580,7 +649,7 @@ impl TuiApp {
                 return;
             }
             KeyCode::Char('P') => {
-                self.cycle_project_filter();
+                self.open_project_modal();
                 return;
             }
             KeyCode::Char('?') => {
@@ -793,37 +862,124 @@ impl TuiApp {
         filter.is_empty() || filter == wsid_core::ALL_PROJECTS || filter == project
     }
 
-    /// Cycles the project of the current view through its known projects (ending on `all`).
-    pub fn cycle_project_filter(&mut self) {
-        let mut projects = wsid_core::list_known_projects(&self.db).unwrap_or_else(|_| vec![wsid_core::DEFAULT_PROJECT.to_string()]);
-        projects.push(wsid_core::ALL_PROJECTS.to_string());
-        let current = match self.active_tab {
-            ActiveTab::Focus => &self.focus_project,
-            ActiveTab::Kanban => &self.kanban_project,
-            ActiveTab::Eisenhower => &self.eisenhower_project,
-            _ => return,
-        };
-        let idx = projects
+    /// Project filter currently applied by the active view (`all` = every project).
+    pub fn current_project_filter(&self) -> String {
+        match self.active_tab {
+            ActiveTab::Focus => self.focus_project.clone(),
+            ActiveTab::Kanban => self.kanban_project.clone(),
+            ActiveTab::Eisenhower => self.eisenhower_project.clone(),
+            ActiveTab::Database => self
+                .search_project_filter
+                .clone()
+                .unwrap_or_else(|| wsid_core::ALL_PROJECTS.to_string()),
+            ActiveTab::DataEntry => wsid_core::ALL_PROJECTS.to_string(),
+        }
+    }
+
+    /// Every project that can be filtered to, `all` first.
+    pub fn project_filter_options(&self) -> Vec<(String, String)> {
+        let mut options = vec![(wsid_core::ALL_PROJECTS.to_string(), format!("{} (every project)", wsid_core::ALL_PROJECTS))];
+        let mut projects = wsid_core::list_known_projects(&self.db).unwrap_or_default();
+        projects.sort();
+        projects.dedup();
+        for project in projects {
+            if project != wsid_core::ALL_PROJECTS {
+                options.push((project.clone(), project));
+            }
+        }
+        options
+    }
+
+    /// `project_filter_options` narrowed by the modal's live search text.
+    pub(crate) fn filtered_project_options(&self) -> Vec<(String, String)> {
+        let needle = self.project_modal_query.trim().to_ascii_lowercase();
+        self.project_filter_options()
+            .into_iter()
+            .filter(|(value, label)| {
+                needle.is_empty() || value.to_ascii_lowercase().contains(&needle) || label.to_ascii_lowercase().contains(&needle)
+            })
+            .collect()
+    }
+
+    fn open_project_modal(&mut self) {
+        self.project_modal_open = true;
+        self.project_modal_query.clear();
+        let current = self.current_project_filter();
+        let options = self.filtered_project_options();
+        self.project_modal_selected = options
             .iter()
-            .position(|p| p == current)
-            .map_or(0, |i| (i + 1) % projects.len());
-        let next = projects[idx].clone();
+            .position(|(value, _)| *value == current)
+            .unwrap_or(0);
+        self.status_message = "Project filter — type to search, Up/Down to move, Enter to apply, Esc to cancel".to_string();
+    }
+
+    fn apply_project_filter(&mut self, project: String) {
         match self.active_tab {
             ActiveTab::Focus => {
-                self.focus_project = next.clone();
+                self.focus_project = project.clone();
                 let _ = self.refresh_all();
             }
             ActiveTab::Kanban => {
-                self.kanban_project = next.clone();
+                self.kanban_project = project.clone();
                 self.clamp_kanban_selection();
             }
             ActiveTab::Eisenhower => {
-                self.eisenhower_project = next.clone();
+                self.eisenhower_project = project.clone();
                 self.clamp_eisenhower_selection();
+            }
+            ActiveTab::Database => {
+                self.search_project_filter = if project == wsid_core::ALL_PROJECTS { None } else { Some(project.clone()) };
+                let _ = self.refresh_search();
+            }
+            ActiveTab::DataEntry => {}
+        }
+        self.status_message = format!("Project filter: {project}");
+    }
+
+    fn handle_project_modal_key(&mut self, key: KeyEvent) {
+        if is_modified_char(&key) {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.project_modal_open = false;
+                self.status_message = "Cancelled project filter".to_string();
+            }
+            KeyCode::Enter => {
+                if let Some((project, _)) = self
+                    .filtered_project_options()
+                    .get(self.project_modal_selected)
+                    .cloned()
+                {
+                    self.project_modal_open = false;
+                    self.apply_project_filter(project);
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let len = self.filtered_project_options().len();
+                if len > 0 {
+                    self.project_modal_selected = (self.project_modal_selected + 1) % len;
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                let len = self.filtered_project_options().len();
+                if len > 0 {
+                    self.project_modal_selected = self
+                        .project_modal_selected
+                        .checked_sub(1)
+                        .unwrap_or(len - 1);
+                }
+            }
+            KeyCode::Backspace => {
+                self.project_modal_query.pop();
+                self.project_modal_selected = 0;
+            }
+            KeyCode::Char(ch) => {
+                self.project_modal_query.push(ch);
+                self.project_modal_selected = 0;
             }
             _ => {}
         }
-        self.status_message = format!("Project filter: {next}");
     }
 
     pub(crate) fn clamp_eisenhower_selection(&mut self) {
@@ -980,12 +1136,67 @@ impl TuiApp {
         }
     }
 
+    fn search_selected_task(&self) -> Option<&Task> {
+        self.search_hits
+            .get(self.search_selected)
+            .map(|hit| &hit.task)
+    }
+
+    /// Filter token for the highlighted column, prefilled into the search bar by `/`.
+    fn search_prefill_for_column(&self) -> String {
+        let Some(field) = self.search_sort_col.filter_field() else {
+            return String::new();
+        };
+        let value = self
+            .search_selected_task()
+            .and_then(|task| match self.search_sort_col {
+                DatabaseSortColumn::Id => Some(task.id.clone()),
+                DatabaseSortColumn::Title => Some(task.title.clone()),
+                DatabaseSortColumn::Status => Some(task.status.as_str().to_string()),
+                DatabaseSortColumn::Project => Some(task.project.clone()),
+                DatabaseSortColumn::Assignee => Some(task.assignee.clone()),
+                DatabaseSortColumn::Importance => Some(task.importance.to_string()),
+                DatabaseSortColumn::Difficulty => Some(task.difficulty.to_string()),
+                DatabaseSortColumn::SgdbDate => task
+                    .sgdb_date
+                    .as_deref()
+                    .map(wsid_core::format_deadline_date),
+                DatabaseSortColumn::DueDate => task
+                    .due_date
+                    .as_deref()
+                    .map(wsid_core::format_deadline_date),
+                DatabaseSortColumn::Relevance => None,
+            });
+        match value {
+            Some(value) if !value.trim().is_empty() => {
+                let quoted = if value.chars().any(char::is_whitespace) { format!("\"{value}\"") } else { value };
+                format!("{field}=={quoted}")
+            }
+            // No value in that cell: leave the operator ready for typing (`due>=`).
+            _ => format!("{field}=="),
+        }
+    }
+
     fn handle_database_key(&mut self, key: KeyEvent) {
         let len = self.search_hits.len();
         match key.code {
             KeyCode::Char('/') => {
                 self.search_editing = true;
-                self.status_message = "Editing search query — type to filter, Enter or Esc to finish".to_string();
+                let prefill = self.search_prefill_for_column();
+                if prefill.is_empty() {
+                    self.status_message =
+                        "Editing search — words match fuzzily; try assignee==davidb, imp>=3, diff<=2, due<=2026-11-03, est<=2h. Enter/Esc to finish"
+                            .to_string();
+                } else {
+                    if self.search_query.trim().is_empty() {
+                        self.search_query = prefill.clone();
+                    } else {
+                        self.search_query.push(' ');
+                        self.search_query.push_str(&prefill);
+                    }
+                    let _ = self.refresh_search();
+                    self.status_message = format!("Filtering by '{prefill}' — swap == for >=/<=/!= to compare, Enter or Esc to finish");
+                }
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if len > 0 {
@@ -1076,6 +1287,9 @@ impl TuiApp {
     }
 
     fn handle_search_input_key(&mut self, key: KeyEvent) {
+        if is_modified_char(&key) {
+            return;
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Enter => {
                 self.search_editing = false;
@@ -1096,6 +1310,9 @@ impl TuiApp {
     fn handle_data_entry_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
             self.submit_data_entry_form();
+            return;
+        }
+        if is_modified_char(&key) {
             return;
         }
 
@@ -1166,6 +1383,7 @@ impl TuiApp {
         self.detail_modal = None;
         self.detail_prompt_kind = DetailPromptKind::None;
         self.detail_prompt_input.clear();
+        self.clear_comment_suggestions();
         self.active_tab = ActiveTab::DataEntry;
         self.status_message = format!("Editing [{}] {} — Ctrl+S to save, Esc to cancel", task.id, task.title);
     }
@@ -1280,21 +1498,56 @@ impl TuiApp {
     }
 
     fn handle_detail_modal_key(&mut self, key: KeyEvent) {
+        if is_modified_char(&key) {
+            return;
+        }
         if self.detail_prompt_kind != DetailPromptKind::None {
+            let suggesting = self.detail_prompt_kind == DetailPromptKind::AddComment && !self.detail_suggestions.is_empty();
             match key.code {
                 KeyCode::Esc => {
-                    self.detail_prompt_kind = DetailPromptKind::None;
-                    self.detail_prompt_input.clear();
-                    self.status_message = "Cancelled prompt".to_string();
+                    if suggesting {
+                        self.clear_comment_suggestions();
+                        self.status_message = "Dismissed suggestions".to_string();
+                    } else {
+                        self.detail_prompt_kind = DetailPromptKind::None;
+                        self.detail_prompt_input.clear();
+                        self.clear_comment_suggestions();
+                        self.status_message = "Cancelled prompt".to_string();
+                    }
                 }
                 KeyCode::Backspace => {
                     self.detail_prompt_input.pop();
+                    self.refresh_comment_suggestions();
+                }
+                KeyCode::Tab => {
+                    if suggesting {
+                        self.accept_comment_suggestion();
+                    }
+                }
+                KeyCode::Up => {
+                    if suggesting {
+                        self.detail_suggestion_index = self.detail_suggestion_index.saturating_sub(1);
+                        self.detail_suggestion_navigated = true;
+                        self.announce_highlighted_suggestion();
+                    }
+                }
+                KeyCode::Down => {
+                    if suggesting {
+                        self.detail_suggestion_index = (self.detail_suggestion_index + 1).min(self.detail_suggestions.len() - 1);
+                        self.detail_suggestion_navigated = true;
+                        self.announce_highlighted_suggestion();
+                    }
                 }
                 KeyCode::Enter => {
-                    self.submit_detail_prompt();
+                    if suggesting && self.detail_suggestion_navigated {
+                        self.accept_comment_suggestion();
+                    } else {
+                        self.submit_detail_prompt();
+                    }
                 }
                 KeyCode::Char(ch) => {
                     self.detail_prompt_input.push(ch);
+                    self.refresh_comment_suggestions();
                 }
                 _ => {}
             }
@@ -1399,7 +1652,10 @@ impl TuiApp {
             KeyCode::Char('c') => {
                 self.detail_prompt_kind = DetailPromptKind::AddComment;
                 self.detail_prompt_input.clear();
-                self.status_message = "Add comment (supports @user, @takenote:user, #AB1234) — Enter to post, Esc to cancel".to_string();
+                self.clear_comment_suggestions();
+                self.status_message =
+                    "Add comment (supports @user, @takenote:user, #AB1234) — Tab completes suggestions, Enter to post, Esc to cancel"
+                        .to_string();
             }
             KeyCode::Char('f') => {
                 self.detail_prompt_kind = DetailPromptKind::AttachFile;
@@ -1514,6 +1770,143 @@ impl TuiApp {
         }
     }
 
+    /// Recomputes `@user` / `@takenote:user` / `#ID` completions and the resolved-token
+    /// preview for the active comment prompt. Safe to call on every keystroke.
+    pub fn refresh_comment_suggestions(&mut self) {
+        self.detail_suggestions.clear();
+        self.detail_suggestion_index = 0;
+        self.detail_suggestion_navigated = false;
+        self.detail_comment_preview.clear();
+        if self.detail_prompt_kind != DetailPromptKind::AddComment {
+            return;
+        }
+
+        let input = self.detail_prompt_input.clone();
+        let trailing = trailing_comment_token(&input);
+        // Preview only completed tokens: the trailing token is still being typed.
+        let completed = match trailing {
+            Some(token) => &input[..input.len() - token.raw.len()],
+            None => input.as_str(),
+        };
+        self.detail_comment_preview = self.describe_comment_tokens(completed);
+
+        let Some(token) = trailing else {
+            return;
+        };
+        if token.kind == CommentTokenKind::TaskRef {
+            let excluded = self.detail_modal.as_ref().map(|d| d.task.id.clone());
+            let mut tasks = if token.query.trim().is_empty() {
+                list_tasks(&self.db).unwrap_or_default()
+            } else {
+                search_relation_targets(&self.db, token.query, 6).unwrap_or_default()
+            };
+            if let Some(excluded) = excluded {
+                tasks.retain(|t| t.id != excluded);
+            }
+            for task in tasks.into_iter().take(6) {
+                self.detail_suggestions.push(CommentSuggestion {
+                    insert: format!("#{}", task.id),
+                    label: format!("#{} — {}", task.id, task.title),
+                    hint: task.status.to_string(),
+                });
+            }
+            return;
+        }
+
+        let scope = match token.kind {
+            CommentTokenKind::TakeNote => "@takenote:",
+            _ => "@",
+        };
+        let users = suggest_users(&self.db, token.query, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
+        for user in users.into_iter().take(6) {
+            self.detail_suggestions.push(CommentSuggestion {
+                insert: format!("{scope}{user}"),
+                label: format!("{scope}{user}"),
+                hint: "known user".to_string(),
+            });
+        }
+        let typed = token.query.trim();
+        if !typed.is_empty()
+            && !self
+                .detail_suggestions
+                .iter()
+                .any(|s| s.label.eq_ignore_ascii_case(&format!("{scope}{typed}")))
+        {
+            self.detail_suggestions.push(CommentSuggestion {
+                insert: format!("{scope}{typed}"),
+                label: format!("{scope}{typed}"),
+                hint: "new user".to_string(),
+            });
+        }
+    }
+
+    /// Human-readable resolution of mentions and task links already in the comment.
+    fn describe_comment_tokens(&self, body: &str) -> Vec<String> {
+        let tokens = parse_note_tokens(body);
+        let mut preview = Vec::new();
+        let known = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()])
+            .unwrap_or_default()
+            .into_iter()
+            .map(|u| u.to_ascii_lowercase())
+            .collect::<BTreeSet<_>>();
+        for user in tokens.blocking_mentions {
+            preview.push(if known.contains(&user.to_ascii_lowercase()) {
+                format!("@{user} → blocking subtask")
+            } else {
+                format!("@{user} → new user (blocking subtask)")
+            });
+        }
+        for user in tokens.takenote_mentions {
+            preview.push(format!("@takenote:{user} → non-blocking note"));
+        }
+        for id in tokens.task_references {
+            match get_task(&self.db, &id) {
+                Ok(task) => preview.push(format!("#{id} → {} ({})", task.title, task.status)),
+                Err(_) => preview.push(format!("#{id} → unknown task")),
+            }
+        }
+        preview
+    }
+
+    /// Completes the highlighted suggestion and leaves the cursor after a trailing space.
+    pub fn accept_comment_suggestion(&mut self) {
+        let Some(suggestion) = self
+            .detail_suggestions
+            .get(self.detail_suggestion_index)
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(token) = trailing_comment_token(&self.detail_prompt_input) {
+            let keep = self.detail_prompt_input.len() - token.raw.len();
+            self.detail_prompt_input.truncate(keep);
+        }
+        self.detail_prompt_input.push_str(&suggestion.insert);
+        self.detail_prompt_input.push(' ');
+        self.refresh_comment_suggestions();
+        self.status_message = format!("Inserted {} (Tab to complete, Enter to post)", suggestion.insert);
+    }
+
+    /// Announces the highlighted completion (the accessible-mode narration for the list).
+    fn announce_highlighted_suggestion(&mut self) {
+        if let Some(suggestion) = self.detail_suggestions.get(self.detail_suggestion_index) {
+            self.status_message = format!(
+                "Suggestion {}/{}: {} ({}) — Tab to complete",
+                self.detail_suggestion_index + 1,
+                self.detail_suggestions.len(),
+                suggestion.label,
+                suggestion.hint
+            );
+        }
+    }
+
+    fn clear_comment_suggestions(&mut self) {
+        self.detail_suggestions.clear();
+        self.detail_suggestion_index = 0;
+        self.detail_suggestion_navigated = false;
+        self.detail_comment_preview.clear();
+    }
+
     fn submit_detail_prompt(&mut self) {
         let Some(snapshot) = self.detail_modal.clone() else {
             return;
@@ -1522,6 +1915,7 @@ impl TuiApp {
         let kind = self.detail_prompt_kind.clone();
         self.detail_prompt_kind = DetailPromptKind::None;
         self.detail_prompt_input.clear();
+        self.clear_comment_suggestions();
 
         match kind {
             DetailPromptKind::None => {}
@@ -1666,6 +2060,9 @@ impl TuiApp {
     }
 
     fn handle_user_input_key(&mut self, key: KeyEvent) {
+        if is_modified_char(&key) {
+            return;
+        }
         match key.code {
             KeyCode::Esc => {
                 self.user_switching = false;
@@ -1766,6 +2163,9 @@ impl TuiApp {
     }
 
     fn handle_bulk_input_key(&mut self, key: KeyEvent) {
+        if is_modified_char(&key) {
+            return;
+        }
         match key.code {
             KeyCode::Esc => {
                 self.bulk_editing = false;
@@ -1878,5 +2278,79 @@ impl TuiApp {
                 self.status_message = format!("Status transition blocked: {err}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn modified_characters_are_never_text_or_shortcuts() {
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
+            KeyModifiers::SUPER,
+            KeyModifiers::HYPER,
+            KeyModifiers::META,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ] {
+            let event = key(KeyCode::Char('v'), modifiers);
+            assert!(!is_text_input(&event), "{modifiers:?}+v must not be typed");
+            assert!(is_modified_char(&event), "{modifiers:?}+v must not trigger a shortcut");
+        }
+    }
+
+    #[test]
+    fn plain_and_shifted_characters_are_text_input() {
+        for event in [key(KeyCode::Char('v'), KeyModifiers::NONE), key(KeyCode::Char('V'), KeyModifiers::SHIFT)] {
+            assert!(is_text_input(&event));
+            assert!(!is_modified_char(&event));
+        }
+    }
+
+    #[test]
+    fn control_codepoints_are_not_text_input() {
+        let event = key(KeyCode::Char('\u{8}'), KeyModifiers::NONE);
+        assert!(!is_text_input(&event));
+        assert!(is_modified_char(&event));
+    }
+
+    #[test]
+    fn non_character_keys_are_neither_text_nor_modified_chars() {
+        for code in [KeyCode::Enter, KeyCode::Esc, KeyCode::Backspace, KeyCode::Up] {
+            let event = key(code, KeyModifiers::NONE);
+            assert!(!is_text_input(&event));
+            assert!(!is_modified_char(&event));
+        }
+    }
+
+    #[test]
+    fn database_sort_columns_cycle_in_table_order() {
+        let mut column = DatabaseSortColumn::Relevance;
+        let mut seen = vec![column];
+        for _ in 0..10 {
+            column = column.next();
+            seen.push(column);
+        }
+        assert_eq!(
+            seen[1..10],
+            [
+                DatabaseSortColumn::Id,
+                DatabaseSortColumn::Title,
+                DatabaseSortColumn::Status,
+                DatabaseSortColumn::Project,
+                DatabaseSortColumn::Assignee,
+                DatabaseSortColumn::Importance,
+                DatabaseSortColumn::Difficulty,
+                DatabaseSortColumn::SgdbDate,
+                DatabaseSortColumn::DueDate,
+            ]
+        );
+        assert_eq!(seen[10], DatabaseSortColumn::Relevance);
     }
 }
