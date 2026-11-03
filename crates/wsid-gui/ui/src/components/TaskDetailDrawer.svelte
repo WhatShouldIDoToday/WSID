@@ -1047,6 +1047,7 @@
 
         <AttachmentGallery
           attachments={detail.task.attachments}
+          editable={editingTask}
           onChanged={() => {
             if (detail) void refreshDetail(detail.task.id);
             onDataChanged();
@@ -1054,44 +1055,46 @@
           {announce}
         />
 
-        <div
-          bind:this={taskDropzoneEl}
-          class={`dropzone ${isDraggingTaskFile ? "dragging" : ""}`}
-          style="margin-top: 0.75rem;"
-          role="region"
-          aria-label="Attach files to task by drag-and-drop, clipboard paste, or file picker"
-          onpaste={(e) => {
-            if (e.clipboardData?.files?.length) {
-              void handleTaskPasteFiles(e.clipboardData.files);
-            }
-          }}
-        >
-          <div class="form-grid" style="align-items: end; text-align: left;">
-            <div class="form-field">
-              <label for="task-att-desc">
-                Optional Alt Text / Description for New Attachment
-              </label>
-              <input
-                id="task-att-desc"
-                type="text"
-                bind:value={newTaskAttachmentDesc}
-                placeholder="Defaults to filename if left blank"
-              />
-            </div>
-            <div class="actions-row">
-              <button
-                type="button"
-                class="btn-sm"
-                onclick={handlePickTaskAttachment}
-              >
-                Choose File from Disk...
-              </button>
-              <span class="field-hint">
-                Or drag-and-drop / paste (Cmd/Ctrl+V) an image here
-              </span>
+        {#if editingTask}
+          <div
+            bind:this={taskDropzoneEl}
+            class={`dropzone ${isDraggingTaskFile ? "dragging" : ""}`}
+            style="margin-top: 0.75rem;"
+            role="region"
+            aria-label="Attach files to task by drag-and-drop, clipboard paste, or file picker"
+            onpaste={(e) => {
+              if (e.clipboardData?.files?.length) {
+                void handleTaskPasteFiles(e.clipboardData.files);
+              }
+            }}
+          >
+            <div class="form-grid" style="align-items: end; text-align: left;">
+              <div class="form-field">
+                <label for="task-att-desc">
+                  Optional Alt Text / Description for New Attachment
+                </label>
+                <input
+                  id="task-att-desc"
+                  type="text"
+                  bind:value={newTaskAttachmentDesc}
+                  placeholder="Defaults to filename if left blank"
+                />
+              </div>
+              <div class="actions-row">
+                <button
+                  type="button"
+                  class="btn-sm"
+                  onclick={handlePickTaskAttachment}
+                >
+                  Choose File from Disk...
+                </button>
+                <span class="field-hint">
+                  Or drag-and-drop / paste (Cmd/Ctrl+V) a file here
+                </span>
+              </div>
             </div>
           </div>
-        </div>
+        {/if}
       </section>
 
       <!-- Task Relations & Blocker Cleanup -->
@@ -1348,6 +1351,7 @@
                 {#if note.attachments.length > 0}
                   <AttachmentGallery
                     attachments={note.attachments}
+                    editable={editingTask}
                     onChanged={() => {
                       if (detail) void refreshDetail(detail.task.id);
                       onDataChanged();

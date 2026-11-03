@@ -11,11 +11,13 @@
 
   interface Props {
     attachments: TaskAttachment[];
+    /** When false the gallery is read-only: alt text and removal are hidden. */
+    editable?: boolean;
     onChanged: () => void;
     announce: (msg: string) => void;
   }
 
-  let { attachments, onChanged, announce }: Props = $props();
+  let { attachments, editable = true, onChanged, announce }: Props = $props();
 
   let previewUrls = $state<Record<number, string>>({});
   let editingId = $state<number | null>(null);
@@ -181,20 +183,22 @@
               >
                 Open in OS App
               </button>
-              <button
-                type="button"
-                class="btn-sm"
-                onclick={() => startEditDescription(att)}
-              >
-                Edit Alt Text
-              </button>
-              <button
-                type="button"
-                class="btn-sm btn-danger"
-                onclick={() => handleRemove(att)}
-              >
-                Remove
-              </button>
+              {#if editable}
+                <button
+                  type="button"
+                  class="btn-sm"
+                  onclick={() => startEditDescription(att)}
+                >
+                  Edit Alt Text
+                </button>
+                <button
+                  type="button"
+                  class="btn-sm btn-danger"
+                  onclick={() => handleRemove(att)}
+                >
+                  Remove
+                </button>
+              {/if}
             </div>
           {/if}
         </figcaption>
