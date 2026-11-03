@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use rusqlite::{Connection, params_from_iter};
@@ -9,7 +10,10 @@ use crate::attachments::load_task_description_attachments;
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
-use crate::tasks::{ALL_PROJECTS, load_task_tags, map_task_row, normalize_project, normalize_tag, normalize_user};
+use crate::tasks::{
+    ALL_PROJECTS, load_task_tags, map_task_row, normalize_project, normalize_tag, normalize_user, parse_deadline_datetime,
+    parse_duration_minutes, parse_utc,
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchQuery {
@@ -32,9 +36,23 @@ pub struct SearchHit {
 
 /// Hybrid search combining SQLite structured filters + FTS5 trigram pre-filtering
 /// with `nucleo-matcher` subsequence & typo-tolerant scoring.
+///
+/// Any whitespace-separated `<field><op><value>` token (e.g. `assignee==davidb`,
+/// `imp>=3`, `due<=2026-11-03`) is applied as a structured predicate; the
+/// remaining words are matched fuzzily, so filters and free text combine.
 pub fn search_tasks(db: &Database, search: &SearchQuery) -> Result<Vec<SearchHit>> {
     let candidates = load_filtered_tasks(&db.conn, search)?;
-    let raw_query = search.query.trim();
+    let (filters, free_text) = parse_query_filters(&search.query);
+    let candidates: Vec<Task> = if filters.is_empty() {
+        candidates
+    } else {
+        candidates
+            .into_iter()
+            .filter(|task| filters.iter().all(|filter| matches_filter(task, filter)))
+            .collect()
+    };
+
+    let raw_query = free_text.trim();
     let limit = search.limit.unwrap_or(usize::MAX);
 
     if raw_query.is_empty() {
@@ -115,6 +133,271 @@ pub fn search_tasks(db: &Database, search: &SearchQuery) -> Result<Vec<SearchHit
     hits.truncate(limit);
 
     Ok(hits)
+}
+
+/// Comparison operator parsed from a `<field><op><value>` search token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComparisonOp {
+    Eq,
+    Ne,
+    Ge,
+    Le,
+    Gt,
+    Lt,
+}
+
+impl ComparisonOp {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Eq => "==",
+            Self::Ne => "!=",
+            Self::Ge => ">=",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Lt => "<",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilterField {
+    Id,
+    Title,
+    Status,
+    Project,
+    Assignee,
+    Reporter,
+    Evaluator,
+    Tag,
+    Importance,
+    Difficulty,
+    Priority,
+    Estimate,
+    Due,
+    Sgdb,
+    Deadline,
+}
+
+impl FilterField {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name.trim().to_ascii_lowercase().as_str() {
+            "id" => Self::Id,
+            "title" => Self::Title,
+            "status" => Self::Status,
+            "project" | "proj" => Self::Project,
+            "assignee" | "assig" | "user" => Self::Assignee,
+            "reporter" => Self::Reporter,
+            "evaluator" => Self::Evaluator,
+            "tag" => Self::Tag,
+            "imp" | "importance" => Self::Importance,
+            "diff" | "difficulty" => Self::Difficulty,
+            "prio" | "priority" => Self::Priority,
+            "est" | "estimate" => Self::Estimate,
+            "due" | "due_date" => Self::Due,
+            "sgdb" | "sgdb_date" => Self::Sgdb,
+            "deadline" => Self::Deadline,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FieldFilter {
+    field: FilterField,
+    op: ComparisonOp,
+    value: String,
+}
+
+/// Splits a query on whitespace while keeping double-quoted values intact, so
+/// `title=="Fix login bug"` stays a single token.
+fn tokenize_query(query: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in query.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            ch if ch.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            ch => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn unquote(value: &str) -> &str {
+    let trimmed = value.trim();
+    trimmed
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(trimmed)
+}
+
+/// Parses `<field><op><value>`; the operator must directly follow a known field name.
+fn parse_field_filter(token: &str) -> Option<FieldFilter> {
+    for (idx, ch) in token.char_indices() {
+        let rest = &token[idx..];
+        let (op, len) = if rest.starts_with("==") {
+            (ComparisonOp::Eq, 2)
+        } else if rest.starts_with("!=") {
+            (ComparisonOp::Ne, 2)
+        } else if rest.starts_with(">=") {
+            (ComparisonOp::Ge, 2)
+        } else if rest.starts_with("<=") {
+            (ComparisonOp::Le, 2)
+        } else if ch == '>' {
+            (ComparisonOp::Gt, 1)
+        } else if ch == '<' {
+            (ComparisonOp::Lt, 1)
+        } else if ch == '=' || ch == ':' {
+            (ComparisonOp::Eq, 1)
+        } else {
+            continue;
+        };
+        let field = FilterField::from_name(&token[..idx])?;
+        return Some(FieldFilter { field, op, value: unquote(&token[idx + len..]).to_string() });
+    }
+    None
+}
+
+fn parse_query_filters(query: &str) -> (Vec<FieldFilter>, String) {
+    let mut filters = Vec::new();
+    let mut free = Vec::new();
+    for token in tokenize_query(query) {
+        match parse_field_filter(&token) {
+            Some(filter) => filters.push(filter),
+            None => free.push(token),
+        }
+    }
+    (filters, free.join(" "))
+}
+
+fn normalize_status(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace([' ', '-'], "_")
+}
+
+fn text_matches(actual: &str, needle: &str, op: ComparisonOp) -> bool {
+    let actual = actual.trim().to_ascii_lowercase();
+    let needle = needle.trim().to_ascii_lowercase();
+    match op {
+        ComparisonOp::Eq => actual == needle,
+        ComparisonOp::Ne => actual != needle,
+        ComparisonOp::Ge => actual >= needle,
+        ComparisonOp::Le => actual <= needle,
+        ComparisonOp::Gt => actual > needle,
+        ComparisonOp::Lt => actual < needle,
+    }
+}
+
+fn user_matches(actual: &str, needle: &str, op: ComparisonOp) -> bool {
+    text_matches(actual.trim_start_matches('@'), needle.trim_start_matches('@'), op)
+}
+
+fn parse_numeric_value(raw: &str) -> Option<i64> {
+    let value = raw.trim();
+    let numeric = value.strip_suffix("/5").unwrap_or(value);
+    if let Ok(parsed) = numeric.parse::<i64>() {
+        return Some(parsed);
+    }
+    parse_duration_minutes(value).ok().map(i64::from)
+}
+
+fn ordinal_matches(actual: Option<i64>, filter: &FieldFilter) -> bool {
+    let Some(needle) = parse_numeric_value(&filter.value) else {
+        return false;
+    };
+    let Some(actual) = actual else {
+        // A field with no value only satisfies "is not".
+        return filter.op == ComparisonOp::Ne;
+    };
+    match filter.op {
+        ComparisonOp::Eq => actual == needle,
+        ComparisonOp::Ne => actual != needle,
+        ComparisonOp::Ge => actual >= needle,
+        ComparisonOp::Le => actual <= needle,
+        ComparisonOp::Gt => actual > needle,
+        ComparisonOp::Lt => actual < needle,
+    }
+}
+
+/// Inclusive UTC window for a filter date. A date-only value means the whole
+/// calendar day in the machine's local time zone; a date-time is one instant.
+fn date_bounds(raw: &str) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    if let Ok(date) = NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d") {
+        let start = date.and_hms_opt(0, 0, 0)?;
+        let end = date.succ_opt()?.and_hms_opt(0, 0, 0)? - Duration::milliseconds(1);
+        let lo = start
+            .and_local_timezone(Local)
+            .earliest()?
+            .with_timezone(&Utc);
+        let hi = end
+            .and_local_timezone(Local)
+            .earliest()?
+            .with_timezone(&Utc);
+        return Some((lo, hi));
+    }
+    let instant = parse_utc(&parse_deadline_datetime("filter", raw).ok()?.0);
+    Some((instant, instant))
+}
+
+fn date_matches(actual: Option<&str>, filter: &FieldFilter) -> bool {
+    let needle = filter.value.trim().to_ascii_lowercase();
+    if matches!(needle.as_str(), "" | "none" | "null" | "-" | "undated") {
+        return match filter.op {
+            ComparisonOp::Eq => actual.is_none(),
+            ComparisonOp::Ne => actual.is_some(),
+            _ => false,
+        };
+    }
+    let Some(actual) = actual else {
+        // Undated tasks never satisfy an ordered comparison, only "is not".
+        return filter.op == ComparisonOp::Ne;
+    };
+    let actual = parse_utc(actual);
+    let Some((lo, hi)) = date_bounds(&filter.value) else {
+        return false;
+    };
+    match filter.op {
+        ComparisonOp::Eq => actual >= lo && actual <= hi,
+        ComparisonOp::Ne => actual < lo || actual > hi,
+        ComparisonOp::Ge => actual >= lo,
+        ComparisonOp::Le => actual <= hi,
+        ComparisonOp::Gt => actual > hi,
+        ComparisonOp::Lt => actual < lo,
+    }
+}
+
+fn matches_filter(task: &Task, filter: &FieldFilter) -> bool {
+    match filter.field {
+        FilterField::Id => text_matches(&task.id, &filter.value, filter.op),
+        FilterField::Title => text_matches(&task.title, &filter.value, filter.op),
+        FilterField::Status => text_matches(&normalize_status(task.status.as_str()), &normalize_status(&filter.value), filter.op),
+        FilterField::Project => text_matches(&task.project, &filter.value, filter.op),
+        FilterField::Assignee => user_matches(&task.assignee, &filter.value, filter.op),
+        FilterField::Reporter => user_matches(&task.reporter, &filter.value, filter.op),
+        FilterField::Evaluator => user_matches(&task.evaluator, &filter.value, filter.op),
+        FilterField::Tag => {
+            let needle = filter.value.trim().trim_start_matches('#');
+            let has_tag = task.tags.iter().any(|tag| tag.eq_ignore_ascii_case(needle));
+            if filter.op == ComparisonOp::Ne { !has_tag } else { has_tag }
+        }
+        FilterField::Importance => ordinal_matches(Some(i64::from(task.importance)), filter),
+        FilterField::Difficulty => ordinal_matches(Some(i64::from(task.difficulty)), filter),
+        FilterField::Priority => ordinal_matches(Some(i64::from(task.manual_priority)), filter),
+        FilterField::Estimate => ordinal_matches(task.time_estimate_minutes, filter),
+        FilterField::Due => date_matches(task.due_date.as_deref(), filter),
+        FilterField::Sgdb => date_matches(task.sgdb_date.as_deref(), filter),
+        FilterField::Deadline => date_matches(task.sgdb_date.as_deref().or(task.due_date.as_deref()), filter),
+    }
 }
 
 fn load_filtered_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Task>> {
@@ -375,5 +658,107 @@ mod tests {
         .unwrap();
         assert_eq!(filtered_hits.len(), 1);
         assert_eq!(filtered_hits[0].task.id, t2.id);
+    }
+
+    #[test]
+    fn parses_structured_filter_tokens_and_keeps_free_text() {
+        let (filters, free) = parse_query_filters("assignee==davidb imp>=3 due<=2026-11-03 release");
+        assert_eq!(free, "release");
+        assert_eq!(filters.len(), 3);
+        assert_eq!(filters[0].field, FilterField::Assignee);
+        assert_eq!(filters[0].op, ComparisonOp::Eq);
+        assert_eq!(filters[0].value, "davidb");
+        assert_eq!(filters[1].field, FilterField::Importance);
+        assert_eq!(filters[1].op, ComparisonOp::Ge);
+        assert_eq!(filters[2].field, FilterField::Due);
+        assert_eq!(filters[2].op, ComparisonOp::Le);
+
+        // Quoted values keep their spaces, and non-field words stay free text.
+        let (filters, free) = parse_query_filters("title==\"Fix login bug\" hello:world");
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].value, "Fix login bug");
+        assert_eq!(free, "hello:world");
+    }
+
+    #[test]
+    fn filters_by_assignee_importance_and_status_aliases() {
+        let mut db = open_in_memory_db().unwrap();
+        let low = create_task(
+            &mut db,
+            CreateTaskInput {
+                title: "Low priority chore".to_string(),
+                status: Some(TaskStatus::Todo),
+                assignee: Some("davidb".to_string()),
+                importance: Some(2),
+                ..Default::default()
+            },
+            "david",
+        )
+        .unwrap();
+        let high = create_task(
+            &mut db,
+            CreateTaskInput {
+                title: "High priority fix".to_string(),
+                status: Some(TaskStatus::InProgress),
+                assignee: Some("alice".to_string()),
+                importance: Some(5),
+                ..Default::default()
+            },
+            "david",
+        )
+        .unwrap();
+
+        let mine = search_tasks(&db, &SearchQuery { query: "assignee==davidb".to_string(), ..Default::default() }).unwrap();
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].task.id, low.id);
+
+        let urgent = search_tasks(&db, &SearchQuery { query: "imp>=5".to_string(), ..Default::default() }).unwrap();
+        assert_eq!(urgent.len(), 1);
+        assert_eq!(urgent[0].task.id, high.id);
+
+        let in_progress = search_tasks(&db, &SearchQuery { query: "status==in-progress".to_string(), ..Default::default() }).unwrap();
+        assert_eq!(in_progress.len(), 1);
+        assert_eq!(in_progress[0].task.id, high.id);
+
+        let in_progress = search_tasks(&db, &SearchQuery { query: "status:in_progress".to_string(), ..Default::default() }).unwrap();
+        assert_eq!(in_progress.len(), 1);
+        assert_eq!(in_progress[0].task.id, high.id);
+
+        // Filters and free text combine.
+        let combined = search_tasks(&db, &SearchQuery { query: "assignee==davidb chore".to_string(), ..Default::default() }).unwrap();
+        assert_eq!(combined.len(), 1);
+        assert_eq!(combined[0].task.id, low.id);
+    }
+
+    #[test]
+    fn filters_dates_by_local_calendar_day() {
+        let mut db = open_in_memory_db().unwrap();
+        let dated = create_task(
+            &mut db,
+            CreateTaskInput { title: "Dated task".to_string(), due_date: Some("2026-11-03T15:00:00".to_string()), ..Default::default() },
+            "david",
+        )
+        .unwrap();
+        create_task(&mut db, CreateTaskInput { title: "Undated task".to_string(), ..Default::default() }, "david").unwrap();
+
+        let same_day = search_tasks(&db, &SearchQuery { query: "due==2026-11-03".to_string(), ..Default::default() }).unwrap();
+        assert_eq!(same_day.len(), 1);
+        assert_eq!(same_day[0].task.id, dated.id);
+
+        let before = search_tasks(&db, &SearchQuery { query: "due<2026-11-03".to_string(), ..Default::default() }).unwrap();
+        assert!(before.is_empty());
+
+        let after = search_tasks(&db, &SearchQuery { query: "due>2026-11-03".to_string(), ..Default::default() }).unwrap();
+        assert!(after.is_empty());
+
+        let from_day = search_tasks(&db, &SearchQuery { query: "due>=2026-11-03".to_string(), ..Default::default() }).unwrap();
+        assert_eq!(from_day.len(), 1);
+
+        // Undated tasks are addressable, and never match ordered comparisons.
+        let undated = search_tasks(&db, &SearchQuery { query: "due==none".to_string(), ..Default::default() }).unwrap();
+        assert_eq!(undated.len(), 1);
+        assert_eq!(undated[0].task.title, "Undated task");
+        let undated_ge = search_tasks(&db, &SearchQuery { query: "due>=2026-01-01".to_string(), ..Default::default() }).unwrap();
+        assert_eq!(undated_ge.len(), 1);
     }
 }
