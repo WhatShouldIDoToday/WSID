@@ -17,6 +17,7 @@ use wsid_core::{
 use crate::cli_runner::read_system_clipboard_attachment;
 pub use crate::tui::form::DataEntryForm;
 use crate::tui::form::{self, CommentSuggestion, CommentTokenKind, trailing_comment_token};
+use crate::tui::text_edit::{self, EditKind, TextHistory, apply_text_shortcut};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
@@ -161,6 +162,8 @@ pub enum FocusContext {
     FormErrorModal,
     AboutModal,
     ProjectModal,
+    /// The user filter modal (per-view user scope) owns input while it is open.
+    UserModal,
     /// A prompt inside the task detail modal (comment, attach, jump, delete...).
     DetailPrompt(DetailPromptKind),
     /// The attachment list inside the task detail modal has focus.
@@ -236,6 +239,16 @@ pub struct TuiApp {
     pub project_modal_query: String,
     pub project_modal_selected: usize,
 
+    // User filter modal (shared by Focus, Kanban, Eisenhower, and Database)
+    pub user_modal_open: bool,
+    pub user_modal_query: String,
+    pub user_modal_selected: usize,
+
+    // Per-view user scope: Focus names one user, the other views also allow `all`.
+    pub focus_user: String,
+    pub kanban_user: String,
+    pub eisenhower_user: String,
+
     // Database Search View state
     pub search_query: String,
     pub search_editing: bool,
@@ -289,6 +302,14 @@ pub struct TuiApp {
     // Edit-in-form state: set while the Add Task form is editing an existing task
     pub editing_task_id: Option<String>,
     pub editing_return_tab: Option<ActiveTab>,
+
+    // Undo/redo stacks for the inline prompts (`Ctrl+Z` / `Cmd+Z`)
+    project_modal_history: TextHistory,
+    user_modal_history: TextHistory,
+    search_history: TextHistory,
+    user_history: TextHistory,
+    bulk_history: TextHistory,
+    detail_prompt_history: TextHistory,
 }
 
 impl TuiApp {
@@ -341,6 +362,12 @@ impl TuiApp {
             project_modal_open: false,
             project_modal_query: String::new(),
             project_modal_selected: 0,
+            user_modal_open: false,
+            user_modal_query: String::new(),
+            user_modal_selected: 0,
+            focus_user: user.clone(),
+            kanban_user: user.clone(),
+            eisenhower_user: user.clone(),
             search_query: String::new(),
             search_editing: false,
             search_status_filter: None,
@@ -376,6 +403,12 @@ impl TuiApp {
             about_scroll: 0,
             editing_task_id: None,
             editing_return_tab: None,
+            project_modal_history: TextHistory::default(),
+            user_modal_history: TextHistory::default(),
+            search_history: TextHistory::default(),
+            user_history: TextHistory::default(),
+            bulk_history: TextHistory::default(),
+            detail_prompt_history: TextHistory::default(),
         };
         app.refresh_all()?;
         Ok(app)
@@ -399,7 +432,7 @@ impl TuiApp {
         let custom_weights = if self.preset == self.config.focus_preset { self.config.custom_weights } else { None };
         self.focus_queue = compute_focus_queue_in_project(
             &self.db,
-            &self.user,
+            &self.focus_user,
             self.preset,
             custom_weights,
             Some(self.config.focus_limit),
@@ -425,7 +458,7 @@ impl TuiApp {
         }
         self.clamp_kanban_selection();
 
-        self.eisenhower_items = list_eisenhower_matrix(&self.db, Some(&self.user), today, self.config.scoring)?;
+        self.eisenhower_items = list_eisenhower_matrix(&self.db, Some(&self.eisenhower_user), today, self.config.scoring)?;
         self.clamp_eisenhower_selection();
 
         self.refresh_search()?;
@@ -548,6 +581,8 @@ impl TuiApp {
             FocusContext::AboutModal
         } else if self.project_modal_open {
             FocusContext::ProjectModal
+        } else if self.user_modal_open {
+            FocusContext::UserModal
         } else if self.detail_modal.is_some() {
             if self.detail_prompt_kind != DetailPromptKind::None {
                 FocusContext::DetailPrompt(self.detail_prompt_kind)
@@ -578,6 +613,7 @@ impl TuiApp {
             FocusContext::FormErrorModal => self.dismiss_form_errors(key),
             FocusContext::AboutModal => self.handle_about_modal_key(key),
             FocusContext::ProjectModal => self.handle_project_modal_key(key),
+            FocusContext::UserModal => self.handle_user_modal_key(key),
             FocusContext::DetailPrompt(_) | FocusContext::DetailAttachments | FocusContext::DetailModal => {
                 self.handle_detail_modal_key(key);
             }
@@ -619,6 +655,11 @@ impl TuiApp {
 
     /// Shortcuts shared by every list view, then the active view's own keys.
     fn handle_list_tab_key(&mut self, key: KeyEvent) {
+        // `Ctrl+U` switches the acting user; `U` opens the view's user filter.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
+            self.begin_user_switch();
+            return;
+        }
         // Modified characters belong to the terminal/OS, so they never fire
         // single-letter shortcuts (e.g. Ctrl+A does not toggle accessible mode).
         if is_modified_char(&key) {
@@ -660,9 +701,7 @@ impl TuiApp {
                 return;
             }
             KeyCode::Char('U') => {
-                self.user_switching = true;
-                self.user_input.clear();
-                self.update_user_prompt_message();
+                self.open_user_modal();
                 return;
             }
             KeyCode::Char('r') => {
@@ -774,6 +813,7 @@ impl TuiApp {
             .iter()
             .filter(|t| t.status == status)
             .filter(|t| self.matches_project(&self.kanban_project, &t.project))
+            .filter(|t| self.matches_user(&self.kanban_user, &t.assignee))
             .collect()
     }
 
@@ -832,29 +872,13 @@ impl TuiApp {
                 }
             }
             KeyCode::Char('<') | KeyCode::Char('H') => {
-                let col_tasks = self.kanban_tasks_in_col(self.kanban_col);
-                if let Some(task) = col_tasks.get(self.kanban_row)
-                    && self.kanban_col > 0
-                {
-                    let id = task.id.clone();
-                    let target_col = self.kanban_col - 1;
-                    let target_status = TaskStatus::ALL[target_col];
-                    self.apply_status_transition(&id, target_status);
-                    self.kanban_col = target_col;
-                    self.clamp_kanban_selection();
+                if self.kanban_col > 0 {
+                    self.transition_targets(TaskStatus::ALL[self.kanban_col - 1]);
                 }
             }
             KeyCode::Char('>') | KeyCode::Char('L') => {
-                let col_tasks = self.kanban_tasks_in_col(self.kanban_col);
-                if let Some(task) = col_tasks.get(self.kanban_row)
-                    && self.kanban_col + 1 < TaskStatus::ALL.len()
-                {
-                    let id = task.id.clone();
-                    let target_col = self.kanban_col + 1;
-                    let target_status = TaskStatus::ALL[target_col];
-                    self.apply_status_transition(&id, target_status);
-                    self.kanban_col = target_col;
-                    self.clamp_kanban_selection();
+                if self.kanban_col + 1 < TaskStatus::ALL.len() {
+                    self.transition_targets(TaskStatus::ALL[self.kanban_col + 1]);
                 }
             }
             KeyCode::Enter => {
@@ -885,6 +909,12 @@ impl TuiApp {
     /// Whether a task's project passes the active filter (`all` / empty = every project).
     pub fn matches_project(&self, filter: &str, project: &str) -> bool {
         filter.is_empty() || filter == wsid_core::ALL_PROJECTS || filter == project
+    }
+
+    /// Whether an assignee passes a user filter (`all` / empty = every user).
+    pub fn matches_user(&self, filter: &str, user: &str) -> bool {
+        let filter = filter.trim();
+        filter.is_empty() || filter.eq_ignore_ascii_case(wsid_core::ALL_USERS) || filter.eq_ignore_ascii_case(user)
     }
 
     /// Project filter currently applied by the active view (`all` = every project).
@@ -929,6 +959,7 @@ impl TuiApp {
     fn open_project_modal(&mut self) {
         self.project_modal_open = true;
         self.project_modal_query.clear();
+        self.project_modal_history.clear();
         let current = self.current_project_filter();
         let options = self.filtered_project_options();
         self.project_modal_selected = options
@@ -962,6 +993,12 @@ impl TuiApp {
     }
 
     fn handle_project_modal_key(&mut self, key: KeyEvent) {
+        if let Some(changed) = apply_text_shortcut(&key, &mut self.project_modal_query, &mut self.project_modal_history) {
+            if changed {
+                self.project_modal_selected = 0;
+            }
+            return;
+        }
         if is_modified_char(&key) {
             return;
         }
@@ -1007,6 +1044,180 @@ impl TuiApp {
         }
     }
 
+    /// User scope currently applied by the active view (`all` = every user).
+    pub fn current_user_filter(&self) -> String {
+        match self.active_tab {
+            ActiveTab::Focus => self.focus_user.clone(),
+            ActiveTab::Kanban => self.kanban_user.clone(),
+            ActiveTab::Eisenhower => self.eisenhower_user.clone(),
+            ActiveTab::Database => self
+                .search_assignee_filter
+                .clone()
+                .unwrap_or_else(|| wsid_core::ALL_USERS.to_string()),
+            ActiveTab::DataEntry => self.user.clone(),
+        }
+    }
+
+    /// Focus shows one user's queue, so `all` is not offered there (nor on the form).
+    pub fn user_filter_allows_all(&self) -> bool {
+        matches!(self.active_tab, ActiveTab::Kanban | ActiveTab::Eisenhower | ActiveTab::Database)
+    }
+
+    /// Every user that can be filtered to: `all` first when the view allows it, then known users.
+    pub fn user_filter_options(&self) -> Vec<(String, String)> {
+        let mut options = Vec::new();
+        if self.user_filter_allows_all() {
+            options.push((wsid_core::ALL_USERS.to_string(), format!("{} (every user)", wsid_core::ALL_USERS)));
+        }
+        let mut users = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
+        users.sort();
+        users.dedup();
+        for user in users {
+            if user == wsid_core::ALL_USERS {
+                continue;
+            }
+            let label = if user == self.user { format!("@{user} (active)") } else { format!("@{user}") };
+            options.push((user, label));
+        }
+        let current = self.current_user_filter();
+        if !current.is_empty()
+            && !options
+                .iter()
+                .any(|(value, _)| value.eq_ignore_ascii_case(&current))
+        {
+            options.push((current.clone(), format!("@{current}")));
+        }
+        options
+    }
+
+    /// `user_filter_options` narrowed by the modal's live search text. A valid user name that is
+    /// not known yet is offered too, so `@someone` can be filtered to before their first task.
+    pub(crate) fn filtered_user_options(&self) -> Vec<(String, String)> {
+        let needle = self
+            .user_modal_query
+            .trim()
+            .trim_start_matches('@')
+            .to_ascii_lowercase();
+        let mut options: Vec<(String, String)> = self
+            .user_filter_options()
+            .into_iter()
+            .filter(|(value, label)| {
+                needle.is_empty() || value.to_ascii_lowercase().contains(&needle) || label.to_ascii_lowercase().contains(&needle)
+            })
+            .collect();
+        let typed = self.user_modal_query.trim();
+        if !typed.is_empty()
+            && let Ok(normalized) = wsid_core::normalize_user(typed)
+            && !options
+                .iter()
+                .any(|(value, _)| value.eq_ignore_ascii_case(&normalized))
+        {
+            options.push((normalized.clone(), format!("@{normalized}")));
+        }
+        options
+    }
+
+    fn open_user_modal(&mut self) {
+        self.user_modal_open = true;
+        self.user_modal_query.clear();
+        self.user_modal_history.clear();
+        let current = self.current_user_filter();
+        let options = self.filtered_user_options();
+        self.user_modal_selected = options
+            .iter()
+            .position(|(value, _)| *value == current)
+            .unwrap_or(0);
+        self.status_message = if self.user_filter_allows_all() {
+            "User filter — type to search, Up/Down to move, Enter to apply, Esc to cancel".to_string()
+        } else {
+            format!("User filter (single user) — active @{}", self.current_user_filter())
+        };
+    }
+
+    fn apply_user_filter(&mut self, user: String) {
+        let every_user = user.eq_ignore_ascii_case(wsid_core::ALL_USERS);
+        if every_user && !self.user_filter_allows_all() {
+            self.status_message = format!("{} shows a single user, not '{}'", self.active_tab.title(), wsid_core::ALL_USERS);
+            return;
+        }
+        match self.active_tab {
+            ActiveTab::Focus => {
+                self.focus_user = user.clone();
+                let _ = self.refresh_all();
+            }
+            ActiveTab::Kanban => {
+                self.kanban_user = user.clone();
+                self.clamp_kanban_selection();
+            }
+            ActiveTab::Eisenhower => {
+                self.eisenhower_user = user.clone();
+                let _ = self.refresh_all();
+            }
+            ActiveTab::Database => {
+                self.search_assignee_filter = if every_user { None } else { Some(user.clone()) };
+                let _ = self.refresh_search();
+            }
+            ActiveTab::DataEntry => {}
+        }
+        self.status_message =
+            if every_user { format!("User filter: {} (every user)", wsid_core::ALL_USERS) } else { format!("User filter: @{user}") };
+    }
+
+    fn handle_user_modal_key(&mut self, key: KeyEvent) {
+        // `Ctrl+U` inside the filter modal switches the acting user instead.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
+            self.user_modal_open = false;
+            self.begin_user_switch();
+            return;
+        }
+        if let Some(changed) = apply_text_shortcut(&key, &mut self.user_modal_query, &mut self.user_modal_history) {
+            if changed {
+                self.user_modal_selected = 0;
+            }
+            return;
+        }
+        if is_modified_char(&key) {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.user_modal_open = false;
+                self.status_message = "Cancelled user filter".to_string();
+            }
+            KeyCode::Enter => {
+                if let Some((user, _)) = self
+                    .filtered_user_options()
+                    .get(self.user_modal_selected)
+                    .cloned()
+                {
+                    self.user_modal_open = false;
+                    self.apply_user_filter(user);
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let len = self.filtered_user_options().len();
+                if len > 0 {
+                    self.user_modal_selected = (self.user_modal_selected + 1) % len;
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                let len = self.filtered_user_options().len();
+                if len > 0 {
+                    self.user_modal_selected = self.user_modal_selected.checked_sub(1).unwrap_or(len - 1);
+                }
+            }
+            KeyCode::Backspace => {
+                self.user_modal_query.pop();
+                self.user_modal_selected = 0;
+            }
+            KeyCode::Char(ch) => {
+                self.user_modal_query.push(ch);
+                self.user_modal_selected = 0;
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn clamp_eisenhower_selection(&mut self) {
         for q_idx in 0..4 {
             let q_len = self.eisenhower_tasks_in_quadrant(q_idx).len();
@@ -1030,6 +1241,280 @@ impl TuiApp {
             self.eisenhower_row = row;
             self.eisenhower_states[self.eisenhower_quadrant].select(Some(row));
         }
+    }
+
+    /// Tasks the active view currently shows, in display order.
+    fn visible_tasks(&self) -> Vec<&Task> {
+        match self.active_tab {
+            ActiveTab::Focus => self
+                .focus_queue
+                .actionable_tasks
+                .iter()
+                .map(|f| &f.task)
+                .collect(),
+            ActiveTab::Kanban => self
+                .all_tasks
+                .iter()
+                .filter(|t| self.matches_project(&self.kanban_project, &t.project))
+                .filter(|t| self.matches_user(&self.kanban_user, &t.assignee))
+                .collect(),
+            ActiveTab::Eisenhower => self
+                .eisenhower_items
+                .iter()
+                .filter(|i| self.matches_project(&self.eisenhower_project, &i.task.project))
+                .map(|i| &i.task)
+                .collect(),
+            ActiveTab::Database => self.search_hits.iter().map(|h| &h.task).collect(),
+            ActiveTab::DataEntry => Vec::new(),
+        }
+    }
+
+    /// Task snapshots the next edit applies to: every checked task this view still shows,
+    /// otherwise the focused task. The focused task is rotated to the front so focus can follow it.
+    fn edit_targets(&self) -> Vec<Task> {
+        let focused = self.highlighted_task_id();
+        let visible = self.visible_tasks();
+        let mut targets: Vec<Task> = visible
+            .iter()
+            .filter(|t| self.selected_ids.contains(&t.id))
+            .map(|t| (*t).clone())
+            .collect();
+        if targets.is_empty() {
+            targets = visible
+                .into_iter()
+                .filter(|t| Some(t.id.as_str()) == focused.as_deref())
+                .cloned()
+                .collect();
+        }
+        if let Some(pos) = focused
+            .as_deref()
+            .and_then(|id| targets.iter().position(|t| t.id == id))
+        {
+            targets.rotate_left(pos);
+        }
+        targets
+    }
+
+    /// Re-focuses the active view on `task_id` after an edit, so a task that moved quadrant,
+    /// column, or result row keeps the cursor instead of stranding it in an emptied list.
+    fn follow_edit(&mut self, task_id: &str) {
+        match self.active_tab {
+            ActiveTab::Eisenhower => {
+                self.focus_eisenhower_task(task_id);
+                self.fallback_eisenhower_focus();
+            }
+            ActiveTab::Kanban => {
+                self.focus_kanban_task(task_id);
+                self.fallback_kanban_focus();
+            }
+            ActiveTab::Database => self.focus_database_task(task_id),
+            _ => {}
+        }
+    }
+
+    /// Puts the cursor on `task_id` in the Eisenhower matrix (`no-op` when it left the matrix).
+    pub fn focus_eisenhower_task(&mut self, task_id: &str) {
+        let found = (0..4).find_map(|q| {
+            self.eisenhower_tasks_in_quadrant(q)
+                .iter()
+                .position(|c| c.task.id == task_id)
+                .map(|row| (q, row))
+        });
+        if let Some((quadrant, row)) = found {
+            self.eisenhower_quadrant = quadrant;
+            self.eisenhower_row = row;
+            self.eisenhower_states[quadrant].select(Some(row));
+        }
+    }
+
+    /// Puts the cursor on `task_id` in the Kanban board (`no-op` when the task is not shown).
+    pub fn focus_kanban_task(&mut self, task_id: &str) {
+        let found = (0..TaskStatus::ALL.len()).find_map(|col| {
+            self.kanban_tasks_in_col(col)
+                .iter()
+                .position(|t| t.id == task_id)
+                .map(|row| (col, row))
+        });
+        if let Some((col, row)) = found {
+            self.kanban_col = col;
+            self.kanban_row = row;
+            self.kanban_states[col].select(Some(row));
+        }
+    }
+
+    /// Puts the cursor on `task_id` in the Database results (`no-op` when it was filtered out).
+    pub fn focus_database_task(&mut self, task_id: &str) {
+        if let Some(row) = self.search_hits.iter().position(|h| h.task.id == task_id) {
+            self.search_selected = row;
+            self.search_table_state.select(Some(row));
+            self.search_list_state.select(Some(row));
+        }
+    }
+
+    /// Moves the cursor off an emptied quadrant after an edit: a checked task first, then the
+    /// first non-empty quadrant. Navigating into an empty quadrant is deliberately left alone.
+    fn fallback_eisenhower_focus(&mut self) {
+        if !self
+            .eisenhower_tasks_in_quadrant(self.eisenhower_quadrant)
+            .is_empty()
+        {
+            return;
+        }
+        let checked = (0..4).find(|&q| {
+            self.eisenhower_tasks_in_quadrant(q)
+                .iter()
+                .any(|c| self.selected_ids.contains(&c.task.id))
+        });
+        let target = checked.or_else(|| (0..4).find(|&q| !self.eisenhower_tasks_in_quadrant(q).is_empty()));
+        let Some(quadrant) = target else {
+            self.eisenhower_row = 0;
+            return;
+        };
+        self.eisenhower_quadrant = quadrant;
+        self.eisenhower_row = 0;
+        self.eisenhower_states[quadrant].select(Some(0));
+    }
+
+    /// Moves the cursor off an empty column after an edit, preferring a checked task's column.
+    fn fallback_kanban_focus(&mut self) {
+        if !self.kanban_tasks_in_col(self.kanban_col).is_empty() {
+            return;
+        }
+        let checked = (0..TaskStatus::ALL.len()).find(|&c| {
+            self.kanban_tasks_in_col(c)
+                .iter()
+                .any(|t| self.selected_ids.contains(&t.id))
+        });
+        let target = checked.or_else(|| (0..TaskStatus::ALL.len()).find(|&c| !self.kanban_tasks_in_col(c).is_empty()));
+        let Some(col) = target else {
+            self.kanban_row = 0;
+            return;
+        };
+        self.kanban_col = col;
+        self.kanban_row = 0;
+        self.kanban_states[col].select(Some(0));
+    }
+
+    /// Applies the planned updates to every edit target, refreshes once, and returns focus to the
+    /// first target. Returns that task's id and how many tasks were updated.
+    fn update_targets(&mut self, plan: impl Fn(&Task) -> Option<UpdateTaskInput>) -> Option<(String, usize)> {
+        let targets = self.edit_targets();
+        if targets.is_empty() {
+            return None;
+        }
+        let planned: Vec<(String, UpdateTaskInput)> = targets
+            .iter()
+            .filter_map(|task| plan(task).map(|input| (task.id.clone(), input)))
+            .collect();
+        if planned.is_empty() {
+            return None;
+        }
+        let mut failure = None;
+        let mut updated = 0;
+        for (id, input) in planned {
+            match update_task(&mut self.db, &id, input) {
+                Ok(_) => updated += 1,
+                Err(err) => failure = Some(format!("Failed to update [{id}]: {err}")),
+            }
+        }
+        let primary = targets[0].id.clone();
+        let _ = self.refresh_all();
+        self.follow_edit(&primary);
+        if let Some(err) = failure {
+            self.status_message = err;
+            return None;
+        }
+        Some((primary, updated))
+    }
+
+    /// Raises (`1`) or lowers (`-1`) importance for every edit target, clamped to `1..=5`.
+    fn nudge_target_importance(&mut self, delta: i8) {
+        let Some((primary, count)) = self.update_targets(|task| {
+            let next = (i16::from(task.importance) + i16::from(delta)).clamp(1, 5) as u8;
+            (next != task.importance).then_some(UpdateTaskInput { importance: Some(next), ..Default::default() })
+        }) else {
+            return;
+        };
+        let importance = self
+            .all_tasks
+            .iter()
+            .find(|t| t.id == primary)
+            .map_or(0, |t| t.importance);
+        self.status_message = if count == 1 {
+            format!("Updated [{primary}] importance to {importance}/5")
+        } else {
+            format!("Updated importance of {count} task(s) — [{primary}] is now {importance}/5")
+        };
+    }
+
+    /// Toggles the urgency override on every edit target.
+    fn toggle_target_urgency(&mut self) {
+        let Some((primary, count)) =
+            self.update_targets(|task| Some(UpdateTaskInput { urgent_override: Some(!task.urgent_override), ..Default::default() }))
+        else {
+            return;
+        };
+        let urgent = self
+            .all_tasks
+            .iter()
+            .find(|t| t.id == primary)
+            .is_some_and(|t| t.urgent_override);
+        self.status_message = if count == 1 {
+            format!("Updated [{primary}] urgent_override to {urgent}")
+        } else {
+            format!("Updated urgent_override of {count} task(s) — [{primary}] is {urgent}")
+        };
+    }
+
+    /// Forces the urgency of every edit target, so the matrix moves left (`false`) or right (`true`).
+    fn set_target_urgency(&mut self, urgent: bool) {
+        let Some((primary, count)) = self.update_targets(|task| {
+            (task.urgent_override != urgent).then_some(UpdateTaskInput { urgent_override: Some(urgent), ..Default::default() })
+        }) else {
+            return;
+        };
+        let placed = self
+            .eisenhower_items
+            .iter()
+            .find(|c| c.task.id == primary)
+            .map(|c| (c.is_urgent, c.slack_days.unwrap_or(0.0), c.quadrant.number()));
+        self.status_message = match placed {
+            Some((is_urgent, slack, _)) if is_urgent != urgent => {
+                format!("[{primary}] stays urgent: only {slack:.1} day(s) of slack, inside the urgent horizon")
+            }
+            Some((_, _, number)) if count == 1 => format!("Moved [{primary}] to Q{number}"),
+            Some((_, _, number)) => format!("Moved {count} task(s) — [{primary}] is now in Q{number}"),
+            None => format!("Moved {count} task(s)"),
+        };
+    }
+
+    /// Applies `status` to every edit target. A single target keeps the detailed
+    /// spawn/auto-complete messaging; several report one summary line.
+    fn transition_targets(&mut self, status: TaskStatus) {
+        let targets = self.edit_targets();
+        if targets.is_empty() {
+            return;
+        }
+        let primary = targets[0].id.clone();
+        if targets.len() == 1 {
+            self.apply_status_transition(&primary, status);
+            self.follow_edit(&primary);
+            return;
+        }
+        let mut failure = None;
+        let mut moved = 0;
+        for task in &targets {
+            match transition_task_status(&mut self.db, &task.id, status) {
+                Ok(_) => moved += 1,
+                Err(err) => failure = Some(format!("Failed to move [{}]: {err}", task.id)),
+            }
+        }
+        let _ = self.refresh_all();
+        self.follow_edit(&primary);
+        self.status_message = match failure {
+            Some(err) => err,
+            None => format!("Status -> {status} for {moved} task(s)"),
+        };
     }
 
     fn handle_eisenhower_key(&mut self, key: KeyEvent) {
@@ -1066,63 +1551,13 @@ impl TuiApp {
                     self.eisenhower_states[self.eisenhower_quadrant].select(Some(self.eisenhower_row));
                 }
             }
-            KeyCode::Char('<') => self.move_eisenhower_urgency(-1),
-            KeyCode::Char('>') => self.move_eisenhower_urgency(1),
-            KeyCode::Char('+') | KeyCode::Char('=') => {
-                let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
-                if let Some(item) = items.get(self.eisenhower_row) {
-                    let id = item.task.id.clone();
-                    let next_imp = (item.task.importance + 1).min(5);
-                    if let Err(err) = update_task(&mut self.db, &id, UpdateTaskInput { importance: Some(next_imp), ..Default::default() }) {
-                        self.status_message = format!("Failed to update importance: {err}");
-                    } else {
-                        let _ = self.refresh_all();
-                        self.status_message = format!("Updated [{id}] importance to {next_imp}/5");
-                    }
-                }
-            }
-            KeyCode::Char('-') => {
-                let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
-                if let Some(item) = items.get(self.eisenhower_row) {
-                    let id = item.task.id.clone();
-                    let next_imp = item.task.importance.saturating_sub(1).max(1);
-                    if let Err(err) = update_task(&mut self.db, &id, UpdateTaskInput { importance: Some(next_imp), ..Default::default() }) {
-                        self.status_message = format!("Failed to update importance: {err}");
-                    } else {
-                        let _ = self.refresh_all();
-                        self.status_message = format!("Updated [{id}] importance to {next_imp}/5");
-                    }
-                }
-            }
-            KeyCode::Char('u') => {
-                let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
-                if let Some(item) = items.get(self.eisenhower_row) {
-                    let id = item.task.id.clone();
-                    let next_urgent = !item.task.urgent_override;
-                    if let Err(err) =
-                        update_task(&mut self.db, &id, UpdateTaskInput { urgent_override: Some(next_urgent), ..Default::default() })
-                    {
-                        self.status_message = format!("Failed to toggle urgency: {err}");
-                    } else {
-                        let _ = self.refresh_all();
-                        self.status_message = format!("Updated [{id}] urgent_override to {next_urgent}");
-                    }
-                }
-            }
-            KeyCode::Char('s') => {
-                let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
-                if let Some(item) = items.get(self.eisenhower_row) {
-                    let id = item.task.id.clone();
-                    self.apply_status_transition(&id, TaskStatus::InProgress);
-                }
-            }
-            KeyCode::Char('d') => {
-                let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
-                if let Some(item) = items.get(self.eisenhower_row) {
-                    let id = item.task.id.clone();
-                    self.apply_status_transition(&id, TaskStatus::Completed);
-                }
-            }
+            KeyCode::Char('<') => self.set_target_urgency(false),
+            KeyCode::Char('>') => self.set_target_urgency(true),
+            KeyCode::Char('+') | KeyCode::Char('=') => self.nudge_target_importance(1),
+            KeyCode::Char('-') => self.nudge_target_importance(-1),
+            KeyCode::Char('u') => self.toggle_target_urgency(),
+            KeyCode::Char('s') => self.transition_targets(TaskStatus::InProgress),
+            KeyCode::Char('d') => self.transition_targets(TaskStatus::Completed),
             KeyCode::Enter => {
                 let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
                 if let Some(item) = items.get(self.eisenhower_row) {
@@ -1131,33 +1566,6 @@ impl TuiApp {
                 }
             }
             _ => {}
-        }
-    }
-
-    /// Moves the highlighted task to the left (`-1`) or right (`+1`) column of the matrix by
-    /// forcing its urgency. Columns map to urgency, so this is the Eisenhower analogue of
-    /// Kanban's `<`/`>` column move.
-    fn move_eisenhower_urgency(&mut self, direction: i8) {
-        let items = self.eisenhower_tasks_in_quadrant(self.eisenhower_quadrant);
-        let Some(item) = items.get(self.eisenhower_row) else {
-            return;
-        };
-        let id = item.task.id.clone();
-        let target_urgent = direction > 0;
-        if let Err(err) = update_task(&mut self.db, &id, UpdateTaskInput { urgent_override: Some(target_urgent), ..Default::default() }) {
-            self.status_message = format!("Failed to move [{id}]: {err}");
-            return;
-        }
-        let _ = self.refresh_all();
-        match self.eisenhower_items.iter().find(|c| c.task.id == id) {
-            Some(c) if c.is_urgent != target_urgent => {
-                let slack = c.slack_days.unwrap_or(0.0);
-                self.status_message = format!("[{id}] stays urgent: only {slack:.1} day(s) of slack, inside the urgent horizon");
-            }
-            Some(c) => {
-                self.status_message = format!("Moved [{id}] to Q{}", c.quadrant.number());
-            }
-            None => self.status_message = format!("Moved [{id}]"),
         }
     }
 
@@ -1207,6 +1615,7 @@ impl TuiApp {
         match key.code {
             KeyCode::Char('/') => {
                 self.search_editing = true;
+                self.search_history.clear();
                 let prefill = self.search_prefill_for_column();
                 if prefill.is_empty() {
                     self.status_message =
@@ -1312,6 +1721,12 @@ impl TuiApp {
     }
 
     fn handle_search_input_key(&mut self, key: KeyEvent) {
+        if let Some(changed) = apply_text_shortcut(&key, &mut self.search_query, &mut self.search_history) {
+            if changed {
+                let _ = self.refresh_search();
+            }
+            return;
+        }
         if is_modified_char(&key) {
             return;
         }
@@ -1335,6 +1750,12 @@ impl TuiApp {
     fn handle_data_entry_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
             self.submit_data_entry_form();
+            return;
+        }
+        if self
+            .entry_form
+            .apply_text_shortcut(&self.db, &self.user, &key)
+        {
             return;
         }
         if is_modified_char(&key) {
@@ -1389,8 +1810,52 @@ impl TuiApp {
 
     /// Bracketed paste (also how terminals deliver drag-and-dropped file paths).
     pub fn handle_paste(&mut self, text: &str) {
-        if self.active_tab == ActiveTab::DataEntry && self.form_errors.is_none() {
-            self.entry_form.paste(&self.db, &self.user, text);
+        match self.focus_context() {
+            FocusContext::ProjectModal => {
+                let before = self.project_modal_query.clone();
+                self.project_modal_query
+                    .push_str(&text_edit::flatten_paste(text));
+                self.project_modal_history
+                    .record(&before, EditKind::Discrete);
+                self.project_modal_selected = 0;
+            }
+            FocusContext::UserModal => {
+                let before = self.user_modal_query.clone();
+                self.user_modal_query
+                    .push_str(&text_edit::flatten_paste(text));
+                self.user_modal_history.record(&before, EditKind::Discrete);
+                self.user_modal_selected = 0;
+            }
+            FocusContext::SearchInput => {
+                let before = self.search_query.clone();
+                self.search_query.push_str(&text_edit::flatten_paste(text));
+                self.search_history.record(&before, EditKind::Discrete);
+                let _ = self.refresh_search();
+            }
+            FocusContext::UserSwitchPrompt => {
+                let before = self.user_input.clone();
+                self.user_input.push_str(&text_edit::flatten_paste(text));
+                self.user_history.record(&before, EditKind::Discrete);
+                self.update_user_prompt_message();
+            }
+            FocusContext::BulkEditPrompt => {
+                let before = self.bulk_input.clone();
+                self.bulk_input.push_str(&text_edit::flatten_paste(text));
+                self.bulk_history.record(&before, EditKind::Discrete);
+                self.update_bulk_prompt_message();
+            }
+            FocusContext::DetailPrompt(_) => {
+                let before = self.detail_prompt_input.clone();
+                self.detail_prompt_input
+                    .push_str(&text_edit::flatten_paste(text));
+                self.detail_prompt_history
+                    .record(&before, EditKind::Discrete);
+                self.refresh_comment_suggestions();
+            }
+            FocusContext::Tab(ActiveTab::DataEntry) if self.form_errors.is_none() => {
+                self.entry_form.paste(&self.db, &self.user, text);
+            }
+            _ => {}
         }
     }
 
@@ -1526,7 +1991,22 @@ impl TuiApp {
         }
     }
 
+    /// Opens a detail prompt with `initial` text and a fresh undo history.
+    fn begin_detail_prompt(&mut self, kind: DetailPromptKind, initial: String) {
+        self.detail_prompt_kind = kind;
+        self.detail_prompt_input = initial;
+        self.detail_prompt_history.clear();
+    }
+
     fn handle_detail_modal_key(&mut self, key: KeyEvent) {
+        if self.detail_prompt_kind != DetailPromptKind::None
+            && let Some(changed) = apply_text_shortcut(&key, &mut self.detail_prompt_input, &mut self.detail_prompt_history)
+        {
+            if changed {
+                self.refresh_comment_suggestions();
+            }
+            return;
+        }
         if is_modified_char(&key) {
             return;
         }
@@ -1675,25 +2155,21 @@ impl TuiApp {
                 }
             }
             KeyCode::Char('c') => {
-                self.detail_prompt_kind = DetailPromptKind::AddComment;
-                self.detail_prompt_input.clear();
+                self.begin_detail_prompt(DetailPromptKind::AddComment, String::new());
                 self.clear_comment_suggestions();
                 self.status_message = "New comment — @user, @takenote:user, and #AB1234 are linked".to_string();
             }
             KeyCode::Char('f') => {
-                self.detail_prompt_kind = DetailPromptKind::AttachFile;
-                self.detail_prompt_input.clear();
+                self.begin_detail_prompt(DetailPromptKind::AttachFile, String::new());
                 self.status_message = "Attach file: /path/to/file | optional alt text".to_string();
             }
             KeyCode::Char('v') => {
-                self.detail_prompt_kind = DetailPromptKind::AttachClipboard;
-                self.detail_prompt_input.clear();
+                self.begin_detail_prompt(DetailPromptKind::AttachClipboard, String::new());
                 self.status_message = "Paste from clipboard: optional alt text (empty uses the file name)".to_string();
             }
             KeyCode::Char('e') => {
                 if let Some(att) = atts.get(self.attachment_cursor.min(atts.len().saturating_sub(1))) {
-                    self.detail_prompt_kind = DetailPromptKind::EditAttachmentDesc;
-                    self.detail_prompt_input = att.description.clone();
+                    self.begin_detail_prompt(DetailPromptKind::EditAttachmentDesc, att.description.clone());
                     self.status_message = format!("Edit alt text for {} (#{})", att.file_name, att.id);
                 } else {
                     self.status_message = "No attachments on this task or its notes".to_string();
@@ -1735,7 +2211,6 @@ impl TuiApp {
                 }
             }
             KeyCode::Char('g') => {
-                self.detail_prompt_kind = DetailPromptKind::JumpToTask;
                 let default_jump = snapshot
                     .blockers
                     .first()
@@ -1744,7 +2219,7 @@ impl TuiApp {
                     .or_else(|| snapshot.related.first())
                     .map(|t| t.id.clone())
                     .unwrap_or_default();
-                self.detail_prompt_input = default_jump;
+                self.begin_detail_prompt(DetailPromptKind::JumpToTask, default_jump);
                 self.status_message = "Jump to task ID (e.g. AB1234)".to_string();
             }
             KeyCode::Char('s') => {
@@ -1752,8 +2227,7 @@ impl TuiApp {
             }
             KeyCode::Char('E') => self.begin_edit_task(),
             KeyCode::Char('D') => {
-                self.detail_prompt_kind = DetailPromptKind::ConfirmDeleteTask;
-                self.detail_prompt_input.clear();
+                self.begin_detail_prompt(DetailPromptKind::ConfirmDeleteTask, String::new());
                 self.status_message = format!("Delete [{}] {}? Type `yes` and press Enter", snapshot.task.id, snapshot.task.title);
             }
             KeyCode::Char('N') => {
@@ -1771,8 +2245,7 @@ impl TuiApp {
                         .min(snapshot.notes.len().saturating_sub(1)),
                 ) {
                     Some(n) => {
-                        self.detail_prompt_kind = DetailPromptKind::ConfirmDeleteNote;
-                        self.detail_prompt_input.clear();
+                        self.begin_detail_prompt(DetailPromptKind::ConfirmDeleteNote, String::new());
                         self.status_message = format!("Delete comment #{} by @{}? Type `yes` and press Enter", n.id, n.author);
                     }
                     None => self.status_message = "No comments to delete (select one with N)".to_string(),
@@ -2073,6 +2546,14 @@ impl TuiApp {
         }
     }
 
+    /// Opens the acting-user prompt (`Ctrl+U`); `U` is the per-view filter.
+    fn begin_user_switch(&mut self) {
+        self.user_switching = true;
+        self.user_input.clear();
+        self.user_history.clear();
+        self.update_user_prompt_message();
+    }
+
     fn update_user_prompt_message(&mut self) {
         let known = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()])
             .unwrap_or_default()
@@ -2081,6 +2562,12 @@ impl TuiApp {
     }
 
     fn handle_user_input_key(&mut self, key: KeyEvent) {
+        if let Some(changed) = apply_text_shortcut(&key, &mut self.user_input, &mut self.user_history) {
+            if changed {
+                self.update_user_prompt_message();
+            }
+            return;
+        }
         if is_modified_char(&key) {
             return;
         }
@@ -2099,7 +2586,16 @@ impl TuiApp {
                 self.user_switching = false;
                 match normalize_user(&input).and_then(|u| register_user(&mut self.db, &u)) {
                     Ok(user) => {
-                        self.user = user.clone();
+                        let previous = std::mem::replace(&mut self.user, user.clone());
+                        // Views filtered to the previous identity follow the new one.
+                        for filter in [&mut self.focus_user, &mut self.kanban_user, &mut self.eisenhower_user] {
+                            if *filter == previous {
+                                *filter = user.clone();
+                            }
+                        }
+                        if self.search_assignee_filter.as_deref() == Some(previous.as_str()) {
+                            self.search_assignee_filter = Some(user.clone());
+                        }
                         let _ = self.refresh_all();
                         self.status_message = format!("Active user is now @{user}");
                     }
@@ -2168,6 +2664,7 @@ impl TuiApp {
                 }
                 self.bulk_editing = true;
                 self.bulk_input.clear();
+                self.bulk_history.clear();
                 self.update_bulk_prompt_message();
                 true
             }
@@ -2184,6 +2681,12 @@ impl TuiApp {
     }
 
     fn handle_bulk_input_key(&mut self, key: KeyEvent) {
+        if let Some(changed) = apply_text_shortcut(&key, &mut self.bulk_input, &mut self.bulk_history) {
+            if changed {
+                self.update_bulk_prompt_message();
+            }
+            return;
+        }
         if is_modified_char(&key) {
             return;
         }

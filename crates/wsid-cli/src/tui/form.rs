@@ -6,12 +6,15 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
+use crossterm::event::KeyEvent;
 use ratatui::widgets::ListState;
 use wsid_core::{
     AttachmentInput, Database, FieldIssue, IssueLevel, RelationDraft, RelationInputKind, Scalar, TaskDraft, TaskField,
     format_deadline_display, format_duration_minutes, local_tz_abbr, normalize_task_id, parse_deadline_datetime, parse_duration_minutes,
     search_relation_targets, suggest_users, validate_task_draft,
 };
+
+use crate::tui::text_edit::{self, EditKind, TextHistory};
 
 /// How long the active field must be idle before it is validated.
 pub const VALIDATION_DEBOUNCE: Duration = Duration::from_millis(400);
@@ -181,6 +184,27 @@ impl Mask {
                 *value = Self::format_digits(&digits);
             }
         }
+    }
+
+    /// Backward-word deletion for the row: masked rows drop a whole segment (`HH:MM`, then
+    /// `DD`, `MM`, `YYYY`) so the mask stays well-formed.
+    pub fn delete_word_backward(self, value: &mut String) {
+        if !matches!(self, Self::DateTime) {
+            super::text_edit::delete_word_backward(value);
+            return;
+        }
+        let (digits, suffix) = Self::split_value(value);
+        if !suffix.is_empty() {
+            *value = Self::format_digits(&digits);
+            return;
+        }
+        // Segment boundaries of `YYYY-MM-DD HH:MM`, as digit counts.
+        let boundary = [4, 6, 8, 10, 12]
+            .into_iter()
+            .rev()
+            .find(|b| *b < digits.len())
+            .unwrap_or(0);
+        *value = Self::format_digits(&digits[..boundary]);
     }
 }
 
@@ -407,6 +431,8 @@ pub struct DataEntryForm {
     pub state: ListState,
     /// Set on each keystroke; the active field is validated once it has been idle for [`VALIDATION_DEBOUNCE`].
     pub dirty_at: Option<Instant>,
+    /// Undo/redo stacks, one per text field.
+    histories: [TextHistory; FIELD_COUNT],
 }
 
 impl DataEntryForm {
@@ -436,6 +462,7 @@ impl DataEntryForm {
             active_index: 0,
             state,
             dirty_at: None,
+            histories: std::array::from_fn(|_| TextHistory::default()),
         }
     }
 
@@ -505,6 +532,10 @@ impl DataEntryForm {
         self.dropdown = None;
         self.active_index = index;
         self.state.select(Some(index));
+        if index < FIELD_COUNT {
+            // A new field always starts a fresh undo group.
+            self.histories[index].reset();
+        }
         self.refresh_dropdown(db, user);
         self.refresh_local_hints();
     }
@@ -519,17 +550,46 @@ impl DataEntryForm {
 
     pub fn type_char(&mut self, db: &Database, user: &str, ch: char) {
         let idx = self.active_index;
-        if idx < FIELD_COUNT && FIELDS[idx].mask.push(&mut self.fields[idx], ch) {
-            self.edited(db, user);
+        if idx < FIELD_COUNT {
+            let before = self.fields[idx].clone();
+            if FIELDS[idx].mask.push(&mut self.fields[idx], ch) {
+                self.histories[idx].record(&before, EditKind::Typing);
+                self.edited(db, user);
+            }
         }
     }
 
     pub fn backspace(&mut self, db: &Database, user: &str) {
         let idx = self.active_index;
         if idx < FIELD_COUNT {
+            let before = self.fields[idx].clone();
             FIELDS[idx].mask.backspace(&mut self.fields[idx]);
+            if self.fields[idx] != before {
+                self.histories[idx].record(&before, EditKind::Deleting);
+            }
             self.edited(db, user);
         }
+    }
+
+    /// Applies the editing chords (`Option+Backspace`, `Ctrl+W`, `Cmd+Z`, `Ctrl+Y`, ...) to the
+    /// active row. Returns true when the key was consumed.
+    pub fn apply_text_shortcut(&mut self, db: &Database, user: &str, key: &KeyEvent) -> bool {
+        let idx = self.active_index;
+        if idx >= FIELD_COUNT {
+            return false;
+        }
+        let mask = FIELDS[idx].mask;
+        let Some(changed) = text_edit::apply_text_shortcut_with(key, &mut self.fields[idx], &mut self.histories[idx], |value| {
+            let before = value.clone();
+            mask.delete_word_backward(value);
+            *value != before
+        }) else {
+            return false;
+        };
+        if changed {
+            self.edited(db, user);
+        }
+        true
     }
 
     fn edited(&mut self, db: &Database, user: &str) {
@@ -548,15 +608,27 @@ impl DataEntryForm {
     pub fn paste(&mut self, db: &Database, user: &str, text: &str) {
         let idx = self.active_index;
         if idx == ATTACHMENTS && self.pending_attachment.is_none() {
+            let before = self.fields[ATTACHMENTS].clone();
             self.fields[ATTACHMENTS] = text.trim().to_string();
+            self.record_discrete(ATTACHMENTS, &before);
             self.commit_attachment_buffer();
         } else if idx < FIELD_COUNT {
-            for ch in text
-                .chars()
-                .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
-            {
+            let before = self.fields[idx].clone();
+            for ch in text_edit::flatten_paste(text).chars() {
                 self.type_char(db, user, ch);
             }
+            // Keep the whole paste as one undo step instead of one per character.
+            if self.fields[idx] != before {
+                self.histories[idx].reset();
+                self.histories[idx].record(&before, EditKind::Discrete);
+            }
+        }
+    }
+
+    /// Records an undo point for `idx` when the buffer actually changed.
+    fn record_discrete(&mut self, idx: usize, before: &str) {
+        if idx < FIELD_COUNT && self.fields[idx] != before {
+            self.histories[idx].record(before, EditKind::Discrete);
         }
     }
 
@@ -797,6 +869,7 @@ impl DataEntryForm {
 
     fn accept_choice(&mut self, db: &Database, user: &str, choice: Choice) {
         let idx = self.active_index;
+        let before = if idx < FIELD_COUNT { self.fields[idx].clone() } else { String::new() };
         match choice {
             Choice::Kind(k) => {
                 self.fields[RELATIONS] = format!("{k}:");
@@ -831,6 +904,7 @@ impl DataEntryForm {
             }
             Choice::Item(_) => {}
         }
+        self.record_discrete(idx, &before);
     }
 
     /// The relation buffer's target when it is a complete task ID (`blocks:AB1234` or bare `AB1234`).
@@ -1036,13 +1110,15 @@ impl DataEntryForm {
             ATTACHMENTS if self.pending_attachment.is_some() => "[type] Alt text | [Enter] Add file | [Esc] Back",
             ATTACHMENTS => "[type/paste/drop] File path | [Enter] Add | [Enter on empty] Manage | [Tab] Next | [Ctrl+S] Submit",
             12..=14 => "[type] user (new users are created) | [Tab] Next | [Ctrl+S] Submit",
-            _ => "[Tab/Up/Down] Field | [Ctrl+S] Submit | [Esc] Cancel | [?] Help & Status",
+            _ => "[Tab/Up/Down] Field | [Alt+Bksp] Del word | [Ctrl+Z] Undo | [Ctrl+S] Submit | [Esc] Cancel",
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
     use super::*;
 
     fn typed(mask: Mask, s: &str) -> String {
@@ -1051,6 +1127,51 @@ mod tests {
             mask.push(&mut v, ch);
         }
         v
+    }
+
+    #[test]
+    fn date_mask_deletes_whole_segments() {
+        let mut v = typed(Mask::DateTime, "209901010930");
+        assert_eq!(v, "2099-01-01 09:30");
+        Mask::DateTime.delete_word_backward(&mut v);
+        assert_eq!(v, "2099-01-01 09:");
+        Mask::DateTime.delete_word_backward(&mut v);
+        assert_eq!(v, "2099-01-01 ");
+        Mask::DateTime.delete_word_backward(&mut v);
+        assert_eq!(v, "2099-01-");
+        Mask::DateTime.delete_word_backward(&mut v);
+        assert_eq!(v, "2099-");
+        Mask::DateTime.delete_word_backward(&mut v);
+        assert_eq!(v, "");
+    }
+
+    #[test]
+    fn word_delete_and_undo_apply_to_the_active_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path().join("chords.db")).unwrap();
+        let mut form = DataEntryForm::new("alice");
+        form.set_active_index(&db, "alice", 0);
+        for ch in "Address @davidb note".chars() {
+            form.type_char(&db, "alice", ch);
+        }
+
+        let option_backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT);
+        assert!(form.apply_text_shortcut(&db, "alice", &option_backspace));
+        assert_eq!(form.fields[0], "Address @davidb ");
+        assert!(form.apply_text_shortcut(&db, "alice", &option_backspace));
+        assert_eq!(form.fields[0], "Address ");
+
+        let undo = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert!(form.apply_text_shortcut(&db, "alice", &undo));
+        assert_eq!(form.fields[0], "Address @davidb ");
+        assert!(form.apply_text_shortcut(&db, "alice", &undo));
+        assert_eq!(form.fields[0], "Address @davidb note");
+
+        // Plain characters and plain Backspace keep flowing through the normal handlers.
+        let plain = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        assert!(!form.apply_text_shortcut(&db, "alice", &plain));
+        let typed_char = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert!(!form.apply_text_shortcut(&db, "alice", &typed_char));
     }
 
     #[test]

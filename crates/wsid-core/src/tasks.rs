@@ -85,8 +85,13 @@ pub fn list_known_projects(db: &Database) -> Result<Vec<String>> {
     Ok(projects)
 }
 
+/// Sentinel accepted by filters and selectors meaning "every user". Never stored on a task or user record.
+pub const ALL_USERS: &str = "all";
+
 /// Normalizes a user identifier into a lowercase token matching `^[a-z0-9_-]+$`
 /// (stripping an optional leading `@` and trimming whitespace).
+///
+/// `"all"` is reserved for filters and is rejected so it can never end up as a real user.
 pub fn normalize_user(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     let stripped = trimmed
@@ -102,6 +107,9 @@ pub fn normalize_user(raw: &str) -> Result<String> {
         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
     {
         return Err(WsidError::Validation(format!("invalid user name '{raw}': user names may only contain letters, numbers, '_', or '-'")));
+    }
+    if stripped == ALL_USERS {
+        return Err(WsidError::Validation(format!("'{ALL_USERS}' is reserved and cannot be used as a user name")));
     }
     Ok(stripped)
 }
@@ -1248,6 +1256,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_reserved_all_username() {
+        for raw in ["all", "@all", "@ALL", "  ALL  ", "@ All"] {
+            let err = normalize_user(raw).unwrap_err();
+            assert!(format!("{err}").contains("reserved"), "{raw:?} should be rejected as reserved, got {err}");
+        }
+        // Names that merely contain or extend "all" stay valid.
+        assert_eq!(normalize_user("alley").unwrap(), "alley");
+        assert_eq!(normalize_user("all-clear").unwrap(), "all-clear");
+        assert_eq!(normalize_user("all_1").unwrap(), "all_1");
+    }
+
+    #[test]
     fn enforces_strict_usernames_and_manages_user_deletion_reassignment_and_cleanup() {
         let mut db = open_in_memory_db().unwrap();
 
@@ -1430,6 +1450,45 @@ mod project_tests {
 
         let every = search_tasks(&db, &SearchQuery { project: Some(ALL_PROJECTS.to_string()), ..Default::default() }).unwrap();
         assert_eq!(every.len(), 2);
+    }
+
+    #[test]
+    fn all_users_sentinel_matches_every_assignee() {
+        use crate::scoring::{ScoringConfig, list_eisenhower_matrix};
+        use crate::search::{SearchQuery, search_tasks};
+        let mut db = open_in_memory_db().unwrap();
+        let today = NaiveDate::from_ymd_opt(2099, 11, 1).unwrap();
+
+        for (title, assignee) in [("Alice task", "alice"), ("Bob task", "bob")] {
+            create_task(
+                &mut db,
+                CreateTaskInput { title: title.to_string(), assignee: Some(assignee.to_string()), ..Default::default() },
+                "alice",
+            )
+            .unwrap();
+        }
+
+        let alice = search_tasks(&db, &SearchQuery { assignee: Some("alice".to_string()), ..Default::default() }).unwrap();
+        assert_eq!(alice.len(), 1);
+        assert_eq!(alice[0].task.assignee, "alice");
+
+        for sentinel in [ALL_USERS, "@all", "@ALL"] {
+            let every = search_tasks(&db, &SearchQuery { assignee: Some(sentinel.to_string()), ..Default::default() }).unwrap();
+            assert_eq!(every.len(), 2, "assignee {sentinel:?} should match every user");
+        }
+
+        let q_alice = list_eisenhower_matrix(&db, Some("alice"), today, ScoringConfig::default()).unwrap();
+        assert_eq!(q_alice.len(), 1);
+        for sentinel in [ALL_USERS, "@all", ""] {
+            let q_every = list_eisenhower_matrix(&db, Some(sentinel), today, ScoringConfig::default()).unwrap();
+            assert_eq!(q_every.len(), 2, "user_filter {sentinel:?} should score every user");
+        }
+        assert_eq!(
+            list_eisenhower_matrix(&db, None, today, ScoringConfig::default())
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::db::Database;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
 use crate::tasks::{
-    ALL_PROJECTS, load_task_tags, map_task_row, normalize_project, normalize_tag, normalize_user, parse_deadline_datetime,
+    ALL_PROJECTS, ALL_USERS, load_task_tags, map_task_row, normalize_project, normalize_tag, normalize_user, parse_deadline_datetime,
     parse_duration_minutes, parse_utc,
 };
 
@@ -427,6 +427,11 @@ fn load_filtered_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Ta
 
     if let Some(ref raw_assignee) = search.assignee
         && !raw_assignee.trim().is_empty()
+        && !raw_assignee
+            .trim()
+            .strip_prefix('@')
+            .unwrap_or(raw_assignee.trim())
+            .eq_ignore_ascii_case(ALL_USERS)
     {
         bind_values.push(normalize_user(raw_assignee)?);
         sql.push_str(&format!(" AND t.assignee = ?{}", bind_values.len()));
@@ -434,6 +439,11 @@ fn load_filtered_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Ta
 
     if let Some(ref raw_reporter) = search.reporter
         && !raw_reporter.trim().is_empty()
+        && !raw_reporter
+            .trim()
+            .strip_prefix('@')
+            .unwrap_or(raw_reporter.trim())
+            .eq_ignore_ascii_case(ALL_USERS)
     {
         bind_values.push(normalize_user(raw_reporter)?);
         sql.push_str(&format!(" AND t.reporter = ?{}", bind_values.len()));
@@ -441,6 +451,11 @@ fn load_filtered_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Ta
 
     if let Some(ref raw_evaluator) = search.evaluator
         && !raw_evaluator.trim().is_empty()
+        && !raw_evaluator
+            .trim()
+            .strip_prefix('@')
+            .unwrap_or(raw_evaluator.trim())
+            .eq_ignore_ascii_case(ALL_USERS)
     {
         bind_values.push(normalize_user(raw_evaluator)?);
         sql.push_str(&format!(" AND t.evaluator = ?{}", bind_values.len()));

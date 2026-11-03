@@ -9,7 +9,10 @@
     { "input": "two words", "normalized": null },
     { "input": "invalid'hehe", "normalized": null },
     { "input": "#coolboy", "normalized": null },
-    { "input": "café", "normalized": null }
+    { "input": "café", "normalized": null },
+    { "input": "all", "normalized": null },
+    { "input": "@all", "normalized": null },
+    { "input": "@ALL", "normalized": null }
   ],
   "tags": [
     { "input": "backend", "normalized": "backend" },

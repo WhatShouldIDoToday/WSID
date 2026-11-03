@@ -559,6 +559,9 @@ export function formatDeadlineDisplay(raw: string | null | undefined): string {
 
 export const USERNAME_REGEX = /^[a-z0-9_-]+$/;
 
+/** Reserved filter sentinel (mirrors core `ALL_USERS`); never a real username. */
+export const ALL_USERS = "all";
+
 export function validateUsername(raw: string): {
   normalized: string | null;
   error: string | null;
@@ -572,6 +575,12 @@ export function validateUsername(raw: string): {
     return {
       normalized: null,
       error: `Invalid username "${raw.trim()}" — usernames may only contain letters, numbers, underscores (_), or dashes (-).`,
+    };
+  }
+  if (trimmed === ALL_USERS) {
+    return {
+      normalized: null,
+      error: `'${ALL_USERS}' is reserved and cannot be used as a username.`,
     };
   }
   return { normalized: trimmed, error: null };

@@ -59,6 +59,10 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp) {
         render_project_modal(frame, frame.area(), app);
     }
 
+    if app.user_modal_open {
+        render_user_modal(frame, frame.area(), app);
+    }
+
     if app.form_errors.is_some() {
         render_form_error_modal(frame, frame.area(), app);
     }
@@ -118,13 +122,21 @@ fn render_header(frame: &mut Frame, area: Rect, app: &TuiApp) {
         return;
     }
 
-    // Keep the active project visible on every list view, not just after pressing P.
-    let [tabs_area, project_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(30)]).areas(area);
+    // Keep the active user and project visible on every list view, not just after pressing U/P.
+    let [tabs_area, scope_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(46)]).areas(area);
     frame.render_widget(tabs, tabs_area);
 
+    let user = app.current_user_filter();
     let project = app.current_project_filter();
-    let indicator = Paragraph::new(Line::from(vec![
-        Span::styled("Project: ", Style::default().fg(Color::DarkGray)),
+    let scope = Paragraph::new(Line::from(vec![
+        Span::styled("User: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            user,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  Project: ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             project,
             Style::default()
@@ -139,7 +151,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &TuiApp) {
             .borders(panel_borders(Borders::BOTTOM, app.accessible_mode))
             .border_style(Style::default().fg(Color::DarkGray)),
     );
-    frame.render_widget(indicator, project_area);
+    frame.render_widget(scope, scope_area);
 }
 
 fn render_focus_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
@@ -917,6 +929,7 @@ fn focus_hints(app: &TuiApp) -> String {
         FocusContext::FormErrorModal => "[Enter/Esc/q] Back to the form".to_string(),
         FocusContext::AboutModal => "[j/k] Scroll | [PgUp/PgDn] Page | [g/G] Top/Bottom | [Esc/?/q] Close".to_string(),
         FocusContext::ProjectModal => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Esc] Cancel".to_string(),
+        FocusContext::UserModal => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Ctrl+U] Act as user | [Esc] Cancel".to_string(),
         FocusContext::DetailPrompt(DetailPromptKind::AddComment) => {
             "[Tab] Complete | [Up/Down] Suggestion | [Enter] Post | [Esc] Cancel".to_string()
         }
@@ -932,7 +945,7 @@ fn focus_hints(app: &TuiApp) -> String {
             "[j/k] Scroll | [a] Attachments | [c] Comment | [E] Edit | [D] Delete | [N/X] Note | [f/v] Attach/Clip | [o/O] Open/All | [g] Jump | [u] Unblock | [s/r/d/x] Status | [Esc] Close"
                 .to_string()
         }
-        FocusContext::SearchInput => "[Enter/Esc] Finish | [Bksp] Delete".to_string(),
+        FocusContext::SearchInput => "[Enter/Esc] Finish | [Alt+Bksp] Del word | [Ctrl+Z] Undo".to_string(),
         FocusContext::UserSwitchPrompt => "[Enter] Switch user | [Esc] Cancel".to_string(),
         FocusContext::BulkEditPrompt => "[Enter] Apply | [Esc] Cancel".to_string(),
         FocusContext::Tab(ActiveTab::Focus) => {
@@ -944,11 +957,11 @@ fn focus_hints(app: &TuiApp) -> String {
                 .to_string()
         }
         FocusContext::Tab(ActiveTab::Eisenhower) => {
-            "[1-5] Views | [P] Project | [h/l/Tab/S-Tab] Quadrant | [j/k] Task | [+/-] Imp | [</>] Urgency | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
+            "[1-5] Views | [P] Project | [U] User | [h/l/Tab/S-Tab] Quadrant | [j/k] Task | [+/-] Imp | [</>] Urgency | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
                 .to_string()
         }
         FocusContext::Tab(ActiveTab::Database) => {
-            "[1-5] Views | [P] Project | [/] Search/filter column | [f] Status | [t] Tag | [u] User | [m] Mine | [o] Column | [O] Asc/Desc | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [?] Help"
+            "[1-5] Views | [P] Project | [U] User | [/] Search/filter column | [f] Status | [t] Tag | [u] Cycle user | [m] Mine | [o] Column | [O] Asc/Desc | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [?] Help"
                 .to_string()
         }
         FocusContext::Tab(ActiveTab::DataEntry) => app.entry_form.hint().to_string(),
@@ -1327,18 +1340,28 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     }
 }
 
-fn render_project_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
+/// Shared layout for the searchable filter popups (` Project Filter `, ` User Filter `).
+struct FilterModal<'a> {
+    title: &'a str,
+    query: &'a str,
+    selected: usize,
+    options: Vec<(String, String)>,
+    current: String,
+    empty: &'a str,
+}
+
+fn render_filter_modal(frame: &mut Frame, area: Rect, accessible: bool, modal: &FilterModal<'_>) {
     let popup_area = centered_rect(56, 64, area);
     frame.render_widget(Clear, popup_area);
 
     let block = Block::default()
         .title(Span::styled(
-            " Project Filter ",
+            modal.title,
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ))
-        .borders(panel_borders(Borders::ALL, app.accessible_mode))
+        .borders(panel_borders(Borders::ALL, accessible))
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Yellow));
     let inner = block.inner(popup_area);
@@ -1349,30 +1372,28 @@ fn render_project_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
 
     let [input_area, list_area] = Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(inner);
 
-    let input = Paragraph::new(Line::from(format!(" Search: {}_", app.project_modal_query)).style(Style::default().fg(Color::Yellow)))
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
+    let input = Paragraph::new(Line::from(format!(" Search: {}_", modal.query)).style(Style::default().fg(Color::Yellow))).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     frame.render_widget(input, input_area);
     let cursor_x = input_area
         .x
-        .saturating_add((" Search: ".len() + app.project_modal_query.chars().count()) as u16)
+        .saturating_add((" Search: ".len() + modal.query.chars().count()) as u16)
         .min(input_area.right().saturating_sub(1));
     frame.set_cursor_position(Position::new(cursor_x, input_area.y));
 
-    let options = app.filtered_project_options();
-    let current = app.current_project_filter();
-    let lines: Vec<Line> = if options.is_empty() {
-        vec![Line::from(Span::styled("  No matching projects", Style::default().fg(Color::DarkGray)))]
+    let lines: Vec<Line> = if modal.options.is_empty() {
+        vec![Line::from(Span::styled(modal.empty, Style::default().fg(Color::DarkGray)))]
     } else {
-        options
+        modal
+            .options
             .iter()
             .enumerate()
             .map(|(idx, (value, label))| {
-                let selected = idx == app.project_modal_selected;
-                let active = *value == current;
+                let selected = idx == modal.selected;
+                let active = value.eq_ignore_ascii_case(&modal.current);
                 let marker = if selected { "▶ " } else { "  " };
                 let check = if active { "✓ " } else { "  " };
                 let style = if selected {
@@ -1390,6 +1411,38 @@ fn render_project_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
             .collect()
     };
     frame.render_widget(Paragraph::new(lines), list_area);
+}
+
+fn render_project_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    render_filter_modal(
+        frame,
+        area,
+        app.accessible_mode,
+        &FilterModal {
+            title: " Project Filter ",
+            query: &app.project_modal_query,
+            selected: app.project_modal_selected,
+            options: app.filtered_project_options(),
+            current: app.current_project_filter(),
+            empty: "  No matching projects",
+        },
+    );
+}
+
+fn render_user_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    render_filter_modal(
+        frame,
+        area,
+        app.accessible_mode,
+        &FilterModal {
+            title: if app.user_filter_allows_all() { " User Filter " } else { " User Filter (single user) " },
+            query: &app.user_modal_query,
+            selected: app.user_modal_selected,
+            options: app.filtered_user_options(),
+            current: app.current_user_filter(),
+            empty: "  No matching users",
+        },
+    );
 }
 
 fn render_about_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {

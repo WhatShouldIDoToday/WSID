@@ -626,12 +626,12 @@ mod tests {
             }
         };
 
-        // Switch active user (registers it and stays valid-only)
-        press(&mut app, KeyCode::Char('U'));
+        // Switch active user with `Ctrl+U` (registers it and stays valid-only); `U` filters views.
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         type_str(&mut app, "bad name");
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.user, "alice");
-        press(&mut app, KeyCode::Char('U'));
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         type_str(&mut app, "Bob");
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.user, "bob");
@@ -1129,5 +1129,218 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
         assert!(!app.should_quit);
         assert!(app.form_errors.is_none());
+    }
+
+    #[test]
+    fn tui_prompts_support_word_delete_undo_and_paste() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("prompts.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
+
+        // Project filter: Option+Backspace removes a word, Ctrl+Z brings it back.
+        press(&mut app, KeyCode::Char('P'), KeyModifiers::NONE);
+        assert!(app.project_modal_open);
+        for ch in "web api".chars() {
+            press(&mut app, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        assert_eq!(app.project_modal_query, "web api");
+        press(&mut app, KeyCode::Backspace, KeyModifiers::ALT);
+        assert_eq!(app.project_modal_query, "web ");
+        press(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(app.project_modal_query, "web api");
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.project_modal_open);
+
+        // Database search: a bracketed paste stays on one line and undoes as one step.
+        press(&mut app, KeyCode::Char('4'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        assert!(app.search_editing);
+        app.handle_paste("line one\nline two");
+        assert_eq!(app.search_query, "line one line two");
+        press(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(app.search_query, "");
+        press(&mut app, KeyCode::Char('y'), KeyModifiers::CONTROL);
+        assert_eq!(app.search_query, "line one line two");
+
+        // The word-delete chord only fires while a prompt owns the keys.
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.search_editing);
+        assert_eq!(app.search_query, "line one line two");
+    }
+
+    #[test]
+    fn tui_eisenhower_edits_follow_focus_and_apply_to_checked_tasks() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("eisenhower.db");
+        let (do_first, delegate) = {
+            let mut db = Database::open(&db_path).unwrap();
+            let do_first = wsid_core::create_task(
+                &mut db,
+                wsid_core::CreateTaskInput {
+                    title: "Do first".to_string(),
+                    importance: Some(3),
+                    urgent_override: Some(true),
+                    ..Default::default()
+                },
+                "alice",
+            )
+            .unwrap()
+            .id;
+            let delegate = wsid_core::create_task(
+                &mut db,
+                wsid_core::CreateTaskInput {
+                    title: "Delegate".to_string(),
+                    importance: Some(1),
+                    urgent_override: Some(true),
+                    ..Default::default()
+                },
+                "alice",
+            )
+            .unwrap()
+            .id;
+            (do_first, delegate)
+        };
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
+        // Quadrant and row the matrix cursor is on.
+        let focused = |app: &TuiApp| {
+            app.eisenhower_tasks_in_quadrant(app.eisenhower_quadrant)[app.eisenhower_row]
+                .task
+                .id
+                .clone()
+        };
+        let importance = |app: &TuiApp, id: &str| {
+            app.all_tasks
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .importance
+        };
+
+        press(&mut app, KeyCode::Char('3'), KeyModifiers::NONE);
+        assert_eq!(app.eisenhower_quadrant, 0, "Q1 holds the important-and-urgent task");
+
+        // Check the Q3 task, then walk to Q1 and check the other one too.
+        press(&mut app, KeyCode::Char('l'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('l'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char(' '), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('l'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('l'), KeyModifiers::NONE);
+        assert_eq!(app.eisenhower_quadrant, 0);
+        press(&mut app, KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(app.selected_ids.len(), 2);
+
+        // Demoting importance moves the focused task from Q1 to Q3; the cursor goes with it and
+        // both check marks survive, even though only one task needed the change.
+        press(&mut app, KeyCode::Char('-'), KeyModifiers::NONE);
+        assert_eq!(app.eisenhower_quadrant, 2, "the cursor follows the edited task into Q3");
+        assert_eq!(focused(&app), do_first);
+        assert_eq!(importance(&app, &do_first), 2);
+        assert_eq!(importance(&app, &delegate), 1, "1 is already the floor");
+        assert_eq!(app.selected_ids.len(), 2, "check marks are never cleared by an edit");
+
+        // Raising both at once: the focused task returns to Q1 and the cursor follows it again.
+        press(&mut app, KeyCode::Char('+'), KeyModifiers::NONE);
+        assert_eq!(importance(&app, &do_first), 3);
+        assert_eq!(importance(&app, &delegate), 2);
+        assert_eq!(app.eisenhower_quadrant, 0);
+        assert_eq!(focused(&app), do_first);
+        assert_eq!(app.selected_ids.len(), 2);
+
+        // Completing every checked task empties the matrix; the cursor does not panic or drift
+        // onto a stale row, and the checks stay put.
+        press(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
+        assert!(app.eisenhower_items.is_empty());
+        assert_eq!(app.eisenhower_row, 0);
+        assert_eq!(app.selected_ids.len(), 2);
+    }
+
+    #[test]
+    fn tui_user_filter_modal_scopes_each_view() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("users.db");
+        {
+            let mut db = Database::open(&db_path).unwrap();
+            wsid_core::create_task(&mut db, wsid_core::CreateTaskInput { title: "Alice task".to_string(), ..Default::default() }, "alice")
+                .unwrap();
+            wsid_core::create_task(&mut db, wsid_core::CreateTaskInput { title: "Bob task".to_string(), ..Default::default() }, "bob")
+                .unwrap();
+        }
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        let has_all = |app: &TuiApp| {
+            app.user_filter_options()
+                .iter()
+                .any(|(value, _)| value == wsid_core::ALL_USERS)
+        };
+        let type_str = |app: &mut TuiApp, s: &str| {
+            for ch in s.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        };
+        let matrix_titles = |app: &TuiApp| {
+            app.eisenhower_items
+                .iter()
+                .map(|i| i.task.title.clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Every list view starts scoped to the active user.
+        assert_eq!((app.focus_user.as_str(), app.kanban_user.as_str(), app.eisenhower_user.as_str()), ("alice", "alice", "alice"));
+        assert_eq!(matrix_titles(&app), vec!["Alice task".to_string()]);
+
+        // Kanban: `U` offers `all` and applying it widens the board.
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('U'));
+        assert!(app.user_modal_open);
+        assert!(has_all(&app));
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.user_modal_open);
+        assert_eq!(app.kanban_user, wsid_core::ALL_USERS);
+        assert_eq!(app.kanban_tasks_in_col(app.kanban_col).len(), 2);
+
+        // Eisenhower: same `all` option, and it reaches the matrix.
+        press(&mut app, KeyCode::Char('3'));
+        press(&mut app, KeyCode::Char('U'));
+        assert!(has_all(&app));
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.eisenhower_user, wsid_core::ALL_USERS);
+        assert_eq!(matrix_titles(&app), vec!["Alice task".to_string(), "Bob task".to_string()]);
+
+        // Focus: single-user only, and typing filters the list before Enter applies it.
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('U'));
+        assert!(!has_all(&app), "Focus shows one user, so `all` is not offered");
+        type_str(&mut app, "bo");
+        assert_eq!(app.filtered_user_options().first().map(|(v, _)| v.as_str()), Some("bob"), "search narrows the modal to bob");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.focus_user, "bob");
+        let queued: Vec<String> = app
+            .focus_queue
+            .actionable_tasks
+            .iter()
+            .map(|f| f.task.title.clone())
+            .collect();
+        assert_eq!(queued, vec!["Bob task".to_string()]);
+
+        // Esc leaves the filter untouched.
+        press(&mut app, KeyCode::Char('U'));
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.user_modal_open);
+        assert_eq!(app.focus_user, "bob");
+
+        // A user nobody has used yet can still be filtered to; `all` stays reserved.
+        press(&mut app, KeyCode::Char('U'));
+        type_str(&mut app, "@newbie");
+        assert_eq!(app.filtered_user_options(), vec![("newbie".to_string(), "@newbie".to_string())]);
+        for _ in 0.."@newbie".len() {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_str(&mut app, "all");
+        assert!(app.filtered_user_options().is_empty());
+        press(&mut app, KeyCode::Esc);
     }
 }

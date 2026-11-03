@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::{FocusPreset, OriginKind, RelationType, Task, TaskStatus};
-use crate::tasks::{list_tasks, normalize_tag, normalize_user};
+use crate::tasks::{ALL_USERS, list_tasks, normalize_tag, normalize_user};
 
 /// Default workday length in minutes (8 hours = 480 minutes) for converting estimates to days of slack.
 pub const DEFAULT_WORKDAY_MINUTES: f64 = 480.0;
@@ -277,8 +277,12 @@ pub fn list_eisenhower_matrix(
     let graph = RelationGraph::load(&db.conn)?;
 
     let normalized_user = match user_filter {
-        Some(u) if !u.trim().is_empty() => Some(normalize_user(u)?),
-        _ => None,
+        Some(u) => {
+            let trimmed = u.trim();
+            let stripped = trimmed.strip_prefix('@').unwrap_or(trimmed).trim();
+            if stripped.is_empty() || stripped.eq_ignore_ascii_case(ALL_USERS) { None } else { Some(normalize_user(u)?) }
+        }
+        None => None,
     };
 
     let mut items = Vec::new();
