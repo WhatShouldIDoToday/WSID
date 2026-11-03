@@ -27,9 +27,9 @@
     parseDurationInput,
     validateDeadlines,
     validateUserRef,
-    userOptionLabel,
   } from "../lib/ipc";
   import { subscribeDropzone } from "../lib/filedrop";
+  import UserRefInput from "./UserRefInput.svelte";
 
   interface DraftAttachmentItem {
     id: string;
@@ -928,42 +928,34 @@
           <div class="form-grid">
             <div class="form-field">
               <label for="entry-reporter">Reporter User</label>
-              <input
+              <UserRefInput
                 id="entry-reporter"
-                type="text"
-                list="user-datalist"
+                {knownUsers}
+                {userKinds}
                 bind:value={reporter}
               />
             </div>
 
             <div class="form-field">
               <label for="entry-assignee">Assignee User</label>
-              <input
+              <UserRefInput
                 id="entry-assignee"
-                type="text"
-                list="user-datalist"
+                {knownUsers}
+                {userKinds}
                 bind:value={assignee}
               />
             </div>
 
             <div class="form-field">
               <label for="entry-evaluator">Evaluator User (Approver)</label>
-              <input
+              <UserRefInput
                 id="entry-evaluator"
-                type="text"
-                list="user-datalist"
+                {knownUsers}
+                {userKinds}
                 bind:value={evaluator}
               />
             </div>
           </div>
-
-          <datalist id="user-datalist">
-            {#each knownUsers as u}
-              <option value={u} label={userOptionLabel(u, userKinds)}>
-                {userOptionLabel(u, userKinds)}
-              </option>
-            {/each}
-          </datalist>
 
           <TagChipsInput
             id="entry-tags"

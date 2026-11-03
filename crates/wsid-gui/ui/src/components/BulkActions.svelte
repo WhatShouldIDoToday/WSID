@@ -10,13 +10,14 @@
     bulkRemoveTasks,
     describeUserNotice,
     summarizeBulk,
-    userOptionLabel,
+    userKindMismatch,
     validateProject,
     validateUserRef,
     withUserNotices,
   } from "../lib/ipc";
   import ConfirmModal from "./ConfirmModal.svelte";
   import Select from "./ui/Select.svelte";
+  import UserRefInput from "./UserRefInput.svelte";
 
   interface Props {
     ids: string[];
@@ -54,6 +55,9 @@
   let userNotice = $state<{ text: string; warning: boolean } | null>(null);
   let projectError = $state<string | null>(null);
 
+  /** The mismatched text the user has already confirmed with a second Enter. */
+  let confirmedMismatch = $state<string | null>(null);
+
   function commitAssignee() {
     const raw = assigneeDraft.trim();
     if (!raw || busy) return;
@@ -63,7 +67,15 @@
       announce(`Assignee: ${check.error ?? "invalid"}`);
       return;
     }
+    const mismatch = userKindMismatch(raw, knownUsers, userKinds);
+    if (mismatch && confirmedMismatch !== raw) {
+      confirmedMismatch = raw;
+      assigneeError = `${mismatch} Press Enter again to assign anyway.`;
+      announce(assigneeError);
+      return;
+    }
     assigneeError = null;
+    confirmedMismatch = null;
     assigneeDraft = "";
     void apply({ assignee: check.normalized });
   }
@@ -178,39 +190,33 @@
   />
 
   <div class="bulk-text-field">
-    <input
-      type="text"
-      class="bulk-text-input"
-      list="bulk-assignee-options"
+    <UserRefInput
+      id="bulk-assignee"
+      className="bulk-text-input"
       placeholder="Assignee…"
-      aria-label="Set assignee (type a new name, or claude:name)"
-      autocomplete="off"
+      ariaLabel="Set assignee (type a new name, or claude:name)"
       disabled={busy}
+      {knownUsers}
+      {userKinds}
+      error={assigneeError}
       bind:value={assigneeDraft}
-      oninput={() => {
+      onInput={() => {
         assigneeError = null;
+        confirmedMismatch = null;
         userNotice = null;
       }}
-      onkeydown={(e) =>
-        handleTextKeydown(e, commitAssignee, () => {
-          assigneeDraft = "";
-          assigneeError = null;
-        })}
+      onEnter={() => commitAssignee()}
+      onEscape={() => {
+        assigneeDraft = "";
+        assigneeError = null;
+      }}
     />
-    <datalist id="bulk-assignee-options">
-      {#each knownUsers as u (u)}
-        <option value={u} label={userOptionLabel(u, userKinds)}>
-          {userOptionLabel(u, userKinds)}
-        </option>
-      {/each}
-    </datalist>
-    {#if assigneeError}
-      <span class="field-error" role="alert">{assigneeError}</span>
-    {/if}
   </div>
 
   <div class="bulk-text-field">
     <input
+      autocorrect="off"
+      autocapitalize="off"
       type="text"
       class="bulk-text-input"
       list="bulk-project-options"

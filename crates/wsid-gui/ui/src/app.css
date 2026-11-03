@@ -2402,6 +2402,29 @@ input[type="text"].tag-compact-input {
   color: var(--danger);
 }
 
+/* Shared typed-user input (components/UserRefInput.svelte). */
+.user-ref {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.user-ref input {
+  width: 100%;
+  min-width: 0;
+}
+
+.user-ref-warning {
+  font-size: 0.78rem;
+  color: var(--warning);
+}
+
+.bulk-text-field .field-warning {
+  font-size: 0.75rem;
+  color: var(--warning, var(--text-secondary));
+}
+
 .bulk-text-field .field-error {
   font-size: 0.75rem;
 }

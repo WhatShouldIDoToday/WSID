@@ -47,10 +47,10 @@
     formatDeadlineDisplay,
     validateUserRef,
     parseCommentMentions,
-    userOptionLabel,
     tokenizeCommentBody,
   } from "../lib/ipc";
   import { subscribeDropzone } from "../lib/filedrop";
+  import UserRefInput from "./UserRefInput.svelte";
 
   interface DraftCommentAttachment {
     id: string;
@@ -993,41 +993,28 @@
               {#if editingTask}
                 <div class="side-field">
                   <label for="edit-reporter">Reporter</label>
-                  <input
+                  <UserRefInput
                     id="edit-reporter"
-                    type="text"
-                    list="edit-user-datalist"
-                    autocomplete="off"
+                    {knownUsers}
+                    {userKinds}
                     bind:value={editReporter}
                   />
-                  <datalist id="edit-user-datalist">
-                    {#each knownUsers as usr (usr)}
-                      <option
-                        value={usr}
-                        label={userOptionLabel(usr, userKinds)}
-                      >
-                        {userOptionLabel(usr, userKinds)}
-                      </option>
-                    {/each}
-                  </datalist>
                 </div>
                 <div class="side-field">
                   <label for="edit-assignee">Assignee</label>
-                  <input
+                  <UserRefInput
                     id="edit-assignee"
-                    type="text"
-                    list="edit-user-datalist"
-                    autocomplete="off"
+                    {knownUsers}
+                    {userKinds}
                     bind:value={editAssignee}
                   />
                 </div>
                 <div class="side-field">
                   <label for="edit-evaluator">Evaluator</label>
-                  <input
+                  <UserRefInput
                     id="edit-evaluator"
-                    type="text"
-                    list="edit-user-datalist"
-                    autocomplete="off"
+                    {knownUsers}
+                    {userKinds}
                     bind:value={editEvaluator}
                   />
                 </div>
@@ -1185,6 +1172,8 @@
                 <div class="side-field">
                   <label for="edit-project">Project</label>
                   <input
+                    autocorrect="off"
+                    autocapitalize="off"
                     id="edit-project"
                     type="text"
                     bind:value={editProject}

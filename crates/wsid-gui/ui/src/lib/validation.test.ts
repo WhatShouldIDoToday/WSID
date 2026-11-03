@@ -5,6 +5,7 @@ import {
   parseDurationInput,
   validateDeadlineOrder,
   validateTag,
+  userKindMismatch,
   validateUserRef,
   validateUsername,
 } from "./ipc";
@@ -180,4 +181,28 @@ describe("typed user references", () => {
       expect(r.error).toMatch(pattern);
     });
   }
+});
+
+describe("user kind mismatch warning", () => {
+  const kinds = { bob: "claude", rob: "jira" };
+  const known = ["bob", "rob", "davidb"];
+
+  test("warns when the typed kind differs from the existing user", () => {
+    expect(userKindMismatch("jira:bob", known, kinds)).toBe(
+      '@bob is an existing claude user; "jira:" would be ignored.',
+    );
+  });
+
+  test("no warning when the kind matches, the user is new, or no kind is typed", () => {
+    expect(userKindMismatch("claude:bob", known, kinds)).toBeNull();
+    expect(userKindMismatch("claude:newperson", known, kinds)).toBeNull();
+    expect(userKindMismatch("bob", known, kinds)).toBeNull();
+    expect(userKindMismatch("human:davidb", known, kinds)).toBeNull();
+  });
+
+  test("defaults unknown kinds to human", () => {
+    expect(userKindMismatch("claude:davidb", known, kinds)).toMatch(
+      /existing human user/,
+    );
+  });
 });

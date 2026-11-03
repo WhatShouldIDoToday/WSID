@@ -159,6 +159,24 @@ export interface AppSessionSnapshot {
 export const DEFAULT_USER_KIND = "human";
 
 /** Kind of `user`, falling back to `human` for users without an explicit kind. */
+/**
+ * Warning text when a typed `kind:name` names an existing user of a different kind
+ * (core would keep the stored kind and ignore the typed one). Null when there is no warning.
+ */
+export function userKindMismatch(
+  raw: string,
+  knownUsers: string[],
+  kinds: Record<string, string>,
+): string | null {
+  const check = validateUserRef(raw);
+  if (!check.normalized?.includes(":")) return null;
+  const [kind, user] = check.normalized.split(":");
+  if (!knownUsers.includes(user)) return null;
+  const actual = userKindOf(kinds, user);
+  if (actual === kind) return null;
+  return `@${user} is an existing ${actual} user; "${kind}:" would be ignored.`;
+}
+
 /** Suggestion label for a user, e.g. `rob (jira)`. */
 export function userOptionLabel(
   user: string,
