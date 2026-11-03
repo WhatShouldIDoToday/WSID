@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { untrack } from "svelte";
   import ConfirmModal from "./ConfirmModal.svelte";
   import DateFieldPicker from "./DateFieldPicker.svelte";
@@ -739,11 +740,15 @@
       <div class="form-grid">
         <div class="form-field">
           <label for="entry-status">Initial Status</label>
-          <select id="entry-status" bind:value={status}>
-            {#each STATUS_ORDER as st}
-              <option value={st}>{STATUS_LABELS[st]}</option>
-            {/each}
-          </select>
+          <Select
+            id="entry-status"
+            value={status}
+            options={STATUS_ORDER.map((st) => ({
+              value: st,
+              label: STATUS_LABELS[st],
+            }))}
+            onValueChange={(v) => (status = v as TaskStatus)}
+          />
         </div>
 
         <div class="form-field">

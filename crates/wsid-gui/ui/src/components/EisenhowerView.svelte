@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { untrack } from "svelte";
   import {
     type EisenhowerClassification,
@@ -255,33 +256,38 @@
       <label for="matrix-project-select" class="field-label" style="margin: 0;">
         Project
       </label>
-      <select
+      <Select
         id="matrix-project-select"
-        bind:value={projectFilter}
-        onchange={() => announce(`Matrix project filter: ${projectFilter}`)}
-      >
-        {#each projectOptions as project (project)}
-          <option value={project}>{project}</option>
-        {/each}
-        <option value={PROJECT_ALL}>All projects</option>
-      </select>
+        size="sm"
+        value={projectFilter}
+        options={[
+          ...projectOptions.map((project) => ({
+            value: project,
+            label: project,
+          })),
+          { value: PROJECT_ALL, label: "All projects" },
+        ]}
+        onValueChange={(v) => {
+          projectFilter = v;
+          announce(`Matrix project filter: ${projectFilter}`);
+        }}
+      />
     </div>
 
     <div class="control-inline">
       <label for="matrix-user-select" class="field-label" style="margin: 0;">
         User
       </label>
-      <select
+      <Select
         id="matrix-user-select"
+        size="sm"
         value={userFilter}
-        onchange={(e) =>
-          onUserFilterChange((e.currentTarget as HTMLSelectElement).value)}
-      >
-        <option value={USER_ALL}>All users</option>
-        {#each userOptions as user (user)}
-          <option value={user}>@{user}</option>
-        {/each}
-      </select>
+        options={[
+          { value: USER_ALL, label: "All users" },
+          ...userOptions.map((user) => ({ value: user, label: `@${user}` })),
+        ]}
+        onValueChange={(v) => onUserFilterChange(v)}
+      />
     </div>
   </div>
 
@@ -317,20 +323,19 @@
         onDataChanged();
       }}
     >
-      <select
-        aria-label="Move to quadrant"
-        onchange={(e) => {
-          const el = e.currentTarget as HTMLSelectElement;
-          const q = el.value as EisenhowerQuadrant;
-          el.value = "";
-          if (q) void moveIdsToQuadrant(selection.ids, q);
+      <Select
+        size="sm"
+        ariaLabel="Move to quadrant"
+        placeholder="Quadrant…"
+        value=""
+        options={QUADRANTS.map((q) => ({
+          value: q,
+          label: QUADRANT_META[q].title,
+        }))}
+        onValueChange={(v) => {
+          if (v) void moveIdsToQuadrant(selection.ids, v as EisenhowerQuadrant);
         }}
-      >
-        <option value="">Quadrant…</option>
-        {#each QUADRANTS as q}
-          <option value={q}>{QUADRANT_META[q].title}</option>
-        {/each}
-      </select>
+      />
     </BulkActions>
   {/if}
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { untrack } from "svelte";
   import {
     type Task,
@@ -229,36 +230,44 @@
       <label for="kanban-project-select" class="field-label" style="margin: 0;">
         Project
       </label>
-      <select
+      <Select
         id="kanban-project-select"
-        bind:value={projectFilter}
-        onchange={() => announce(`Kanban project filter: ${projectFilter}`)}
-      >
-        {#each projectOptions as project (project)}
-          <option value={project}>{project}</option>
-        {/each}
-        <option value={PROJECT_ALL}>All projects</option>
-      </select>
+        size="sm"
+        value={projectFilter}
+        options={[
+          ...projectOptions.map((project) => ({
+            value: project,
+            label: project,
+          })),
+          { value: PROJECT_ALL, label: "All projects" },
+        ]}
+        onValueChange={(v) => {
+          projectFilter = v;
+          announce(`Kanban project filter: ${projectFilter}`);
+        }}
+      />
     </div>
 
     <div class="control-inline">
       <label for="kanban-user-select" class="field-label" style="margin: 0;">
         User
       </label>
-      <select
+      <Select
         id="kanban-user-select"
-        bind:value={userFilter}
-        onchange={() =>
+        size="sm"
+        value={userFilter}
+        options={[
+          { value: USER_ALL, label: "All users" },
+          ...userOptions.map((user) => ({ value: user, label: `@${user}` })),
+        ]}
+        onValueChange={(v) => {
+          userFilter = v;
           announce(
             "Kanban user filter: " +
               (userFilter === USER_ALL ? "all users" : "@" + userFilter),
-          )}
-      >
-        <option value={USER_ALL}>All users</option>
-        {#each userOptions as user (user)}
-          <option value={user}>@{user}</option>
-        {/each}
-      </select>
+          );
+        }}
+      />
     </div>
   </div>
 

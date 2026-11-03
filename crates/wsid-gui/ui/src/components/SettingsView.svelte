@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { Dialog } from "bits-ui";
   import {
     type AppSessionSnapshot,
@@ -156,18 +157,15 @@
         <label for="settings-focus-preset" class="field-label">
           Default Focus Preset
         </label>
-        <select
+        <Select
           id="settings-focus-preset"
           value={session.active_preset}
-          onchange={(e) =>
-            onPresetChange(
-              (e.currentTarget as HTMLSelectElement).value as FocusPreset,
-            )}
-        >
-          {#each Object.entries(PRESET_LABELS) as [key, label]}
-            <option value={key}>{label}</option>
-          {/each}
-        </select>
+          options={Object.entries(PRESET_LABELS).map(([key, label]) => ({
+            value: key,
+            label,
+          }))}
+          onValueChange={(v) => onPresetChange(v as FocusPreset)}
+        />
       </div>
 
       <div class="form-field">
@@ -216,56 +214,47 @@
         <label for="settings-theme-select" class="field-label">
           Color Scheme
         </label>
-        <select
+        <Select
           id="settings-theme-select"
           value={uiPrefs.theme}
-          onchange={(e) =>
-            setTheme(
-              (e.currentTarget as HTMLSelectElement)
-                .value as UiPreferences["theme"],
-            )}
-        >
-          <option value="system">System Default (prefers-color-scheme)</option>
-          <option value="dark">Dark</option>
-          <option value="oled">OLED (Pure Black)</option>
-          <option value="light">Light</option>
-        </select>
+          options={[
+            { value: "system", label: "System Default (prefers-color-scheme)" },
+            { value: "dark", label: "Dark" },
+            { value: "oled", label: "OLED (Pure Black)" },
+            { value: "light", label: "Light" },
+          ]}
+          onValueChange={(v) => setTheme(v as UiPreferences["theme"])}
+        />
       </div>
 
       <div class="form-field" style="margin-bottom: 1rem;">
         <label for="settings-contrast-select" class="field-label">
           Contrast Level
         </label>
-        <select
+        <Select
           id="settings-contrast-select"
           value={uiPrefs.contrast}
-          onchange={(e) =>
-            setContrast(
-              (e.currentTarget as HTMLSelectElement)
-                .value as UiPreferences["contrast"],
-            )}
-        >
-          <option value="system">System Default (prefers-contrast)</option>
-          <option value="more">High Contrast</option>
-        </select>
+          options={[
+            { value: "system", label: "System Default (prefers-contrast)" },
+            { value: "more", label: "High Contrast" },
+          ]}
+          onValueChange={(v) => setContrast(v as UiPreferences["contrast"])}
+        />
       </div>
 
       <div class="form-field" style="margin-bottom: 1rem;">
         <label for="settings-palette-select" class="field-label">
           Status & Priority Color Palette
         </label>
-        <select
+        <Select
           id="settings-palette-select"
           value={uiPrefs.palette}
-          onchange={(e) =>
-            setPalette(
-              (e.currentTarget as HTMLSelectElement)
-                .value as UiPreferences["palette"],
-            )}
-        >
-          <option value="default">Standard Palette</option>
-          <option value="okabe-ito">Okabe-Ito (Colorblind-Safe)</option>
-        </select>
+          options={[
+            { value: "default", label: "Standard Palette" },
+            { value: "okabe-ito", label: "Okabe-Ito (Colorblind-Safe)" },
+          ]}
+          onValueChange={(v) => setPalette(v as UiPreferences["palette"])}
+        />
       </div>
 
       <div class="form-field">
@@ -339,21 +328,20 @@
           <label for="settings-recent-db" class="field-label">
             Recent Workspaces
           </label>
-          <select
+          <Select
             id="settings-recent-db"
             value={session.is_global_db ? "" : session.db_path}
-            onchange={(e) => {
-              const target = e.currentTarget as HTMLSelectElement;
-              if (target.value) {
-                void onSwitchRecentDb(target.value);
-              }
+            options={[
+              { value: "", label: "Select a recent workspace database..." },
+              ...session.recent_workspaces.map((ws) => ({
+                value: ws,
+                label: ws,
+              })),
+            ]}
+            onValueChange={(v) => {
+              if (v) void onSwitchRecentDb(v);
             }}
-          >
-            <option value="">Select a recent workspace database...</option>
-            {#each session.recent_workspaces as ws}
-              <option value={ws}>{ws}</option>
-            {/each}
-          </select>
+          />
         </div>
       {/if}
     </section>

@@ -4,6 +4,7 @@
     RELATION_LABELS,
     type RelationInputKind,
   } from "../lib/ipc";
+  import Select from "./ui/Select.svelte";
 
   interface Props {
     value: RelationInputKind;
@@ -18,27 +19,29 @@
   let pending = $state<RelationInputKind | null>(null);
   let current = $derived(pending ?? value);
 
-  async function handleChange(e: Event) {
-    const next = (e.currentTarget as HTMLSelectElement)
-      .value as RelationInputKind;
-    if (next === value) return;
-    pending = next;
+  const options = RELATION_INPUT_KINDS.map((kind) => ({
+    value: kind,
+    label: RELATION_LABELS[kind],
+  }));
+
+  async function handleChange(next: string) {
+    const kind = next as RelationInputKind;
+    if (kind === value) return;
+    pending = kind;
     try {
-      await onChange(next);
+      await onChange(kind);
     } finally {
       pending = null;
     }
   }
 </script>
 
-<select
+<Select
   class="relation-type-select"
-  aria-label={label}
+  ariaLabel={label}
   {disabled}
   value={current}
-  onchange={handleChange}
->
-  {#each RELATION_INPUT_KINDS as kind (kind)}
-    <option value={kind}>{RELATION_LABELS[kind]}</option>
-  {/each}
-</select>
+  {options}
+  size="sm"
+  onValueChange={handleChange}
+/>

@@ -351,6 +351,7 @@
       (target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
         target.tagName === "SELECT" ||
+        target.closest("[data-select-trigger], [data-select-content]") ||
         target.isContentEditable);
 
     if (

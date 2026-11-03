@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import {
     type FocusQueueResponse,
     type BlockedTaskEntry,
@@ -63,33 +64,33 @@
     {#if focusData}
       <div class="control-inline">
         <label for="focus-project-select">Project:</label>
-        <select
+        <Select
           id="focus-project-select"
+          size="sm"
           value={projectFilter}
-          onchange={(e) =>
-            onProjectChange((e.currentTarget as HTMLSelectElement).value)}
-        >
-          {#each [...new Set( ["default", ...knownProjects] )] as project (project)}
-            <option value={project}>{project}</option>
-          {/each}
-          <option value="all">All projects</option>
-        </select>
+          options={[
+            ...[...new Set(["default", ...knownProjects])].map((project) => ({
+              value: project,
+              label: project,
+            })),
+            { value: "all", label: "All projects" },
+          ]}
+          onValueChange={(v) => onProjectChange(v)}
+        />
       </div>
 
       <div class="control-inline">
         <label for="focus-preset-select">Preset:</label>
-        <select
+        <Select
           id="focus-preset-select"
+          size="sm"
           value={focusData.preset}
-          onchange={(e) =>
-            onPresetChange(
-              (e.currentTarget as HTMLSelectElement).value as FocusPreset,
-            )}
-        >
-          {#each Object.entries(PRESET_LABELS) as [key, label]}
-            <option value={key}>{label}</option>
-          {/each}
-        </select>
+          options={Object.entries(PRESET_LABELS).map(([key, label]) => ({
+            value: key,
+            label,
+          }))}
+          onValueChange={(v) => onPresetChange(v as FocusPreset)}
+        />
       </div>
     {/if}
   </div>

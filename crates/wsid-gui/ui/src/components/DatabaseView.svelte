@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { onMount } from "svelte";
   import {
     type SearchHit,
@@ -176,42 +177,58 @@
 
     <div class="form-field">
       <label for="db-status-filter">Status</label>
-      <select id="db-status-filter" bind:value={statusFilter}>
-        <option value="">All Statuses</option>
-        {#each STATUS_ORDER as st}
-          <option value={st}>{STATUS_LABELS[st]}</option>
-        {/each}
-      </select>
+      <Select
+        id="db-status-filter"
+        placeholder="All Statuses"
+        value={statusFilter}
+        options={[
+          { value: "", label: "All Statuses" },
+          ...STATUS_ORDER.map((st) => ({
+            value: st,
+            label: STATUS_LABELS[st],
+          })),
+        ]}
+        onValueChange={(v) => (statusFilter = v)}
+      />
     </div>
 
     <div class="form-field">
       <label for="db-tag-filter">Tag</label>
-      <select id="db-tag-filter" bind:value={tagFilter}>
-        <option value="">All Tags</option>
-        {#each knownTags as t}
-          <option value={t}>#{t}</option>
-        {/each}
-      </select>
+      <Select
+        id="db-tag-filter"
+        value={tagFilter}
+        options={[
+          { value: "", label: "All Tags" },
+          ...knownTags.map((t) => ({ value: t, label: `#${t}` })),
+        ]}
+        onValueChange={(v) => (tagFilter = v)}
+      />
     </div>
 
     <div class="form-field">
       <label for="db-project-filter">Project</label>
-      <select id="db-project-filter" bind:value={projectFilter}>
-        <option value="">All Projects</option>
-        {#each knownProjects as p}
-          <option value={p}>{p}</option>
-        {/each}
-      </select>
+      <Select
+        id="db-project-filter"
+        value={projectFilter}
+        options={[
+          { value: "", label: "All Projects" },
+          ...knownProjects.map((p) => ({ value: p, label: p })),
+        ]}
+        onValueChange={(v) => (projectFilter = v)}
+      />
     </div>
 
     <div class="form-field">
       <label for="db-assignee-filter">Assignee</label>
-      <select id="db-assignee-filter" bind:value={assigneeFilter}>
-        <option value="">All Assignees</option>
-        {#each knownUsers as u}
-          <option value={u}>@{u}</option>
-        {/each}
-      </select>
+      <Select
+        id="db-assignee-filter"
+        value={assigneeFilter}
+        options={[
+          { value: "", label: "All Assignees" },
+          ...knownUsers.map((u) => ({ value: u, label: `@${u}` })),
+        ]}
+        onValueChange={(v) => (assigneeFilter = v)}
+      />
     </div>
   </div>
 

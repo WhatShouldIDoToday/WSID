@@ -11,6 +11,7 @@
     summarizeBulk,
   } from "../lib/ipc";
   import ConfirmModal from "./ConfirmModal.svelte";
+  import Select from "./ui/Select.svelte";
 
   interface Props {
     ids: string[];
@@ -66,13 +67,31 @@
     }
   }
 
-  /** Runs `fn` with the chosen value, then resets the select to its placeholder. */
-  function pick(e: Event, fn: (value: string) => void) {
-    const el = e.currentTarget as HTMLSelectElement;
-    const value = el.value;
-    el.value = "";
+  /** Runs `fn` with the chosen value. The action selects stay controlled at "" so they reset to their placeholder. */
+  function pick(value: string, fn: (value: string) => void) {
     if (value) fn(value);
   }
+
+  let statusOptions = $derived(
+    STATUS_ORDER.map((st) => ({ value: st, label: STATUS_LABELS[st] })),
+  );
+  let userOptions = $derived(
+    knownUsers.map((u) => ({ value: u, label: `@${u}` })),
+  );
+  let projectOptions = $derived(
+    knownProjects.map((p) => ({ value: p, label: p })),
+  );
+  let importanceOptions = [1, 2, 3, 4, 5].map((n) => ({
+    value: String(n),
+    label: `${n}/5`,
+  }));
+  let urgentOptions = [
+    { value: "on", label: "Urgent on" },
+    { value: "off", label: "Urgent off" },
+  ];
+  let tagOptions = $derived(
+    knownTags.map((t) => ({ value: t, label: `#${t}` })),
+  );
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key !== "Escape" || e.defaultPrevented || confirmDelete) return;
@@ -87,83 +106,78 @@
 <div class="bulk-bar" role="region" aria-label="Bulk actions">
   <strong class="bulk-count" aria-live="polite">{ids.length} selected</strong>
 
-  <select
-    aria-label="Set status"
+  <Select
+    size="sm"
+    ariaLabel="Set status"
+    placeholder="Status…"
+    value=""
     disabled={busy}
-    onchange={(e) => pick(e, (v) => void apply({ status: v as TaskStatus }))}
-  >
-    <option value="">Status…</option>
-    {#each STATUS_ORDER as st}
-      <option value={st}>{STATUS_LABELS[st]}</option>
-    {/each}
-  </select>
+    options={statusOptions}
+    onValueChange={(v) =>
+      pick(v, (x) => void apply({ status: x as TaskStatus }))}
+  />
 
-  <select
-    aria-label="Set assignee"
+  <Select
+    size="sm"
+    ariaLabel="Set assignee"
+    placeholder="Assignee…"
+    value=""
     disabled={busy}
-    onchange={(e) => pick(e, (v) => void apply({ assignee: v }))}
-  >
-    <option value="">Assignee…</option>
-    {#each knownUsers as u}
-      <option value={u}>@{u}</option>
-    {/each}
-  </select>
+    options={userOptions}
+    onValueChange={(v) => pick(v, (x) => void apply({ assignee: x }))}
+  />
 
-  <select
-    aria-label="Set project"
+  <Select
+    size="sm"
+    ariaLabel="Set project"
+    placeholder="Project…"
+    value=""
     disabled={busy}
-    onchange={(e) => pick(e, (v) => void apply({ project: v }))}
-  >
-    <option value="">Project…</option>
-    {#each knownProjects as p}
-      <option value={p}>{p}</option>
-    {/each}
-  </select>
+    options={projectOptions}
+    onValueChange={(v) => pick(v, (x) => void apply({ project: x }))}
+  />
 
-  <select
-    aria-label="Set importance"
+  <Select
+    size="sm"
+    ariaLabel="Set importance"
+    placeholder="Importance…"
+    value=""
     disabled={busy}
-    onchange={(e) => pick(e, (v) => void apply({ importance: Number(v) }))}
-  >
-    <option value="">Importance…</option>
-    {#each [1, 2, 3, 4, 5] as n}
-      <option value={n}>{n}/5</option>
-    {/each}
-  </select>
+    options={importanceOptions}
+    onValueChange={(v) => pick(v, (x) => void apply({ importance: Number(x) }))}
+  />
 
-  <select
-    aria-label="Set urgent override"
+  <Select
+    size="sm"
+    ariaLabel="Set urgent override"
+    placeholder="Urgent…"
+    value=""
     disabled={busy}
-    onchange={(e) =>
-      pick(e, (v) => void apply({ urgent_override: v === "on" }))}
-  >
-    <option value="">Urgent…</option>
-    <option value="on">Urgent on</option>
-    <option value="off">Urgent off</option>
-  </select>
+    options={urgentOptions}
+    onValueChange={(v) =>
+      pick(v, (x) => void apply({ urgent_override: x === "on" }))}
+  />
 
   {#if knownTags.length > 0}
-    <select
-      aria-label="Add tag"
+    <Select
+      size="sm"
+      ariaLabel="Add tag"
+      placeholder="Add tag…"
+      value=""
       disabled={busy}
-      onchange={(e) => pick(e, (v) => void apply({ add_tags: [v] }))}
-    >
-      <option value="">Add tag…</option>
-      {#each knownTags as t}
-        <option value={t}>#{t}</option>
-      {/each}
-    </select>
+      options={tagOptions}
+      onValueChange={(v) => pick(v, (x) => void apply({ add_tags: [x] }))}
+    />
 
-    <select
-      aria-label="Remove tag"
+    <Select
+      size="sm"
+      ariaLabel="Remove tag"
+      placeholder="Remove tag…"
+      value=""
       disabled={busy}
-      onchange={(e) => pick(e, (v) => void apply({ remove_tags: [v] }))}
-    >
-      <option value="">Remove tag…</option>
-      {#each knownTags as t}
-        <option value={t}>#{t}</option>
-      {/each}
-    </select>
+      options={tagOptions}
+      onValueChange={(v) => pick(v, (x) => void apply({ remove_tags: [x] }))}
+    />
   {/if}
 
   {@render children?.()}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { onMount } from "svelte";
   import AttachmentGallery from "./AttachmentGallery.svelte";
   import DateFieldPicker from "./DateFieldPicker.svelte";
@@ -348,7 +349,7 @@
       const target = e.target as HTMLElement | null;
       if (
         target?.closest(
-          "[data-combobox-input], [data-date-field-input], [data-time-field-input]",
+          "[data-combobox-input], [data-date-field-input], [data-time-field-input], [data-select-trigger], [data-select-content]",
         )
       ) {
         return;
@@ -761,7 +762,7 @@
         const target = e.target as HTMLElement | null;
         if (
           target?.closest(
-            "[data-combobox-input], [data-date-field-input], [data-time-field-input]",
+            "[data-combobox-input], [data-date-field-input], [data-time-field-input], [data-select-trigger], [data-select-content]",
           )
         ) {
           return;
@@ -838,18 +839,16 @@
       <section aria-label="Task Status Transition">
         <div class="control-inline" style="flex-wrap: wrap; gap: 0.5rem;">
           <label for="drawer-status-select">Transition Status:</label>
-          <select
+          <Select
             id="drawer-status-select"
+            size="sm"
             value={detail.task.status}
-            onchange={(e) =>
-              handleStatusChange(
-                (e.currentTarget as HTMLSelectElement).value as TaskStatus,
-              )}
-          >
-            {#each STATUS_ORDER as st}
-              <option value={st}>{STATUS_LABELS[st]}</option>
-            {/each}
-          </select>
+            options={STATUS_ORDER.map((st) => ({
+              value: st,
+              label: STATUS_LABELS[st],
+            }))}
+            onValueChange={(v) => handleStatusChange(v as TaskStatus)}
+          />
 
           {#if detail.task.status !== "completed"}
             <button
