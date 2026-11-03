@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
-use wsid_core::{FocusPreset, RelationInputKind, Result, TaskStatus, parse_deadline_datetime};
+use wsid_core::{FocusPreset, RelationInputKind, Result, TaskStatus};
 
 #[derive(Debug, Parser)]
 #[command(name = "wsid", version, about = "WSID (What Should I Do?) — Offline-first, accessible task manager & MCP server")]
@@ -412,6 +412,7 @@ pub struct SearchArgs {
 
 /// Parses human-friendly time estimates like `"1w 2d 3h 20m"`, `"1d 2h 20m"`, `"2h 30m"`, `"15m"`, or plain minutes `"45"`,
 /// rejecting duplicate time units (e.g. `"20m 10m"`).
+#[cfg(test)]
 pub fn parse_duration_estimate(raw: &str) -> Result<i64> {
     let mins = wsid_core::parse_duration_minutes(raw)?;
     Ok(i64::from(mins))
@@ -425,18 +426,6 @@ pub fn format_duration_estimate(minutes: Option<i64>) -> String {
         return "0m".to_string();
     }
     wsid_core::format_duration_minutes(mins as u32)
-}
-
-pub fn parse_date_arg(field: &str, raw: Option<&str>) -> Result<Option<String>> {
-    let Some(s) = raw else {
-        return Ok(None);
-    };
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    parse_deadline_datetime(field, trimmed)?;
-    Ok(Some(trimmed.to_string()))
 }
 
 pub fn parse_status_arg(raw: &str) -> Result<TaskStatus> {

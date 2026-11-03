@@ -82,6 +82,74 @@ mod tests {
     use wsid_core::{CreateTaskInput, EisenhowerQuadrant};
 
     #[test]
+    fn tui_edit_opens_prefilled_form_and_saves_through_update() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("edit.db");
+        let task_id = {
+            let mut db = Database::open(&db_path).unwrap();
+            wsid_core::create_task(
+                &mut db,
+                CreateTaskInput {
+                    title: "Original title".to_string(),
+                    description: Some("Original description".to_string()),
+                    importance: Some(4),
+                    tags: vec!["backend".to_string()],
+                    due_date: Some("2099-01-05".to_string()),
+                    time_estimate_minutes: Some(200),
+                    ..Default::default()
+                },
+                "alice",
+            )
+            .unwrap()
+            .id
+        };
+
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+
+        app.open_detail_for(&task_id);
+        press(&mut app, KeyCode::Char('E'));
+        assert_eq!(app.active_tab, ActiveTab::DataEntry);
+        assert_eq!(app.editing_task_id.as_deref(), Some(task_id.as_str()));
+        assert!(app.detail_modal.is_none());
+
+        let form = &app.entry_form;
+        assert_eq!(form.fields[0], "Original title");
+        assert_eq!(form.fields[1], "Original description");
+        assert_eq!(form.fields[6], "4");
+        assert_eq!(form.fields[9], "backend");
+        assert_eq!(form.fields[4], "3h 20m");
+        assert!(form.fields[2].starts_with("2099-01-05 20:00"), "due prefilled in local time: {}", form.fields[2]);
+
+        // Save the edited values through the same Ctrl+S path as creation.
+        app.entry_form.fields[0] = "Renamed title".to_string();
+        app.entry_form.fields[6] = "5".to_string();
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+        assert!(app.editing_task_id.is_none());
+        assert!(app.form_errors.is_none());
+        assert_eq!(app.active_tab, ActiveTab::Focus, "returns to the tab the edit started from");
+        assert_eq!(app.detail_modal.as_ref().map(|d| d.task.id.clone()), Some(task_id.clone()));
+
+        let db = Database::open(&db_path).unwrap();
+        let saved = wsid_core::get_task(&db, &task_id).unwrap();
+        assert_eq!(saved.title, "Renamed title");
+        assert_eq!(saved.importance, 5);
+        assert_eq!(saved.description, "Original description");
+        assert_eq!(saved.tags, vec!["backend".to_string()]);
+
+        // Esc cancels editing and reopens the task detail without writing anything.
+        app.open_detail_for(&task_id);
+        press(&mut app, KeyCode::Char('E'));
+        app.entry_form.fields[0] = "Discarded".to_string();
+        press(&mut app, KeyCode::Esc);
+        assert!(app.editing_task_id.is_none());
+        assert_eq!(app.detail_modal.as_ref().map(|d| d.task.title.clone()), Some("Renamed title".to_string()));
+        let db = Database::open(&db_path).unwrap();
+        assert_eq!(wsid_core::get_task(&db, &task_id).unwrap().title, "Renamed title");
+    }
+
+    #[test]
     fn tui_eisenhower_shift_tab_wraps_and_urgency_keys_move_columns() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("eisen.db");
@@ -554,24 +622,24 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.user, "bob");
 
-        // Edit a field from the detail view
+        // Edit a field by opening the pre-filled add/edit form
         app.open_detail_for(&id);
         press(&mut app, KeyCode::Char('E'));
-        for _ in 0.."title: Original".len() {
-            press(&mut app, KeyCode::Backspace);
-        }
-        type_str(&mut app, "importance: 5");
-        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.active_tab, ActiveTab::DataEntry);
+        assert_eq!(app.entry_form.fields[0], "Original");
+        app.entry_form.fields[6] = "5".to_string();
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
         assert_eq!(app.detail_modal.as_ref().unwrap().task.importance, 5, "status: {}", app.status_message);
 
         // Past deadlines are rejected via the shared core validation
         press(&mut app, KeyCode::Char('E'));
-        for _ in 0.."title: Original".len() {
-            press(&mut app, KeyCode::Backspace);
-        }
-        type_str(&mut app, "due: 2000-01-01");
+        app.entry_form.fields[2] = "2000-01-01".to_string();
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        let errs = app.form_errors.clone().expect("past deadline rejected");
+        assert!(errs.iter().any(|(_, m)| m.contains("past")), "errs: {errs:?}");
         press(&mut app, KeyCode::Enter);
-        assert!(app.status_message.contains("past"), "status: {}", app.status_message);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.detail_modal.as_ref().unwrap().task.importance, 5, "status: {}", app.status_message);
 
         // Delete the selected comment (requires typing `yes`)
         press(&mut app, KeyCode::Char('X'));

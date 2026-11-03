@@ -736,9 +736,14 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD)
     };
-    items.push(ListItem::new(Line::from(Span::styled("[ Submit New Task ]", submit_style))));
+    let submit_label = if app.editing_task_id.is_some() { "[ Save Changes ]" } else { "[ Submit New Task ]" };
+    items.push(ListItem::new(Line::from(Span::styled(submit_label, submit_style))));
 
-    let form_block = panel_block(" Add New Task ", Borders::NONE, app.accessible_mode);
+    let form_title = match app.editing_task_id.as_deref() {
+        Some(id) => format!(" Edit Task [{id}] "),
+        None => " Add New Task ".to_string(),
+    };
+    let form_block = panel_block(form_title, Borders::NONE, app.accessible_mode);
     let inner_area = form_block.inner(area);
 
     // Background-only highlight so red error text stays red on the selected row.
@@ -1148,9 +1153,8 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 Some(prefix.len()),
             )
         }
-        DetailPromptKind::EditField | DetailPromptKind::ConfirmDeleteTask | DetailPromptKind::ConfirmDeleteNote => {
+        DetailPromptKind::ConfirmDeleteTask | DetailPromptKind::ConfirmDeleteNote => {
             let prefix = match app.detail_prompt_kind {
-                DetailPromptKind::EditField => "Edit (field: value): ",
                 DetailPromptKind::ConfirmDeleteTask => "Delete this task? Type yes: ",
                 _ => "Delete selected comment? Type yes: ",
             };

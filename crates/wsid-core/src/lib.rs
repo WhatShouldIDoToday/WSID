@@ -32,7 +32,7 @@ pub use config::{
 pub use db::{Database, DbChangeDetector, open_db, open_in_memory_db, run_migrations};
 pub use draft::{
     FieldIssue, IssueLevel, RelationDraft, Scalar, TaskDraft, TaskField, create_task_from_draft, search_relation_targets, suggest_users,
-    summarize_issues, validate_task_draft,
+    summarize_issues, update_task_from_draft, validate_task_draft,
 };
 pub use error::{Result, WsidError};
 pub use id::{SHORT_ID_LETTERS, ShortId, ShortIdGenerator, is_valid_task_id, normalize_task_id};

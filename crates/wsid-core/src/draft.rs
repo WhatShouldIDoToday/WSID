@@ -11,16 +11,16 @@ use std::str::FromStr;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::attachments::attach_existing_file_in_tx;
+use crate::attachments::{attach_existing_file, attach_existing_file_in_tx};
 use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::normalize_task_id;
-use crate::models::{AttachmentInput, CreateTaskInput, RelationInputKind, Task, TaskStatus};
-use crate::relations::link_tasks_in_tx;
+use crate::models::{AttachmentInput, CreateTaskInput, RelationInputKind, Task, TaskStatus, UpdateTaskInput};
+use crate::relations::{link_tasks, link_tasks_in_tx};
 use crate::search::{SearchQuery, search_tasks};
 use crate::tasks::{
     create_task_in_tx, get_task, get_task_conn, list_known_users, normalize_tags, normalize_user, parse_deadline_datetime,
-    parse_duration_minutes, validate_dates, validate_not_past, validate_time_estimate,
+    parse_duration_minutes, update_task, validate_dates, validate_not_past, validate_time_estimate,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -392,6 +392,55 @@ pub fn create_task_from_draft(db: &mut Database, draft: &TaskDraft, default_user
         }
     }
     tx.commit()?;
+    get_task(db, &id)
+}
+
+/// Validates a draft and applies it to an existing task: scalar fields, tags, new relations, and
+/// newly added attachments. Existing attachments are kept untouched (they are managed from the
+/// task detail view), so only paths not already attached are added.
+pub fn update_task_from_draft(db: &mut Database, raw_id: &str, draft: &TaskDraft, default_user: &str) -> Result<Task> {
+    let (resolved, issues) = resolve(&db.conn, draft, default_user);
+    let Some(resolved) = resolved else {
+        return Err(WsidError::DraftRejected(issues));
+    };
+
+    let current = get_task(db, raw_id)?;
+    let existing_paths: HashSet<String> = current
+        .attachments
+        .iter()
+        .map(|a| a.file_path.clone())
+        .collect();
+    let input = UpdateTaskInput {
+        title: Some(resolved.input.title),
+        description: Some(resolved.input.description.unwrap_or_default()),
+        status: resolved.input.status,
+        due_date: Some(resolved.input.due_date),
+        sgdb_date: Some(resolved.input.sgdb_date),
+        time_estimate_minutes: Some(resolved.input.time_estimate_minutes),
+        difficulty: resolved.input.difficulty,
+        importance: resolved.input.importance,
+        urgent_override: resolved.input.urgent_override,
+        manual_priority: resolved.input.manual_priority,
+        tags: Some(resolved.input.tags),
+        reporter: resolved.input.reporter,
+        assignee: resolved.input.assignee,
+        evaluator: resolved.input.evaluator,
+    };
+    let id = update_task(db, &current.id, input)?.id;
+
+    for (i, (kind, target)) in resolved.relations.iter().enumerate() {
+        if let Err(e) = link_tasks(db, &id, *kind, target) {
+            return Err(WsidError::DraftRejected(vec![FieldIssue::error(TaskField::Relations, strip_prefix(&e)).at(i)]));
+        }
+    }
+    for (i, att) in resolved.attachments.iter().enumerate() {
+        if existing_paths.contains(&att.path) {
+            continue;
+        }
+        if let Err(e) = attach_existing_file(db, &id, None, Path::new(&att.path), att.description.as_deref()) {
+            return Err(WsidError::DraftRejected(vec![FieldIssue::error(TaskField::Attachments, strip_prefix(&e)).at(i)]));
+        }
+    }
     get_task(db, &id)
 }
 

@@ -14,7 +14,6 @@ use wsid_core::{
     update_attachment_description, update_task,
 };
 
-use crate::args::{parse_date_arg, parse_duration_estimate};
 use crate::cli_runner::read_system_clipboard_attachment;
 use crate::tui::form;
 pub use crate::tui::form::DataEntryForm;
@@ -127,7 +126,6 @@ pub enum DetailPromptKind {
     AttachClipboard,
     EditAttachmentDesc,
     JumpToTask,
-    EditField,
     ConfirmDeleteTask,
     ConfirmDeleteNote,
 }
@@ -204,6 +202,10 @@ pub struct TuiApp {
     // About & Third-Party Licenses Modal state
     pub about_modal_open: bool,
     pub about_scroll: u16,
+
+    // Edit-in-form state: set while the Add Task form is editing an existing task
+    pub editing_task_id: Option<String>,
+    pub editing_return_tab: Option<ActiveTab>,
 }
 
 impl TuiApp {
@@ -269,6 +271,8 @@ impl TuiApp {
             user_input: String::new(),
             about_modal_open: false,
             about_scroll: 0,
+            editing_task_id: None,
+            editing_return_tab: None,
         };
         app.refresh_all()?;
         Ok(app)
@@ -486,8 +490,12 @@ impl TuiApp {
         // 3. If on DataEntry tab, route typing to form unless switching tabs via Alt/F-keys or Esc
         if self.active_tab == ActiveTab::DataEntry {
             if key.code == KeyCode::Esc && !self.entry_form.wants_escape() {
-                self.active_tab = ActiveTab::Focus;
-                self.status_message = "Switched to Focus View".to_string();
+                if self.editing_task_id.is_some() {
+                    self.cancel_edit_task();
+                } else {
+                    self.active_tab = ActiveTab::Focus;
+                    self.status_message = "Switched to Focus View".to_string();
+                }
                 return;
             }
             self.handle_data_entry_key(key);
@@ -1073,6 +1081,37 @@ impl TuiApp {
         }
     }
 
+    /// Opens the full data entry form pre-filled with the task's current values (`E` in the
+    /// detail modal), so editing uses the same validation and pickers as task creation.
+    fn begin_edit_task(&mut self) {
+        let Some(snapshot) = self.detail_modal.as_ref() else {
+            return;
+        };
+        let task = snapshot.task.clone();
+        self.entry_form = DataEntryForm::from_task(&task, &self.user);
+        self.entry_form.set_active_index(&self.db, &self.user, 0);
+        self.editing_task_id = Some(task.id.clone());
+        self.editing_return_tab = Some(self.active_tab);
+        self.detail_modal = None;
+        self.detail_prompt_kind = DetailPromptKind::None;
+        self.detail_prompt_input.clear();
+        self.active_tab = ActiveTab::DataEntry;
+        self.status_message = format!("Editing [{}] {} — Ctrl+S to save, Esc to cancel", task.id, task.title);
+    }
+
+    /// Leaves the pre-filled form and returns to the task detail modal without saving.
+    fn cancel_edit_task(&mut self) {
+        let id = self.editing_task_id.take();
+        if let Some(tab) = self.editing_return_tab.take() {
+            self.active_tab = tab;
+        }
+        self.entry_form = DataEntryForm::new(&self.user);
+        if let Some(id) = id {
+            self.open_detail_for(&id);
+            self.status_message = format!("Cancelled editing [{id}]");
+        }
+    }
+
     pub fn submit_data_entry_form(&mut self) {
         let problems = self.entry_form.validate_all(&self.db, &self.user);
         if !problems.is_empty() {
@@ -1081,6 +1120,10 @@ impl TuiApp {
         }
 
         let draft = self.entry_form.to_draft();
+        if let Some(id) = self.editing_task_id.clone() {
+            self.submit_edited_task(&id, &draft);
+            return;
+        }
         match create_task_from_draft(&mut self.db, &draft, &self.user) {
             Ok(created) => {
                 self.entry_form = DataEntryForm::new(&self.user);
@@ -1095,6 +1138,39 @@ impl TuiApp {
                         .map(|i| (Some(form::field_index(i.field)), i.message))
                         .collect(),
                 );
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                let msg = msg
+                    .strip_prefix("validation error: ")
+                    .unwrap_or(&msg)
+                    .to_string();
+                self.form_errors = Some(vec![(None, msg)]);
+            }
+        }
+    }
+
+    /// Applies an edited form to the task it was opened for and returns to its detail modal.
+    fn submit_edited_task(&mut self, id: &str, draft: &wsid_core::TaskDraft) {
+        match wsid_core::update_task_from_draft(&mut self.db, id, draft, &self.user) {
+            Ok(updated) => {
+                self.editing_task_id = None;
+                self.entry_form = DataEntryForm::new(&self.user);
+                if let Some(tab) = self.editing_return_tab.take() {
+                    self.active_tab = tab;
+                }
+                let _ = self.refresh_all();
+                self.open_detail_for(&updated.id);
+                self.status_message = format!("Updated task [{}] {}", updated.id, updated.title);
+            }
+            Err(WsidError::DraftRejected(issues)) => {
+                self.form_errors = Some(
+                    issues
+                        .into_iter()
+                        .filter(FieldIssue::is_error)
+                        .map(|i| (Some(form::field_index(i.field)), i.message))
+                        .collect(),
+                )
             }
             Err(err) => {
                 let msg = err.to_string();
@@ -1326,11 +1402,7 @@ impl TuiApp {
             KeyCode::Char('s') => {
                 self.apply_status_transition(&snapshot.task.id, TaskStatus::InProgress);
             }
-            KeyCode::Char('E') => {
-                self.detail_prompt_kind = DetailPromptKind::EditField;
-                self.detail_prompt_input = format!("title: {}", snapshot.task.title);
-                self.status_message = "Edit field: `field: value` — title, description, status, due, sgdb, estimate, difficulty, importance, priority, urgent, tags, assignee, reporter, evaluator (empty due/sgdb/estimate clears)".to_string();
-            }
+            KeyCode::Char('E') => self.begin_edit_task(),
             KeyCode::Char('D') => {
                 self.detail_prompt_kind = DetailPromptKind::ConfirmDeleteTask;
                 self.detail_prompt_input.clear();
@@ -1458,7 +1530,6 @@ impl TuiApp {
                     self.open_detail_for(&input);
                 }
             }
-            DetailPromptKind::EditField => self.apply_field_edit(&snapshot.task, &input),
             DetailPromptKind::ConfirmDeleteTask => {
                 if !input.eq_ignore_ascii_case("yes") {
                     self.status_message = "Task delete cancelled".to_string();
@@ -1513,65 +1584,6 @@ impl TuiApp {
             }
         } else {
             self.status_message = format!("Failed to open: {}", errors.join("; "));
-        }
-    }
-
-    /// Applies a single `field: value` edit to the task shown in the detail view.
-    fn apply_field_edit(&mut self, task: &Task, input: &str) {
-        let Some((field, value)) = input.split_once(':') else {
-            self.status_message = "Expected `field: value`".to_string();
-            return;
-        };
-        let (field, value) = (field.trim().to_ascii_lowercase(), value.trim());
-        let clear = value.is_empty() || value.eq_ignore_ascii_case("none");
-
-        let result: wsid_core::Result<String> = (|| {
-            if field == "status" {
-                let status: TaskStatus = value.parse()?;
-                let outcome = transition_task_status(&mut self.db, &task.id, status)?;
-                return Ok(format!("[{}] status -> {}", task.id, outcome.task.status));
-            }
-            let mut update = UpdateTaskInput::default();
-            match field.as_str() {
-                "title" => update.title = Some(value.to_string()),
-                "description" | "desc" => update.description = Some(value.to_string()),
-                "due" => update.due_date = Some(if clear { None } else { parse_date_arg("due", Some(value))? }),
-                "sgdb" => update.sgdb_date = Some(if clear { None } else { parse_date_arg("sgdb", Some(value))? }),
-                "estimate" => update.time_estimate_minutes = Some(if clear { None } else { Some(parse_duration_estimate(value)?) }),
-                "difficulty" => update.difficulty = Some(parse_u8_field("difficulty", value)?),
-                "importance" => update.importance = Some(parse_u8_field("importance", value)?),
-                "priority" => {
-                    update.manual_priority = Some(
-                        value
-                            .parse::<i8>()
-                            .map_err(|_| wsid_core::WsidError::Validation(format!("invalid priority '{value}'")))?,
-                    )
-                }
-                "urgent" => update.urgent_override = Some(matches!(value.to_ascii_lowercase().as_str(), "true" | "on" | "yes" | "1")),
-                "tags" => {
-                    update.tags = Some(
-                        value
-                            .split([',', ' '])
-                            .filter(|t| !t.is_empty())
-                            .map(str::to_string)
-                            .collect(),
-                    )
-                }
-                "assignee" => update.assignee = Some(value.to_string()),
-                "reporter" => update.reporter = Some(value.to_string()),
-                "evaluator" => update.evaluator = Some(value.to_string()),
-                other => return Err(wsid_core::WsidError::Validation(format!("unknown field '{other}'"))),
-            }
-            let updated = update_task(&mut self.db, &task.id, update)?;
-            Ok(format!("Updated [{}] {}", updated.id, field))
-        })();
-
-        match result {
-            Ok(msg) => {
-                let _ = self.refresh_all();
-                self.status_message = msg;
-            }
-            Err(err) => self.status_message = format!("Edit failed: {err}"),
         }
     }
 
@@ -1796,10 +1808,4 @@ impl TuiApp {
             }
         }
     }
-}
-
-fn parse_u8_field(name: &str, value: &str) -> wsid_core::Result<u8> {
-    value
-        .parse::<u8>()
-        .map_err(|_| wsid_core::WsidError::Validation(format!("invalid {name} '{value}'")))
 }

@@ -384,6 +384,36 @@ impl DataEntryForm {
         }
     }
 
+    /// Builds the same form as [`Self::new`] but pre-filled from an existing task so it can be
+    /// edited. Deadlines are shown as local wall clock without a zone suffix (editing in local
+    /// terms), and attachments/relations are left empty because those are managed from the
+    /// task detail view.
+    pub fn from_task(task: &wsid_core::Task, default_user: &str) -> Self {
+        let mut form = Self::new(default_user);
+        let local_wall_clock = |raw: Option<&str>| {
+            raw.and_then(|s| parse_deadline_datetime("deadline", s).ok())
+                .map(|(_, dt)| dt.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_default()
+        };
+        form.fields[0] = task.title.clone();
+        form.fields[1] = task.description.clone();
+        form.fields[2] = local_wall_clock(task.due_date.as_deref());
+        form.fields[3] = local_wall_clock(task.sgdb_date.as_deref());
+        form.fields[4] = task
+            .time_estimate_minutes
+            .map(|m| format_duration_minutes(m.max(0) as u32))
+            .unwrap_or_default();
+        form.fields[5] = task.difficulty.to_string();
+        form.fields[6] = task.importance.to_string();
+        form.fields[7] = task.manual_priority.to_string();
+        form.fields[8] = task.urgent_override.to_string();
+        form.fields[9] = task.tags.join(", ");
+        form.fields[12] = task.reporter.clone();
+        form.fields[13] = task.assignee.clone();
+        form.fields[14] = task.evaluator.clone();
+        form
+    }
+
     /// The raw draft the core validates and creates from.
     pub fn to_draft(&self) -> TaskDraft {
         let f = &self.fields;
