@@ -19,7 +19,7 @@ use wsid_core::{
     list_known_projects, list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os, parse_deadline_datetime,
     preview_user_deletion, register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks,
     transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task, update_task_relation,
-    validate_task_draft,
+    validate_focus_limit, validate_task_draft,
 };
 
 pub struct GuiAppState {
@@ -354,9 +354,7 @@ fn set_focus_preset(state: State<'_, SharedGuiState>, preset: String) -> Result<
 
 #[tauri::command]
 fn set_focus_limit(state: State<'_, SharedGuiState>, limit: usize) -> Result<AppSessionSnapshot, String> {
-    if !(1..=50).contains(&limit) {
-        return Err("focus limit must be between 1 and 50".to_string());
-    }
+    validate_focus_limit(limit).map_err(|err| err.to_string())?;
     let mut guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;

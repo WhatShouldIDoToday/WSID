@@ -5,7 +5,7 @@ use ratatui::layout::{Alignment, Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, BorderType, Borders, Cell, Clear, HighlightSpacing, List, ListItem, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+    Block, BorderType, Borders, Cell, Clear, HighlightSpacing, List, ListItem, ListState, Paragraph, Row, Scrollbar, ScrollbarOrientation,
     ScrollbarState, Table, Tabs, Wrap,
 };
 use wsid_core::{
@@ -13,7 +13,7 @@ use wsid_core::{
     get_about_metadata,
 };
 
-use crate::tui::app::{ActiveTab, DataEntryForm, DatabaseSortColumn, DetailPromptKind, FocusContext, TuiApp};
+use crate::tui::app::{ActiveTab, DataEntryForm, DatabaseSortColumn, DetailPromptKind, FocusContext, PickerMode, SettingsMode, TuiApp};
 use crate::tui::form;
 
 const SELECTED_STYLE: Style = Style::new()
@@ -43,12 +43,17 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp) {
         ActiveTab::Eisenhower => render_eisenhower_view(frame, content_area, app),
         ActiveTab::Database => render_database_view(frame, content_area, app),
         ActiveTab::DataEntry => render_data_entry_view(frame, content_area, app),
+        ActiveTab::Settings => render_settings_view(frame, content_area, app),
     }
 
     render_footer(frame, footer_area, app);
 
     if app.detail_modal.is_some() {
         render_detail_modal(frame, frame.area(), app);
+    }
+
+    if app.settings.delete_confirm.is_some() {
+        render_user_delete_modal(frame, frame.area(), app);
     }
 
     if app.about_modal_open {
@@ -117,7 +122,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &TuiApp) {
         )
         .divider(if app.accessible_mode { "  " } else { " │ " });
 
-    if area.width < 70 {
+    if area.width < 70 || app.active_tab == ActiveTab::Settings {
         frame.render_widget(tabs, area);
         return;
     }
@@ -835,6 +840,87 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     }
 }
 
+/// Settings rows are grouped by section; only real rows are navigable, while
+/// section headers and the database summary are plain text in the same list.
+fn render_settings_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
+    let rows = app.settings_rows();
+    app.clamp_settings_selection(rows.len());
+
+    let list_area = if app.settings.mode == SettingsMode::Browse {
+        area
+    } else {
+        let [prompt_area, list_area] = Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(area);
+        render_settings_prompt(frame, prompt_area, app);
+        list_area
+    };
+
+    let mut items: Vec<ListItem> = Vec::new();
+    items.push(ListItem::new(Line::from(Span::styled(
+        format!(" Database: {}  ({})", app.db_path.display(), if app.is_global_database() { "global" } else { "workspace" }),
+        Style::default().fg(Color::DarkGray),
+    ))));
+    items.push(ListItem::new(Line::from("")));
+
+    let mut last_section = "";
+    let mut selected_display = 0;
+    for (index, row) in rows.iter().enumerate() {
+        if row.section != last_section {
+            if !last_section.is_empty() {
+                items.push(ListItem::new(Line::from("")));
+            }
+            last_section = row.section;
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!(" {}", row.section),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ))));
+        }
+        if index == app.settings.selected {
+            selected_display = items.len();
+        }
+        let text = if row.value.is_empty() { row.label.clone() } else { format!("{}  {}", row.label, row.value) };
+        items.push(ListItem::new(Line::from(text)));
+    }
+
+    let mut state = ListState::default();
+    if !rows.is_empty() {
+        state.select(Some(selected_display));
+    }
+    let list = List::new(items)
+        .block(panel_block(" Settings ", Borders::NONE, app.accessible_mode))
+        .highlight_style(SELECTED_STYLE)
+        .highlight_symbol(if app.accessible_mode { "> " } else { ">> " })
+        .highlight_spacing(HighlightSpacing::Always);
+    frame.render_stateful_widget(list, list_area, &mut state);
+}
+
+fn render_settings_prompt(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    let (label, value) = match app.settings.mode {
+        SettingsMode::EditFocusLimit => ("Focus queue size (1-50): ", app.settings.focus_limit_input.as_str()),
+        SettingsMode::EditDatabasePath => ("Database path or folder: ", app.settings.database_path_input.as_str()),
+        SettingsMode::Browse => return,
+    };
+    let line = Line::from(vec![
+        Span::styled(
+            label,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(value.to_string()),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+    let cursor_x = area
+        .x
+        .saturating_add(label.chars().count() as u16)
+        .saturating_add(value.chars().count() as u16)
+        .min(area.right().saturating_sub(1));
+    if area.height > 0 {
+        frame.set_cursor_position(Position::new(cursor_x, area.y));
+    }
+}
+
 /// Suggestion / manage list under the active row (above it when there is no room below).
 fn render_dropdown(frame: &mut Frame, inner: Rect, row: u16, row_height: u16, app: &TuiApp) {
     let Some(dd) = app.entry_form.dropdown.as_ref() else {
@@ -913,6 +999,83 @@ fn render_form_error_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
     );
 }
 
+fn render_user_delete_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    let Some(confirm) = app.settings.delete_confirm.as_ref() else {
+        return;
+    };
+    let preview = &confirm.preview;
+    let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("Deleting ", Style::default()),
+            Span::styled(
+                format!("@{}", preview.username),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(" reassigns their tasks to @{}.", preview.fallback_user)),
+        ]),
+        Line::from(""),
+        Line::from(format!(
+            "{} affected task(s) · authored {} · assigned {} · validator {}",
+            preview.affected_tasks.len(),
+            preview.authored_task_count,
+            preview.assigned_task_count,
+            preview.evaluator_task_count
+        )),
+    ];
+
+    if !preview.affected_tasks.is_empty() {
+        lines.push(Line::from(""));
+        for task in preview.affected_tasks.iter().take(8) {
+            let mut roles = Vec::new();
+            if task.is_reporter {
+                roles.push("author");
+            }
+            if task.is_assignee {
+                roles.push("assignee");
+            }
+            if task.is_evaluator {
+                roles.push("validator");
+            }
+            let roles = if roles.is_empty() { "linked".to_string() } else { roles.join(", ") };
+            lines.push(Line::from(vec![
+                Span::styled(format!("[{}] ", task.id), Style::default().fg(Color::Cyan)),
+                Span::raw(task.title.clone()),
+                Span::styled(format!(" ({roles})"), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+        if preview.affected_tasks.len() > 8 {
+            lines.push(Line::from(Span::styled(
+                format!("… and {} more", preview.affected_tasks.len() - 8),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(if confirm.delete_authored { "[x] " } else { "[ ] " }, Style::default().fg(Color::Yellow)),
+        Span::raw(format!("Also permanently delete {} authored task(s)", preview.authored_task_count)),
+    ]));
+
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let width = (area.width * 8 / 10).max(50).min(area.width);
+    let popup =
+        Rect { x: area.x + (area.width.saturating_sub(width)) / 2, y: area.y + (area.height.saturating_sub(height)) / 2, width, height };
+    frame.render_widget(Clear, popup);
+    let block = panel_block(Span::styled(format!(" Delete User @{} ", preview.username), red), Borders::ALL, app.accessible_mode)
+        .border_style(Style::default().fg(Color::Red));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        popup,
+    );
+}
+
 fn looks_like_error(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
     ["error", "failed", "cannot", "invalid", "blocked", "unknown", "expected"]
@@ -928,8 +1091,14 @@ fn focus_hints(app: &TuiApp) -> String {
     match app.focus_context() {
         FocusContext::FormErrorModal => "[Enter/Esc/q] Back to the form".to_string(),
         FocusContext::AboutModal => "[j/k] Scroll | [PgUp/PgDn] Page | [g/G] Top/Bottom | [Esc/?/q] Close".to_string(),
-        FocusContext::ProjectModal => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Esc] Cancel".to_string(),
-        FocusContext::UserModal => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Ctrl+U] Act as user | [Esc] Cancel".to_string(),
+        FocusContext::ProjectModal => match app.project_modal_mode {
+            PickerMode::Filter => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Ctrl+P] Switch project | [Esc] Cancel".to_string(),
+            PickerMode::Switch => "[type] Search or new name | [Up/Down] Select | [Enter] Switch | [Esc] Cancel".to_string(),
+        },
+        FocusContext::UserModal => match app.user_modal_mode {
+            PickerMode::Filter => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Ctrl+U] Switch user | [Esc] Cancel".to_string(),
+            PickerMode::Switch => "[type] Search or new name | [Up/Down] Select | [Enter] Switch | [Esc] Cancel".to_string(),
+        },
         FocusContext::DetailPrompt(DetailPromptKind::AddComment) => {
             "[Tab] Complete | [Up/Down] Suggestion | [Enter] Post | [Esc] Cancel".to_string()
         }
@@ -946,25 +1115,32 @@ fn focus_hints(app: &TuiApp) -> String {
                 .to_string()
         }
         FocusContext::SearchInput => "[Enter/Esc] Finish | [Alt+Bksp] Del word | [Ctrl+Z] Undo".to_string(),
-        FocusContext::UserSwitchPrompt => "[Enter] Switch user | [Esc] Cancel".to_string(),
         FocusContext::BulkEditPrompt => "[Enter] Apply | [Esc] Cancel".to_string(),
+        FocusContext::UserDeleteModal => "[a] Also delete authored | [Enter] Delete | [Esc] Cancel".to_string(),
         FocusContext::Tab(ActiveTab::Focus) => {
-            "[1-5] Views | [P] Project | [j/k] Select | [Enter] Inspect | [p] Preset | [s] Start | [d] Done | [x] Stuck | [b] Blocked | [U] User | [?] Help | [q] Quit"
+            "[1-6] Views | [P] Project filter | [Ctrl+P] Switch project | [j/k] Select | [Enter] Inspect | [p] Preset | [s] Start | [d] Done | [x] Stuck | [b] Blocked | [U] User filter | [Ctrl+U] Switch user | [?] Help | [q] Quit"
                 .to_string()
         }
         FocusContext::Tab(ActiveTab::Kanban) => {
-            "[1-5] Views | [P] Project | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [U] User | [Enter] Inspect | [?] Help | [q] Quit"
+            "[1-6] Views | [P] Project filter | [Ctrl+P] Switch project | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [U] User filter | [Ctrl+U] Switch user | [Enter] Inspect | [?] Help | [q] Quit"
                 .to_string()
         }
         FocusContext::Tab(ActiveTab::Eisenhower) => {
-            "[1-5] Views | [P] Project | [U] User | [h/l/Tab/S-Tab] Quadrant | [j/k] Task | [+/-] Imp | [</>] Urgency | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
+            "[1-6] Views | [P] Project filter | [Ctrl+P] Switch project | [U] User filter | [Ctrl+U] Switch user | [h/l/Tab/S-Tab] Quadrant | [j/k] Task | [+/-] Imp | [</>] Urgency | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
                 .to_string()
         }
         FocusContext::Tab(ActiveTab::Database) => {
-            "[1-5] Views | [P] Project | [U] User | [/] Search/filter column | [f] Status | [t] Tag | [u] Cycle user | [m] Mine | [o] Column | [O] Asc/Desc | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [?] Help"
+            "[1-6] Views | [P] Project filter | [Ctrl+P] Switch project | [U] User filter | [Ctrl+U] Switch user | [/] Search/filter column | [f] Status | [t] Tag | [u] Cycle user | [m] Mine | [o] Column | [O] Asc/Desc | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [?] Help"
                 .to_string()
         }
         FocusContext::Tab(ActiveTab::DataEntry) => app.entry_form.hint().to_string(),
+        FocusContext::Tab(ActiveTab::Settings) => match app.settings.mode {
+            SettingsMode::Browse => {
+                "[1-6] Views | [j/k] Move | [Enter] Change | [a] Accessible | [?] Help | [q] Quit".to_string()
+            }
+            SettingsMode::EditFocusLimit => "[0-9] Size | [Enter] Save | [Esc] Cancel".to_string(),
+            SettingsMode::EditDatabasePath => "[type] Path | [Enter] Open | [Esc] Cancel".to_string(),
+        },
     }
 }
 
@@ -1419,11 +1595,14 @@ fn render_project_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
         area,
         app.accessible_mode,
         &FilterModal {
-            title: " Project Filter ",
+            title: match app.project_modal_mode {
+                PickerMode::Filter => " Project Filter ",
+                PickerMode::Switch => " Project Switcher ",
+            },
             query: &app.project_modal_query,
             selected: app.project_modal_selected,
             options: app.filtered_project_options(),
-            current: app.current_project_filter(),
+            current: app.project_modal_current(),
             empty: "  No matching projects",
         },
     );
@@ -1435,11 +1614,15 @@ fn render_user_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
         area,
         app.accessible_mode,
         &FilterModal {
-            title: if app.user_filter_allows_all() { " User Filter " } else { " User Filter (single user) " },
+            title: match (app.user_modal_mode, app.user_filter_allows_all()) {
+                (PickerMode::Switch, _) => " User Switcher ",
+                (PickerMode::Filter, true) => " User Filter ",
+                (PickerMode::Filter, false) => " User Filter (single user) ",
+            },
             query: &app.user_modal_query,
             selected: app.user_modal_selected,
             options: app.filtered_user_options(),
-            current: app.current_user_filter(),
+            current: app.user_modal_current(),
             empty: "  No matching users",
         },
     );
@@ -1470,7 +1653,10 @@ fn render_about_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )));
-    lines.push(Line::from(format!("  Active User: @{}  |  Focus Preset: {}  |  Mode: {}", app.user, app.preset, mode_label)));
+    lines.push(Line::from(format!(
+        "  Active User: @{}  |  Active Project: {}  |  Focus Preset: {}  |  Mode: {}",
+        app.user, app.active_project, app.preset, mode_label
+    )));
     lines.push(Line::from(format!("  Database:    {} ({})", db_moniker, app.db_path.display())));
     lines.push(Line::from(""));
 

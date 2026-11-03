@@ -14,6 +14,17 @@ pub const CONFIG_FILENAME: &str = "config.toml";
 pub const ATTACHMENTS_DIRNAME: &str = "attachments";
 pub const WSID_DB_ENV_VAR: &str = "WSID_DB";
 
+pub const MIN_FOCUS_LIMIT: usize = 1;
+pub const MAX_FOCUS_LIMIT: usize = 50;
+
+pub fn validate_focus_limit(limit: usize) -> Result<()> {
+    if (MIN_FOCUS_LIMIT..=MAX_FOCUS_LIMIT).contains(&limit) {
+        Ok(())
+    } else {
+        Err(WsidError::Validation(format!("focus limit must be between {MIN_FOCUS_LIMIT} and {MAX_FOCUS_LIMIT}")))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_os_user")]

@@ -79,7 +79,7 @@ mod tests {
 
     use super::*;
     use crate::args::{AddArgs, NextArgs, NoteArgs, SearchArgs};
-    use crate::tui::app::{ActiveTab, TuiApp};
+    use crate::tui::app::{ActiveTab, PickerMode, SettingsAction, SettingsMode, TuiApp};
     use wsid_core::{CreateTaskInput, EisenhowerQuadrant};
 
     #[test]
@@ -426,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn tui_renders_all_five_views_and_detail_modal_and_detects_external_db_changes() {
+    fn tui_renders_all_six_views_and_detail_modal_and_detects_external_db_changes() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("tui_test.db");
         let config = AppConfig::default();
@@ -514,9 +514,23 @@ mod tests {
             .draw(|f| crate::tui::ui::render(f, &mut app))
             .unwrap();
 
-        // Toggle accessible mode ('a' back in Focus view)
+        // 6. Switch to Settings View ('6')
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::NONE));
+        assert_eq!(app.active_tab, ActiveTab::Settings);
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(rendered.contains("Active Context") && rendered.contains("Focus Queue"), "settings sections render: {rendered}");
+
+        // Toggle accessible mode ('a') while Settings is open.
         app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         assert!(app.accessible_mode);
         terminal
@@ -1270,7 +1284,7 @@ mod tests {
         let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
         let has_all = |app: &TuiApp| {
-            app.user_filter_options()
+            app.user_picker_options(crate::tui::app::PickerMode::Filter)
                 .iter()
                 .any(|(value, _)| value == wsid_core::ALL_USERS)
         };
@@ -1342,5 +1356,470 @@ mod tests {
         type_str(&mut app, "all");
         assert!(app.filtered_user_options().is_empty());
         press(&mut app, KeyCode::Esc);
+    }
+
+    #[test]
+    fn tui_switching_views_clears_multi_select_but_same_view_keeps_it() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("selection.db");
+        {
+            let mut db = Database::open(&db_path).unwrap();
+            for title in ["First task", "Second task"] {
+                wsid_core::create_task(&mut db, CreateTaskInput { title: title.to_string(), ..Default::default() }, "alice").unwrap();
+            }
+        }
+
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('A'));
+        assert_eq!(app.selected_ids.len(), 2);
+
+        press(&mut app, KeyCode::Char('3'));
+        assert!(app.selected_ids.is_empty(), "leaving a view clears stale check marks");
+
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('A'));
+        assert_eq!(app.selected_ids.len(), 2);
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.selected_ids.len(), 2, "re-selecting the current view keeps check marks");
+    }
+
+    #[test]
+    fn tui_settings_persist_focus_preset_and_limit_to_config() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("settings.db");
+        Database::open(&db_path).unwrap();
+        let config_path = dir.path().join("config.toml");
+        let config = AppConfig { primary_user: "alice".to_string(), default_user: "alice".to_string(), ..Default::default() };
+
+        let mut app = TuiApp::new_with_config_path(&db_path, config, "alice".to_string(), false, config_path.clone()).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        let type_str = |app: &mut TuiApp, s: &str| {
+            for ch in s.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        };
+
+        press(&mut app, KeyCode::Char('6'));
+        assert_eq!(app.active_tab, ActiveTab::Settings);
+
+        let preset_row = app
+            .settings_rows()
+            .iter()
+            .position(|row| matches!(row.action, SettingsAction::CyclePreset))
+            .unwrap();
+        app.settings.selected = preset_row;
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.preset, wsid_core::FocusPreset::QuickWins);
+        let saved = AppConfig::load_from_path(&config_path).unwrap();
+        assert_eq!(saved.focus_preset, wsid_core::FocusPreset::QuickWins);
+
+        let limit_row = app
+            .settings_rows()
+            .iter()
+            .position(|row| matches!(row.action, SettingsAction::EditFocusLimit))
+            .unwrap();
+        app.settings.selected = limit_row;
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.settings.mode, SettingsMode::EditFocusLimit);
+        let prefilled = app.settings.focus_limit_input.clone();
+        for _ in 0..prefilled.chars().count() {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_str(&mut app, "50");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.settings.mode, SettingsMode::Browse);
+        assert_eq!(app.config.focus_limit, 50);
+        assert_eq!(AppConfig::load_from_path(&config_path).unwrap().focus_limit, 50);
+
+        // Out-of-range values are rejected without persisting or leaving edit mode.
+        app.settings.selected = limit_row;
+        press(&mut app, KeyCode::Enter);
+        for _ in 0..app.settings.focus_limit_input.chars().count() {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_str(&mut app, "51");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.settings.mode, SettingsMode::EditFocusLimit);
+        assert_eq!(app.config.focus_limit, 50);
+        assert_eq!(AppConfig::load_from_path(&config_path).unwrap().focus_limit, 50);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.settings.mode, SettingsMode::Browse);
+    }
+
+    #[test]
+    fn tui_switch_database_keeps_state_on_error_and_resets_on_success() {
+        let dir = tempdir().unwrap();
+        let first_path = dir.path().join("first.db");
+        let second_path = dir.path().join("second.db");
+        {
+            let mut db = Database::open(&first_path).unwrap();
+            wsid_core::create_task(&mut db, CreateTaskInput { title: "First task".to_string(), ..Default::default() }, "alice").unwrap();
+        }
+        {
+            let mut db = Database::open(&second_path).unwrap();
+            wsid_core::create_task(&mut db, CreateTaskInput { title: "Second task".to_string(), ..Default::default() }, "alice").unwrap();
+        }
+
+        let config_path = dir.path().join("config.toml");
+        let app_config = AppConfig::default();
+        let mut app = TuiApp::new_with_config_path(&first_path, app_config, "alice".to_string(), false, config_path.clone()).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+
+        let before_path = app.db_path.clone();
+        let before_titles: Vec<String> = app
+            .all_tasks
+            .iter()
+            .map(|task| task.title.clone())
+            .collect();
+        // The parent path is a file, so the database cannot be created there.
+        let bad_path = first_path.join("bad.db");
+        assert!(app.switch_database(&bad_path).is_err());
+        assert_eq!(app.db_path, before_path, "a failed switch leaves the open database alone");
+        assert_eq!(
+            app.all_tasks
+                .iter()
+                .map(|task| task.title.clone())
+                .collect::<Vec<_>>(),
+            before_titles
+        );
+        assert_eq!(app.config.recent_workspaces.first(), None);
+
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('A'));
+        app.focus_user = "bob".to_string();
+        app.kanban_user = "bob".to_string();
+        app.search_query = "first".to_string();
+        app.search_assignee_filter = Some("bob".to_string());
+
+        app.switch_database(&second_path).unwrap();
+        assert_eq!(app.db_path, second_path);
+        assert!(app.all_tasks.iter().any(|task| task.title == "Second task"));
+        assert!(app.selected_ids.is_empty(), "switching databases resets multi-select");
+        assert_eq!(app.focus_user, "alice");
+        assert_eq!(app.kanban_user, "alice");
+        assert_eq!(app.search_query, "");
+        assert_eq!(app.search_assignee_filter, None);
+        assert_eq!(app.config.recent_workspaces.first(), Some(&second_path));
+        let saved = AppConfig::load_from_path(&config_path).unwrap();
+        assert_eq!(saved.recent_workspaces.first(), Some(&second_path));
+    }
+
+    #[test]
+    fn tui_settings_delete_user_reassigns_tasks_and_prunes_filters() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("delete-user.db");
+        {
+            let mut db = Database::open(&db_path).unwrap();
+            wsid_core::create_task(&mut db, CreateTaskInput { title: "Alice task".to_string(), ..Default::default() }, "alice").unwrap();
+            wsid_core::create_task(&mut db, CreateTaskInput { title: "Bob task".to_string(), ..Default::default() }, "bob").unwrap();
+        }
+
+        let config_path = dir.path().join("config.toml");
+        let config = AppConfig { primary_user: "alice".to_string(), default_user: "alice".to_string(), ..Default::default() };
+        let mut app = TuiApp::new_with_config_path(&db_path, config, "alice".to_string(), false, config_path).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+
+        app.focus_user = "bob".to_string();
+        app.kanban_user = "bob".to_string();
+        app.search_assignee_filter = Some("bob".to_string());
+
+        press(&mut app, KeyCode::Char('6'));
+        let bob_row = app
+            .settings_rows()
+            .iter()
+            .position(|row| matches!(&row.action, SettingsAction::DeleteUser(user) if user == "bob"))
+            .expect("primary user can delete other known users");
+        app.settings.selected = bob_row;
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings.delete_confirm.is_some());
+        press(&mut app, KeyCode::Enter);
+
+        assert!(app.settings.delete_confirm.is_none());
+        let known = wsid_core::list_known_users(&app.db, &[]).unwrap();
+        assert!(!known.iter().any(|user| user == "bob"), "deleted user disappears from known users: {known:?}");
+        assert_eq!(app.focus_user, "alice");
+        assert_eq!(app.kanban_user, "alice");
+        assert_eq!(app.search_assignee_filter, None);
+        assert!(app.all_tasks.iter().any(|task| task.title == "Bob task"), "authored tasks are reassigned, not dropped");
+        assert!(
+            app.all_tasks
+                .iter()
+                .all(|task| task.assignee != "bob" && task.reporter != "bob")
+        );
+    }
+
+    #[test]
+    fn tui_settings_hide_delete_actions_from_non_primary_users() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("non-primary.db");
+        {
+            let mut db = Database::open(&db_path).unwrap();
+            wsid_core::create_task(&mut db, CreateTaskInput { title: "Alice task".to_string(), ..Default::default() }, "alice").unwrap();
+            wsid_core::create_task(&mut db, CreateTaskInput { title: "Bob task".to_string(), ..Default::default() }, "bob").unwrap();
+        }
+
+        let config_path = dir.path().join("config.toml");
+        let config = AppConfig { primary_user: "alice".to_string(), default_user: "bob".to_string(), ..Default::default() };
+        let mut app = TuiApp::new_with_config_path(&db_path, config, "bob".to_string(), false, config_path).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+
+        press(&mut app, KeyCode::Char('6'));
+        assert!(!app.is_primary_user());
+        assert!(
+            !app.settings_rows()
+                .iter()
+                .any(|row| matches!(row.action, SettingsAction::DeleteUser(_))),
+            "non-primary users see an informational row instead of delete actions"
+        );
+        assert!(
+            app.settings_rows()
+                .iter()
+                .any(|row| row.value.contains("only @alice can manage users"))
+        );
+    }
+
+    #[test]
+    fn tui_ctrl_u_and_settings_open_user_switcher_without_all() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("switcher_user.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
+        let type_str = |app: &mut TuiApp, s: &str| {
+            for ch in s.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        };
+
+        // Ctrl+U works from any list view and opens the switcher, not the filter.
+        press(&mut app, KeyCode::Char('2'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert!(app.user_modal_open);
+        assert_eq!(app.user_modal_mode, PickerMode::Switch);
+        assert!(
+            app.filtered_user_options()
+                .iter()
+                .all(|(value, _)| value != wsid_core::ALL_USERS),
+            "switcher never offers all"
+        );
+
+        // A name that is not valid selects nothing; the active user stays put.
+        type_str(&mut app, "bad name");
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.user, "alice");
+        assert!(app.user_modal_open);
+
+        // A new, valid name is registered and becomes the active user.
+        press(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        type_str(&mut app, "Bob");
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!app.user_modal_open);
+        assert_eq!(app.user, "bob");
+
+        // Settings → Active user opens the same switcher.
+        press(&mut app, KeyCode::Char('6'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.user_modal_open);
+        assert_eq!(app.user_modal_mode, PickerMode::Switch);
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.user_modal_open);
+        assert_eq!(app.user, "bob");
+
+        // `U` is still the per-view filter, which offers all where the view allows it.
+        press(&mut app, KeyCode::Char('2'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('U'), KeyModifiers::NONE);
+        assert_eq!(app.user_modal_mode, PickerMode::Filter);
+        assert_eq!(app.filtered_user_options().first().map(|(v, _)| v.as_str()), Some(wsid_core::ALL_USERS));
+    }
+
+    #[test]
+    fn tui_ctrl_p_switches_active_project_and_p_stays_a_filter() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("switcher_project.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
+        let type_str = |app: &mut TuiApp, s: &str| {
+            for ch in s.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        };
+        assert_eq!(app.active_project, wsid_core::DEFAULT_PROJECT);
+
+        // Filter (`P`) offers all first; the switcher (`Ctrl+P`) does not.
+        press(&mut app, KeyCode::Char('3'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('P'), KeyModifiers::NONE);
+        assert_eq!(
+            app.filtered_project_options()
+                .first()
+                .map(|(v, _)| v.as_str()),
+            Some(wsid_core::ALL_PROJECTS)
+        );
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+
+        press(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert!(app.project_modal_open);
+        assert_eq!(app.project_modal_mode, PickerMode::Switch);
+        assert!(
+            app.filtered_project_options()
+                .iter()
+                .all(|(value, _)| value != wsid_core::ALL_PROJECTS)
+        );
+
+        // `all` is reserved: typing it leaves nothing to select.
+        type_str(&mut app, "all");
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.project_modal_open);
+        assert_eq!(app.active_project, wsid_core::DEFAULT_PROJECT);
+
+        // A new project name is offered and becomes active; Kanban and Eisenhower move to it.
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Backspace, KeyModifiers::NONE);
+        }
+        type_str(&mut app, "Backend");
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!app.project_modal_open);
+        assert_eq!(app.active_project, "backend");
+        assert_eq!(app.kanban_project, "backend");
+        assert_eq!(app.eisenhower_project, "backend");
+
+        // Settings → Active project opens the switcher too.
+        press(&mut app, KeyCode::Char('6'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.project_modal_open);
+        assert_eq!(app.project_modal_mode, PickerMode::Switch);
+    }
+
+    #[test]
+    fn tui_view_entry_resets_scope_but_keeps_database_search_state() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("scope_reset.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+
+        app.active_project = "backend".to_string();
+        app.kanban_user = "bob".to_string();
+        app.kanban_project = "web".to_string();
+        app.focus_project = "web".to_string();
+        app.search_query = "invoice".to_string();
+        app.search_assignee_filter = Some("bob".to_string());
+        app.search_project_filter = Some("web".to_string());
+        app.search_only_mine = true;
+
+        // Entering Kanban resets its user and project to the active context.
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.kanban_user, "alice");
+        assert_eq!(app.kanban_project, "backend");
+
+        // Entering Focus shows all projects for the active user.
+        press(&mut app, KeyCode::Char('1'));
+        assert_eq!(app.focus_user, "alice");
+        assert_eq!(app.focus_project, wsid_core::ALL_PROJECTS);
+
+        // Database resets user, project, and `m`, but keeps the search text.
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.search_assignee_filter, None);
+        assert_eq!(app.search_project_filter, None);
+        assert!(!app.search_only_mine);
+        assert_eq!(app.search_query, "invoice");
+
+        // Returning to the same view keeps its scope.
+        app.kanban_user = "bob".to_string();
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.kanban_user, "alice", "entering a view from another view resets it");
+        app.kanban_user = "bob".to_string();
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.kanban_user, "bob", "same-tab switches leave scope alone");
+
+        // Settings has no view scope.
+        press(&mut app, KeyCode::Char('6'));
+        assert_eq!(app.kanban_user, "bob");
+    }
+
+    #[test]
+    fn tui_switching_active_user_moves_only_views_following_the_old_user() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("switch_follow.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+
+        app.kanban_user = "alice".to_string();
+        app.eisenhower_user = "bob".to_string();
+        app.search_assignee_filter = Some("alice".to_string());
+        assert!(app.switch_active_user("carol"));
+        assert_eq!(app.user, "carol");
+        assert_eq!(app.kanban_user, "carol", "a view following the old user follows the new one");
+        assert_eq!(app.eisenhower_user, "bob", "an explicit filter on another user stays");
+        assert_eq!(app.search_assignee_filter.as_deref(), Some("carol"));
+        assert!(!app.switch_active_user("all"), "all is never an active user");
+        assert_eq!(app.user, "carol");
+    }
+
+    #[test]
+    fn tui_add_task_follows_active_context_but_keeps_drafts() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("entry_context.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
+
+        // A pristine form is seeded with the active user and project.
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+        assert_eq!(app.entry_form.fields[12], "alice");
+        assert_eq!(app.entry_form.fields[15], wsid_core::DEFAULT_PROJECT);
+
+        // Switching the active project from Add Task updates the pristine project field.
+        press(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        for ch in "backend".chars() {
+            press(&mut app, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.entry_form.fields[15], "backend");
+
+        // A draft keeps what the user typed, and only context fields still matching the old context move.
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        app.entry_form.fields[14] = "carol".to_string();
+        press(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        for ch in "bob".chars() {
+            press(&mut app, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.user, "bob");
+        assert_eq!(app.entry_form.fields[0], "x", "the draft title survives");
+        assert_eq!(app.entry_form.fields[12], "bob");
+        assert_eq!(app.entry_form.fields[14], "carol", "a field the user changed is not overwritten");
+    }
+
+    #[test]
+    fn tui_active_context_switchers_render_titles_in_accessible_mode() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("switcher_render.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), true).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let rendered = |terminal: &mut Terminal<TestBackend>, app: &mut TuiApp| {
+            terminal.draw(|f| crate::tui::ui::render(f, app)).unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+
+        app.open_user_switcher();
+        let text = rendered(&mut terminal, &mut app);
+        assert!(text.contains("User Switcher"), "user switcher title: {text}");
+        assert!(text.contains("Switch"), "switch hint: {text}");
+        app.user_modal_open = false;
+
+        app.open_project_switcher();
+        let text = rendered(&mut terminal, &mut app);
+        assert!(text.contains("Project Switcher"), "project switcher title: {text}");
+        app.project_modal_open = false;
+        app.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE));
+        let text = rendered(&mut terminal, &mut app);
+        assert!(text.contains("Project Filter"), "project filter title: {text}");
     }
 }

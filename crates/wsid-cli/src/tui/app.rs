@@ -6,12 +6,13 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
 use wsid_core::{
     AppConfig, BulkTaskPatch, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FieldIssue, FocusPreset,
-    FocusQueueResponse, SearchHit, SearchQuery, Task, TaskAttachment, TaskNote, TaskStatus, UpdateTaskInput, WsidError, add_task_note,
-    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft, delete_task,
-    delete_task_note, get_attachment, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks,
-    get_parallel_peers, get_related_tasks, get_task, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user,
-    open_file_in_os, parse_note_tokens, register_user, remove_attachment, save_clipboard_attachment, search_relation_targets, search_tasks,
-    suggest_users, transition_task_status, unblock_or_dismiss_subtask, update_attachment_description, update_task,
+    FocusQueueResponse, SearchHit, SearchQuery, Task, TaskAttachment, TaskNote, TaskStatus, UpdateTaskInput, UserDeletionPreview,
+    WsidError, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue_in_project,
+    create_task_from_draft, delete_task, delete_task_note, delete_user_from_db, get_attachment, get_direct_blocked_tasks,
+    get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, list_eisenhower_matrix,
+    list_known_users, list_task_notes, list_tasks, normalize_project, normalize_user, open_file_in_os, parse_note_tokens,
+    preview_user_deletion, register_user, remove_attachment, save_clipboard_attachment, search_relation_targets, search_tasks,
+    suggest_users, transition_task_status, unblock_or_dismiss_subtask, update_attachment_description, update_task, validate_focus_limit,
 };
 
 use crate::cli_runner::read_system_clipboard_attachment;
@@ -26,10 +27,11 @@ pub enum ActiveTab {
     Eisenhower,
     Database,
     DataEntry,
+    Settings,
 }
 
 impl ActiveTab {
-    pub const ALL: [Self; 5] = [Self::Focus, Self::Kanban, Self::Eisenhower, Self::Database, Self::DataEntry];
+    pub const ALL: [Self; 6] = [Self::Focus, Self::Kanban, Self::Eisenhower, Self::Database, Self::DataEntry, Self::Settings];
 
     pub const fn title(self) -> &'static str {
         match self {
@@ -38,6 +40,7 @@ impl ActiveTab {
             Self::Eisenhower => "Eisenhower",
             Self::Database => "Database",
             Self::DataEntry => "Add Task",
+            Self::Settings => "Settings",
         }
     }
 
@@ -48,6 +51,7 @@ impl ActiveTab {
             Self::Eisenhower => 2,
             Self::Database => 3,
             Self::DataEntry => 4,
+            Self::Settings => 5,
         }
     }
 }
@@ -170,10 +174,22 @@ pub enum FocusContext {
     DetailAttachments,
     /// The task detail modal itself, with no prompt open.
     DetailModal,
+    /// The delete-user confirmation dialog opened from Settings.
+    UserDeleteModal,
     SearchInput,
-    UserSwitchPrompt,
     BulkEditPrompt,
     Tab(ActiveTab),
+}
+
+/// How a user or project picker was opened.
+///
+/// `Filter` (`U` / `P`) scopes the current view and may offer `all`. `Switch` (`Ctrl+U` /
+/// `Ctrl+P`) changes the session's active user or project, so it always names one concrete value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PickerMode {
+    #[default]
+    Filter,
+    Switch,
 }
 
 /// Modifiers that turn a keystroke into a shortcut or a terminal/OS action
@@ -196,16 +212,68 @@ fn is_modified_char(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char(_)) && !is_text_input(key)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsMode {
+    #[default]
+    Browse,
+    EditFocusLimit,
+    EditDatabasePath,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsAction {
+    None,
+    SwitchUser,
+    SwitchProject,
+    CyclePreset,
+    EditFocusLimit,
+    OpenGlobalDatabase,
+    OpenWorkspaceDatabase,
+    OpenRecentDatabase(PathBuf),
+    DeleteUser(String),
+    About,
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsRow {
+    pub section: &'static str,
+    pub label: String,
+    pub value: String,
+    pub action: SettingsAction,
+}
+
+#[derive(Debug, Clone)]
+pub struct UserDeleteConfirm {
+    pub preview: UserDeletionPreview,
+    pub delete_authored: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SettingsState {
+    pub selected: usize,
+    pub mode: SettingsMode,
+    pub focus_limit_input: String,
+    pub database_path_input: String,
+    pub delete_confirm: Option<UserDeleteConfirm>,
+    focus_limit_history: TextHistory,
+    database_path_history: TextHistory,
+}
+
 pub struct TuiApp {
     pub db: Database,
     pub db_path: PathBuf,
     pub config: AppConfig,
+    pub config_path: PathBuf,
+    /// The acting user (`Ctrl+U`). Session-only.
     pub user: String,
+    /// The session's project context (`Ctrl+P`). Session-only; defaults to `default`.
+    pub active_project: String,
     pub preset: FocusPreset,
     pub accessible_mode: bool,
     pub should_quit: bool,
     pub active_tab: ActiveTab,
     pub status_message: String,
+    pub settings: SettingsState,
 
     pub change_detector: DbChangeDetector,
 
@@ -234,13 +302,15 @@ pub struct TuiApp {
     /// Project shown by the Eisenhower matrix (`all` = every project).
     pub eisenhower_project: String,
 
-    // Project filter modal (shared by Focus, Kanban, Eisenhower, and Database)
+    // Project picker modal: a per-view filter (`P`) or the active project switcher (`Ctrl+P`)
     pub project_modal_open: bool,
+    pub project_modal_mode: PickerMode,
     pub project_modal_query: String,
     pub project_modal_selected: usize,
 
-    // User filter modal (shared by Focus, Kanban, Eisenhower, and Database)
+    // User picker modal: a per-view filter (`U`) or the active user switcher (`Ctrl+U`)
     pub user_modal_open: bool,
+    pub user_modal_mode: PickerMode,
     pub user_modal_query: String,
     pub user_modal_selected: usize,
 
@@ -291,10 +361,6 @@ pub struct TuiApp {
     /// Validation problems shown in a modal after a failed submit: `(field index, message)`.
     pub form_errors: Option<Vec<(Option<usize>, String)>>,
 
-    // Active-user switching prompt
-    pub user_switching: bool,
-    pub user_input: String,
-
     // About & Third-Party Licenses Modal state
     pub about_modal_open: bool,
     pub about_scroll: u16,
@@ -307,13 +373,22 @@ pub struct TuiApp {
     project_modal_history: TextHistory,
     user_modal_history: TextHistory,
     search_history: TextHistory,
-    user_history: TextHistory,
     bulk_history: TextHistory,
     detail_prompt_history: TextHistory,
 }
 
 impl TuiApp {
     pub fn new(db_path: &Path, config: AppConfig, user: String, accessible_mode: bool) -> wsid_core::Result<Self> {
+        Self::new_with_config_path(db_path, config, user, accessible_mode, wsid_core::default_config_path())
+    }
+
+    pub fn new_with_config_path(
+        db_path: &Path,
+        config: AppConfig,
+        user: String,
+        accessible_mode: bool,
+        config_path: PathBuf,
+    ) -> wsid_core::Result<Self> {
         let db = Database::open(db_path)?;
         let change_detector = DbChangeDetector::new(&db)?;
         let preset = config.focus_preset;
@@ -331,18 +406,22 @@ impl TuiApp {
         let all_tasks = list_tasks(&db)?;
         let eisenhower_items = list_eisenhower_matrix(&db, Some(&user), today, config.scoring)?;
         let search_hits = search_tasks(&db, &SearchQuery::default())?;
-        let entry_form = DataEntryForm::new(&user);
+        let active_project = wsid_core::DEFAULT_PROJECT.to_string();
+        let entry_form = DataEntryForm::new_for(&user, &active_project);
 
         let mut app = Self {
             db,
             db_path: db_path.to_path_buf(),
             config,
+            config_path,
             user: user.clone(),
+            active_project,
             preset,
             accessible_mode,
             should_quit: false,
             active_tab: ActiveTab::Focus,
             status_message: String::new(),
+            settings: SettingsState::default(),
             change_detector,
             focus_queue,
             focus_selected: 0,
@@ -360,9 +439,11 @@ impl TuiApp {
             eisenhower_states: std::array::from_fn(|_| ListState::default()),
             eisenhower_project: wsid_core::DEFAULT_PROJECT.to_string(),
             project_modal_open: false,
+            project_modal_mode: PickerMode::Filter,
             project_modal_query: String::new(),
             project_modal_selected: 0,
             user_modal_open: false,
+            user_modal_mode: PickerMode::Filter,
             user_modal_query: String::new(),
             user_modal_selected: 0,
             focus_user: user.clone(),
@@ -397,8 +478,6 @@ impl TuiApp {
             attachment_cursor: 0,
             attachment_marked: BTreeSet::new(),
             form_errors: None,
-            user_switching: false,
-            user_input: String::new(),
             about_modal_open: false,
             about_scroll: 0,
             editing_task_id: None,
@@ -406,7 +485,6 @@ impl TuiApp {
             project_modal_history: TextHistory::default(),
             user_modal_history: TextHistory::default(),
             search_history: TextHistory::default(),
-            user_history: TextHistory::default(),
             bulk_history: TextHistory::default(),
             detail_prompt_history: TextHistory::default(),
         };
@@ -591,10 +669,10 @@ impl TuiApp {
             } else {
                 FocusContext::DetailModal
             }
+        } else if self.settings.delete_confirm.is_some() {
+            FocusContext::UserDeleteModal
         } else if self.active_tab == ActiveTab::Database && self.search_editing {
             FocusContext::SearchInput
-        } else if self.user_switching {
-            FocusContext::UserSwitchPrompt
         } else if self.bulk_editing {
             FocusContext::BulkEditPrompt
         } else {
@@ -609,7 +687,14 @@ impl TuiApp {
             return;
         }
 
-        match self.focus_context() {
+        let context = self.focus_context();
+        if let FocusContext::Tab(tab) = context
+            && self.handle_context_switch_key(tab, key)
+        {
+            return;
+        }
+
+        match context {
             FocusContext::FormErrorModal => self.dismiss_form_errors(key),
             FocusContext::AboutModal => self.handle_about_modal_key(key),
             FocusContext::ProjectModal => self.handle_project_modal_key(key),
@@ -617,11 +702,34 @@ impl TuiApp {
             FocusContext::DetailPrompt(_) | FocusContext::DetailAttachments | FocusContext::DetailModal => {
                 self.handle_detail_modal_key(key);
             }
+            FocusContext::UserDeleteModal => self.handle_user_delete_confirm_key(key),
             FocusContext::SearchInput => self.handle_search_input_key(key),
-            FocusContext::UserSwitchPrompt => self.handle_user_input_key(key),
             FocusContext::BulkEditPrompt => self.handle_bulk_input_key(key),
             FocusContext::Tab(ActiveTab::DataEntry) => self.handle_entry_tab_key(key),
+            FocusContext::Tab(ActiveTab::Settings) => self.handle_settings_key(key),
             FocusContext::Tab(_) => self.handle_list_tab_key(key),
+        }
+    }
+
+    /// `Ctrl+U` / `Ctrl+P` switch the active user / project from any view, so they are handled
+    /// before the view's own keys. Text inputs and Settings edit modes keep their own use of them.
+    fn handle_context_switch_key(&mut self, tab: ActiveTab, key: KeyEvent) -> bool {
+        if !key.modifiers.contains(KeyModifiers::CONTROL) {
+            return false;
+        }
+        if tab == ActiveTab::Settings && self.settings.mode != SettingsMode::Browse {
+            return false;
+        }
+        match key.code {
+            KeyCode::Char('u') => {
+                self.open_user_switcher();
+                true
+            }
+            KeyCode::Char('p') => {
+                self.open_project_switcher();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -645,7 +753,7 @@ impl TuiApp {
             if self.editing_task_id.is_some() {
                 self.cancel_edit_task();
             } else {
-                self.active_tab = ActiveTab::Focus;
+                self.set_active_tab(ActiveTab::Focus);
                 self.status_message = "Switched to Focus View".to_string();
             }
             return;
@@ -653,16 +761,85 @@ impl TuiApp {
         self.handle_data_entry_key(key);
     }
 
+    /// Switch views through one path so stale multi-select marks never follow
+    /// the user to another view. Returning to the same view keeps them.
+    pub fn set_active_tab(&mut self, tab: ActiveTab) {
+        if self.active_tab != tab {
+            self.selected_ids.clear();
+            self.bulk_editing = false;
+            self.bulk_input.clear();
+            self.active_tab = tab;
+            self.apply_view_scope(tab);
+        }
+        self.active_tab = tab;
+        self.status_message.clear();
+    }
+
+    /// Resets a view's temporary user/project scope when it is entered from another view:
+    /// Focus and Database show all projects, Kanban and Eisenhower show the active project, and
+    /// every view that scopes users follows the active user. Database search text, status, tag,
+    /// and sort are kept. Add Task and Settings have no view scope.
+    fn apply_view_scope(&mut self, tab: ActiveTab) {
+        let user = self.user.clone();
+        let project = self.active_project.clone();
+        match tab {
+            ActiveTab::Focus => {
+                let changed = self.focus_user != user || self.focus_project != wsid_core::ALL_PROJECTS;
+                self.focus_user = user;
+                self.focus_project = wsid_core::ALL_PROJECTS.to_string();
+                if changed {
+                    let _ = self.refresh_all();
+                }
+            }
+            ActiveTab::Kanban => {
+                self.kanban_user = user;
+                self.kanban_project = project;
+                self.clamp_kanban_selection();
+            }
+            ActiveTab::Eisenhower => {
+                let changed = self.eisenhower_user != user || self.eisenhower_project != project;
+                self.eisenhower_user = user;
+                self.eisenhower_project = project;
+                if changed {
+                    let _ = self.refresh_all();
+                }
+            }
+            ActiveTab::Database => {
+                let changed = self.search_assignee_filter.is_some() || self.search_project_filter.is_some() || self.search_only_mine;
+                self.search_assignee_filter = None;
+                self.search_project_filter = None;
+                self.search_only_mine = false;
+                if changed {
+                    let _ = self.refresh_search();
+                }
+            }
+            ActiveTab::DataEntry | ActiveTab::Settings => {}
+        }
+    }
+
+    /// Handles the view-switch shortcuts shared by the list views and Settings.
+    fn handle_tab_switch_key(&mut self, code: KeyCode) -> bool {
+        let tab = match code {
+            KeyCode::Char('1') => ActiveTab::Focus,
+            KeyCode::Char('2') => ActiveTab::Kanban,
+            KeyCode::Char('3') => ActiveTab::Eisenhower,
+            KeyCode::Char('4') => ActiveTab::Database,
+            KeyCode::Char('5') | KeyCode::Char('n') => ActiveTab::DataEntry,
+            KeyCode::Char('6') | KeyCode::Char(',') => ActiveTab::Settings,
+            _ => return false,
+        };
+        self.set_active_tab(tab);
+        true
+    }
+
     /// Shortcuts shared by every list view, then the active view's own keys.
     fn handle_list_tab_key(&mut self, key: KeyEvent) {
-        // `Ctrl+U` switches the acting user; `U` opens the view's user filter.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
-            self.begin_user_switch();
-            return;
-        }
         // Modified characters belong to the terminal/OS, so they never fire
         // single-letter shortcuts (e.g. Ctrl+A does not toggle accessible mode).
         if is_modified_char(&key) {
+            return;
+        }
+        if self.handle_tab_switch_key(key.code) {
             return;
         }
         match key.code {
@@ -673,31 +850,6 @@ impl TuiApp {
             KeyCode::Char('a') => {
                 self.accessible_mode = !self.accessible_mode;
                 self.status_message = format!("Accessible linear layout mode: {}", if self.accessible_mode { "ON" } else { "OFF" });
-                return;
-            }
-            KeyCode::Char('1') => {
-                self.active_tab = ActiveTab::Focus;
-                self.status_message.clear();
-                return;
-            }
-            KeyCode::Char('2') => {
-                self.active_tab = ActiveTab::Kanban;
-                self.status_message.clear();
-                return;
-            }
-            KeyCode::Char('3') => {
-                self.active_tab = ActiveTab::Eisenhower;
-                self.status_message.clear();
-                return;
-            }
-            KeyCode::Char('4') => {
-                self.active_tab = ActiveTab::Database;
-                self.status_message.clear();
-                return;
-            }
-            KeyCode::Char('5') | KeyCode::Char('n') => {
-                self.active_tab = ActiveTab::DataEntry;
-                self.status_message.clear();
                 return;
             }
             KeyCode::Char('U') => {
@@ -734,7 +886,7 @@ impl TuiApp {
             ActiveTab::Kanban => self.handle_kanban_key(key),
             ActiveTab::Eisenhower => self.handle_eisenhower_key(key),
             ActiveTab::Database => self.handle_database_key(key),
-            ActiveTab::DataEntry => {}
+            ActiveTab::DataEntry | ActiveTab::Settings => {}
         }
     }
 
@@ -770,12 +922,7 @@ impl TuiApp {
                 self.status_message = format!("Blocked summary banner: {}", if self.show_blocked_banner { "shown" } else { "hidden" });
             }
             KeyCode::Char('p') => {
-                self.preset = match self.preset {
-                    FocusPreset::Balanced => FocusPreset::QuickWins,
-                    FocusPreset::QuickWins => FocusPreset::EatTheFrog,
-                    FocusPreset::EatTheFrog => FocusPreset::UnblockOthers,
-                    FocusPreset::UnblockOthers => FocusPreset::Balanced,
-                };
+                self.preset = self.preset.next();
                 let _ = self.refresh_all();
                 self.status_message = format!("Switched Focus preset to '{}'", self.preset);
             }
@@ -928,12 +1075,16 @@ impl TuiApp {
                 .clone()
                 .unwrap_or_else(|| wsid_core::ALL_PROJECTS.to_string()),
             ActiveTab::DataEntry => wsid_core::ALL_PROJECTS.to_string(),
+            ActiveTab::Settings => wsid_core::ALL_PROJECTS.to_string(),
         }
     }
 
-    /// Every project that can be filtered to, `all` first.
-    pub fn project_filter_options(&self) -> Vec<(String, String)> {
-        let mut options = vec![(wsid_core::ALL_PROJECTS.to_string(), format!("{} (every project)", wsid_core::ALL_PROJECTS))];
+    /// Projects offered by a picker in `mode`: `all` only as a filter, then every known project.
+    pub fn project_picker_options(&self, mode: PickerMode) -> Vec<(String, String)> {
+        let mut options = Vec::new();
+        if mode == PickerMode::Filter {
+            options.push((wsid_core::ALL_PROJECTS.to_string(), format!("{} (every project)", wsid_core::ALL_PROJECTS)));
+        }
         let mut projects = wsid_core::list_known_projects(&self.db).unwrap_or_default();
         projects.sort();
         projects.dedup();
@@ -945,28 +1096,83 @@ impl TuiApp {
         options
     }
 
-    /// `project_filter_options` narrowed by the modal's live search text.
+    /// The project the open picker treats as current: the view's filter, or the active project.
+    pub fn project_modal_current(&self) -> String {
+        match self.project_modal_mode {
+            PickerMode::Filter => self.current_project_filter(),
+            PickerMode::Switch => self.active_project.clone(),
+        }
+    }
+
+    /// `project_picker_options` for the open picker, narrowed by its live search text. A valid
+    /// project name that is not known yet is offered too, so a new project can be selected before
+    /// it has any tasks.
     pub(crate) fn filtered_project_options(&self) -> Vec<(String, String)> {
         let needle = self.project_modal_query.trim().to_ascii_lowercase();
-        self.project_filter_options()
+        let mut options: Vec<(String, String)> = self
+            .project_picker_options(self.project_modal_mode)
             .into_iter()
             .filter(|(value, label)| {
                 needle.is_empty() || value.to_ascii_lowercase().contains(&needle) || label.to_ascii_lowercase().contains(&needle)
             })
-            .collect()
+            .collect();
+        let typed = self.project_modal_query.trim();
+        if !typed.is_empty()
+            && let Ok(normalized) = normalize_project(typed)
+            && !options.iter().any(|(value, _)| *value == normalized)
+        {
+            options.push((normalized.clone(), normalized));
+        }
+        options
     }
 
     fn open_project_modal(&mut self) {
+        self.open_project_picker(PickerMode::Filter);
+    }
+
+    /// Opens the active project switcher (`Ctrl+P`): single projects only, no `all`.
+    pub fn open_project_switcher(&mut self) {
+        self.open_project_picker(PickerMode::Switch);
+    }
+
+    fn open_project_picker(&mut self, mode: PickerMode) {
         self.project_modal_open = true;
+        self.project_modal_mode = mode;
         self.project_modal_query.clear();
         self.project_modal_history.clear();
-        let current = self.current_project_filter();
+        let current = self.project_modal_current();
         let options = self.filtered_project_options();
         self.project_modal_selected = options
             .iter()
             .position(|(value, _)| *value == current)
             .unwrap_or(0);
-        self.status_message = "Project filter — type to search, Up/Down to move, Enter to apply, Esc to cancel".to_string();
+        self.status_message = match mode {
+            PickerMode::Filter => "Project filter — type to search, Up/Down to move, Enter to apply, Esc to cancel".to_string(),
+            PickerMode::Switch => format!("Switch active project (currently {}) — Enter to switch, Esc to cancel", self.active_project),
+        };
+    }
+
+    /// Makes `raw` the active project. Kanban and Eisenhower move to it, and pristine Add Task
+    /// fields follow it. Returns whether the switch happened.
+    pub fn switch_active_project(&mut self, raw: &str) -> bool {
+        let project = match normalize_project(raw) {
+            Ok(project) => project,
+            Err(err) => {
+                self.status_message = format!("Cannot switch project: {err}");
+                return false;
+            }
+        };
+        let previous = std::mem::replace(&mut self.active_project, project.clone());
+        self.kanban_project = project.clone();
+        self.eisenhower_project = project.clone();
+        if self.editing_task_id.is_none() {
+            self.entry_form
+                .retarget_context(&self.user, &previous, &self.user, &project);
+        }
+        self.clamp_kanban_selection();
+        let _ = self.refresh_all();
+        self.status_message = format!("Active project is now {project}");
+        true
     }
 
     fn apply_project_filter(&mut self, project: String) {
@@ -988,11 +1194,17 @@ impl TuiApp {
                 let _ = self.refresh_search();
             }
             ActiveTab::DataEntry => {}
+            ActiveTab::Settings => {}
         }
         self.status_message = format!("Project filter: {project}");
     }
 
     fn handle_project_modal_key(&mut self, key: KeyEvent) {
+        // `Ctrl+P` inside the picker (re)opens the active project switcher.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
+            self.open_project_switcher();
+            return;
+        }
         if let Some(changed) = apply_text_shortcut(&key, &mut self.project_modal_query, &mut self.project_modal_history) {
             if changed {
                 self.project_modal_selected = 0;
@@ -1005,7 +1217,10 @@ impl TuiApp {
         match key.code {
             KeyCode::Esc => {
                 self.project_modal_open = false;
-                self.status_message = "Cancelled project filter".to_string();
+                self.status_message = match self.project_modal_mode {
+                    PickerMode::Filter => "Cancelled project filter".to_string(),
+                    PickerMode::Switch => "Cancelled project switch".to_string(),
+                };
             }
             KeyCode::Enter => {
                 if let Some((project, _)) = self
@@ -1014,7 +1229,14 @@ impl TuiApp {
                     .cloned()
                 {
                     self.project_modal_open = false;
-                    self.apply_project_filter(project);
+                    match self.project_modal_mode {
+                        PickerMode::Filter => self.apply_project_filter(project),
+                        PickerMode::Switch => {
+                            self.switch_active_project(&project);
+                        }
+                    }
+                } else {
+                    self.status_message = "No matching project — type a name to create one".to_string();
                 }
             }
             KeyCode::Down | KeyCode::Tab => {
@@ -1055,6 +1277,7 @@ impl TuiApp {
                 .clone()
                 .unwrap_or_else(|| wsid_core::ALL_USERS.to_string()),
             ActiveTab::DataEntry => self.user.clone(),
+            ActiveTab::Settings => self.user.clone(),
         }
     }
 
@@ -1063,10 +1286,12 @@ impl TuiApp {
         matches!(self.active_tab, ActiveTab::Kanban | ActiveTab::Eisenhower | ActiveTab::Database)
     }
 
-    /// Every user that can be filtered to: `all` first when the view allows it, then known users.
-    pub fn user_filter_options(&self) -> Vec<(String, String)> {
+    /// Users offered by a picker in `mode`. `all` appears only in a view filter that allows it;
+    /// the active user switcher (`Ctrl+U`) always names a single user.
+    pub fn user_picker_options(&self, mode: PickerMode) -> Vec<(String, String)> {
+        let allow_all = mode == PickerMode::Filter && self.user_filter_allows_all();
         let mut options = Vec::new();
-        if self.user_filter_allows_all() {
+        if allow_all {
             options.push((wsid_core::ALL_USERS.to_string(), format!("{} (every user)", wsid_core::ALL_USERS)));
         }
         let mut users = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
@@ -1079,8 +1304,9 @@ impl TuiApp {
             let label = if user == self.user { format!("@{user} (active)") } else { format!("@{user}") };
             options.push((user, label));
         }
-        let current = self.current_user_filter();
-        if !current.is_empty()
+        let current = self.user_modal_current_for(mode);
+        if mode == PickerMode::Filter
+            && !current.is_empty()
             && !options
                 .iter()
                 .any(|(value, _)| value.eq_ignore_ascii_case(&current))
@@ -1090,8 +1316,20 @@ impl TuiApp {
         options
     }
 
-    /// `user_filter_options` narrowed by the modal's live search text. A valid user name that is
-    /// not known yet is offered too, so `@someone` can be filtered to before their first task.
+    /// The user the open picker treats as current: the view's filter, or the active user.
+    pub fn user_modal_current(&self) -> String {
+        self.user_modal_current_for(self.user_modal_mode)
+    }
+
+    fn user_modal_current_for(&self, mode: PickerMode) -> String {
+        match mode {
+            PickerMode::Filter => self.current_user_filter(),
+            PickerMode::Switch => self.user.clone(),
+        }
+    }
+
+    /// `user_picker_options` for the open picker, narrowed by its live search text. A valid user
+    /// name that is not known yet is offered too, so `@someone` can be selected before their first task.
     pub(crate) fn filtered_user_options(&self) -> Vec<(String, String)> {
         let needle = self
             .user_modal_query
@@ -1099,7 +1337,7 @@ impl TuiApp {
             .trim_start_matches('@')
             .to_ascii_lowercase();
         let mut options: Vec<(String, String)> = self
-            .user_filter_options()
+            .user_picker_options(self.user_modal_mode)
             .into_iter()
             .filter(|(value, label)| {
                 needle.is_empty() || value.to_ascii_lowercase().contains(&needle) || label.to_ascii_lowercase().contains(&needle)
@@ -1118,20 +1356,61 @@ impl TuiApp {
     }
 
     fn open_user_modal(&mut self) {
+        self.open_user_picker(PickerMode::Filter);
+    }
+
+    /// Opens the active user switcher (`Ctrl+U`): single users only, no `all`.
+    pub fn open_user_switcher(&mut self) {
+        self.open_user_picker(PickerMode::Switch);
+    }
+
+    fn open_user_picker(&mut self, mode: PickerMode) {
         self.user_modal_open = true;
+        self.user_modal_mode = mode;
         self.user_modal_query.clear();
         self.user_modal_history.clear();
-        let current = self.current_user_filter();
+        let current = self.user_modal_current();
         let options = self.filtered_user_options();
         self.user_modal_selected = options
             .iter()
             .position(|(value, _)| *value == current)
             .unwrap_or(0);
-        self.status_message = if self.user_filter_allows_all() {
-            "User filter — type to search, Up/Down to move, Enter to apply, Esc to cancel".to_string()
-        } else {
-            format!("User filter (single user) — active @{}", self.current_user_filter())
+        self.status_message = match mode {
+            PickerMode::Switch => format!("Switch active user (currently @{}) — Enter to switch, Esc to cancel", self.user),
+            PickerMode::Filter if self.user_filter_allows_all() => {
+                "User filter — type to search, Up/Down to move, Enter to apply, Esc to cancel".to_string()
+            }
+            PickerMode::Filter => format!("User filter (single user) — active @{}", self.current_user_filter()),
         };
+    }
+
+    /// Makes `raw` (registering it if new) the active user. Views that followed the previous
+    /// active user follow the new one; explicit filters on other users stay. Returns whether the
+    /// switch happened.
+    pub fn switch_active_user(&mut self, raw: &str) -> bool {
+        let user = match normalize_user(raw).and_then(|u| register_user(&mut self.db, &u)) {
+            Ok(user) => user,
+            Err(err) => {
+                self.status_message = format!("Cannot switch user: {err}");
+                return false;
+            }
+        };
+        let previous = std::mem::replace(&mut self.user, user.clone());
+        for filter in [&mut self.focus_user, &mut self.kanban_user, &mut self.eisenhower_user] {
+            if *filter == previous {
+                *filter = user.clone();
+            }
+        }
+        if self.search_assignee_filter.as_deref() == Some(previous.as_str()) {
+            self.search_assignee_filter = Some(user.clone());
+        }
+        if self.editing_task_id.is_none() {
+            self.entry_form
+                .retarget_context(&previous, &self.active_project, &user, &self.active_project);
+        }
+        let _ = self.refresh_all();
+        self.status_message = format!("Active user is now @{user}");
+        true
     }
 
     fn apply_user_filter(&mut self, user: String) {
@@ -1158,16 +1437,16 @@ impl TuiApp {
                 let _ = self.refresh_search();
             }
             ActiveTab::DataEntry => {}
+            ActiveTab::Settings => {}
         }
         self.status_message =
             if every_user { format!("User filter: {} (every user)", wsid_core::ALL_USERS) } else { format!("User filter: @{user}") };
     }
 
     fn handle_user_modal_key(&mut self, key: KeyEvent) {
-        // `Ctrl+U` inside the filter modal switches the acting user instead.
+        // `Ctrl+U` inside the picker (re)opens the active user switcher.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
-            self.user_modal_open = false;
-            self.begin_user_switch();
+            self.open_user_switcher();
             return;
         }
         if let Some(changed) = apply_text_shortcut(&key, &mut self.user_modal_query, &mut self.user_modal_history) {
@@ -1182,7 +1461,10 @@ impl TuiApp {
         match key.code {
             KeyCode::Esc => {
                 self.user_modal_open = false;
-                self.status_message = "Cancelled user filter".to_string();
+                self.status_message = match self.user_modal_mode {
+                    PickerMode::Filter => "Cancelled user filter".to_string(),
+                    PickerMode::Switch => "Cancelled user switch".to_string(),
+                };
             }
             KeyCode::Enter => {
                 if let Some((user, _)) = self
@@ -1191,7 +1473,14 @@ impl TuiApp {
                     .cloned()
                 {
                     self.user_modal_open = false;
-                    self.apply_user_filter(user);
+                    match self.user_modal_mode {
+                        PickerMode::Filter => self.apply_user_filter(user),
+                        PickerMode::Switch => {
+                            self.switch_active_user(&user);
+                        }
+                    }
+                } else {
+                    self.status_message = "No matching user — type a name to add one".to_string();
                 }
             }
             KeyCode::Down | KeyCode::Tab => {
@@ -1266,6 +1555,7 @@ impl TuiApp {
                 .collect(),
             ActiveTab::Database => self.search_hits.iter().map(|h| &h.task).collect(),
             ActiveTab::DataEntry => Vec::new(),
+            ActiveTab::Settings => Vec::new(),
         }
     }
 
@@ -1832,12 +2122,6 @@ impl TuiApp {
                 self.search_history.record(&before, EditKind::Discrete);
                 let _ = self.refresh_search();
             }
-            FocusContext::UserSwitchPrompt => {
-                let before = self.user_input.clone();
-                self.user_input.push_str(&text_edit::flatten_paste(text));
-                self.user_history.record(&before, EditKind::Discrete);
-                self.update_user_prompt_message();
-            }
             FocusContext::BulkEditPrompt => {
                 let before = self.bulk_input.clone();
                 self.bulk_input.push_str(&text_edit::flatten_paste(text));
@@ -1854,6 +2138,32 @@ impl TuiApp {
             }
             FocusContext::Tab(ActiveTab::DataEntry) if self.form_errors.is_none() => {
                 self.entry_form.paste(&self.db, &self.user, text);
+            }
+            FocusContext::Tab(ActiveTab::Settings) => {
+                let flat = text_edit::flatten_paste(text);
+                match self.settings.mode {
+                    SettingsMode::EditFocusLimit => {
+                        let digits: String = flat.chars().filter(char::is_ascii_digit).collect();
+                        if !digits.is_empty() {
+                            let before = self.settings.focus_limit_input.clone();
+                            self.settings.focus_limit_input.push_str(&digits);
+                            self.settings.focus_limit_input.truncate(2);
+                            self.settings
+                                .focus_limit_history
+                                .record(&before, EditKind::Discrete);
+                            self.update_focus_limit_prompt();
+                        }
+                    }
+                    SettingsMode::EditDatabasePath => {
+                        let before = self.settings.database_path_input.clone();
+                        self.settings.database_path_input.push_str(&flat);
+                        self.settings
+                            .database_path_history
+                            .record(&before, EditKind::Discrete);
+                        self.update_database_path_prompt();
+                    }
+                    SettingsMode::Browse => {}
+                }
             }
             _ => {}
         }
@@ -1884,7 +2194,7 @@ impl TuiApp {
         if let Some(tab) = self.editing_return_tab.take() {
             self.active_tab = tab;
         }
-        self.entry_form = DataEntryForm::new(&self.user);
+        self.entry_form = DataEntryForm::new_for(&self.user, &self.active_project);
         if let Some(id) = id {
             self.open_detail_for(&id);
             self.status_message = format!("Cancelled editing [{id}]");
@@ -1905,7 +2215,7 @@ impl TuiApp {
         }
         match create_task_from_draft(&mut self.db, &draft, &self.user) {
             Ok(created) => {
-                self.entry_form = DataEntryForm::new(&self.user);
+                self.entry_form = DataEntryForm::new_for(&self.user, &self.active_project);
                 let _ = self.refresh_all();
                 self.status_message = format!("Created task [{}] {}", created.id, created.title);
             }
@@ -1934,7 +2244,7 @@ impl TuiApp {
         match wsid_core::update_task_from_draft(&mut self.db, id, draft, &self.user) {
             Ok(updated) => {
                 self.editing_task_id = None;
-                self.entry_form = DataEntryForm::new(&self.user);
+                self.entry_form = DataEntryForm::new_for(&self.user, &self.active_project);
                 if let Some(tab) = self.editing_return_tab.take() {
                     self.active_tab = tab;
                 }
@@ -2546,25 +2856,260 @@ impl TuiApp {
         }
     }
 
-    /// Opens the acting-user prompt (`Ctrl+U`); `U` is the per-view filter.
-    fn begin_user_switch(&mut self) {
-        self.user_switching = true;
-        self.user_input.clear();
-        self.user_history.clear();
-        self.update_user_prompt_message();
+    // ------------------------------------------------------------------
+    // Settings View
+    // ------------------------------------------------------------------
+
+    pub fn is_primary_user(&self) -> bool {
+        self.user.eq_ignore_ascii_case(&self.config.primary_user)
     }
 
-    fn update_user_prompt_message(&mut self) {
-        let known = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()])
-            .unwrap_or_default()
-            .join(", @");
-        self.status_message = format!("Switch user (known: @{known}) — active @{}: @{}_", self.user, self.user_input);
+    pub fn is_global_database(&self) -> bool {
+        self.db_path == wsid_core::default_global_db_path()
     }
 
-    fn handle_user_input_key(&mut self, key: KeyEvent) {
-        if let Some(changed) = apply_text_shortcut(&key, &mut self.user_input, &mut self.user_history) {
+    /// Rows rendered by the Settings view and navigated with `j`/`k`.
+    pub fn settings_rows(&self) -> Vec<SettingsRow> {
+        let mut rows = Vec::new();
+
+        rows.push(SettingsRow {
+            section: "Active Context",
+            label: "Active user".to_string(),
+            value: format!("@{}  (Enter to switch)", self.user),
+            action: SettingsAction::SwitchUser,
+        });
+        rows.push(SettingsRow {
+            section: "Active Context",
+            label: "Active project".to_string(),
+            value: format!("{}  (Enter to switch)", self.active_project),
+            action: SettingsAction::SwitchProject,
+        });
+        rows.push(SettingsRow {
+            section: "Focus Queue",
+            label: "Default focus preset".to_string(),
+            value: self.preset.to_string(),
+            action: SettingsAction::CyclePreset,
+        });
+        rows.push(SettingsRow {
+            section: "Focus Queue",
+            label: "Focus queue size".to_string(),
+            value: format!("{} tasks", self.config.focus_limit),
+            action: SettingsAction::EditFocusLimit,
+        });
+
+        let global_path = wsid_core::default_global_db_path();
+        if self.is_global_database() {
+            rows.push(SettingsRow {
+                section: "Database Connection",
+                label: "Global database".to_string(),
+                value: format!("{}  (in use)", global_path.display()),
+                action: SettingsAction::None,
+            });
+        } else {
+            rows.push(SettingsRow {
+                section: "Database Connection",
+                label: "Use global database".to_string(),
+                value: global_path.display().to_string(),
+                action: SettingsAction::OpenGlobalDatabase,
+            });
+        }
+        rows.push(SettingsRow {
+            section: "Database Connection",
+            label: "Open workspace database…".to_string(),
+            value: "enter a .db file or a folder".to_string(),
+            action: SettingsAction::OpenWorkspaceDatabase,
+        });
+        for recent in &self.config.recent_workspaces {
+            let is_current = *recent == self.db_path;
+            rows.push(SettingsRow {
+                section: "Database Connection",
+                label: "Recent workspace".to_string(),
+                value: if is_current { format!("{}  (current)", recent.display()) } else { recent.display().to_string() },
+                action: if is_current { SettingsAction::None } else { SettingsAction::OpenRecentDatabase(recent.clone()) },
+            });
+        }
+
+        if self.is_primary_user() {
+            let mut users = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
+            users.sort_by_key(|user| user.to_ascii_lowercase());
+            if users.is_empty() {
+                rows.push(SettingsRow {
+                    section: "User Management",
+                    label: "Known users".to_string(),
+                    value: "none yet".to_string(),
+                    action: SettingsAction::None,
+                });
+            }
+            for known in users {
+                if known.eq_ignore_ascii_case(&self.config.primary_user) {
+                    rows.push(SettingsRow {
+                        section: "User Management",
+                        label: format!("@{known}"),
+                        value: "primary".to_string(),
+                        action: SettingsAction::None,
+                    });
+                } else {
+                    rows.push(SettingsRow {
+                        section: "User Management",
+                        label: format!("@{known}"),
+                        value: "Enter to delete".to_string(),
+                        action: SettingsAction::DeleteUser(known),
+                    });
+                }
+            }
+        } else {
+            rows.push(SettingsRow {
+                section: "User Management",
+                label: "Known users".to_string(),
+                value: format!("only @{} can manage users", self.config.primary_user),
+                action: SettingsAction::None,
+            });
+        }
+
+        rows.push(SettingsRow {
+            section: "About",
+            label: "About WSID & licenses…".to_string(),
+            value: String::new(),
+            action: SettingsAction::About,
+        });
+        rows
+    }
+
+    pub(crate) fn clamp_settings_selection(&mut self, len: usize) {
+        if len == 0 {
+            self.settings.selected = 0;
+        } else if self.settings.selected >= len {
+            self.settings.selected = len - 1;
+        }
+    }
+
+    fn handle_settings_key(&mut self, key: KeyEvent) {
+        match self.settings.mode {
+            SettingsMode::EditFocusLimit => {
+                self.handle_settings_focus_limit_key(key);
+                return;
+            }
+            SettingsMode::EditDatabasePath => {
+                self.handle_settings_database_path_key(key);
+                return;
+            }
+            SettingsMode::Browse => {}
+        }
+
+        if is_modified_char(&key) {
+            return;
+        }
+        if self.handle_tab_switch_key(key.code) {
+            return;
+        }
+
+        let len = self.settings_rows().len();
+        match key.code {
+            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('a') => {
+                self.accessible_mode = !self.accessible_mode;
+                self.status_message = format!("Accessible linear layout mode: {}", if self.accessible_mode { "ON" } else { "OFF" });
+            }
+            KeyCode::Char('?') => {
+                self.about_modal_open = true;
+                self.about_scroll = 0;
+                self.status_message = "About WSID & Third-Party Licenses".to_string();
+            }
+            KeyCode::Char('r') => {
+                if let Err(err) = self.refresh_all() {
+                    self.status_message = format!("Refresh failed: {err}");
+                } else {
+                    self.status_message = "Refreshed database state".to_string();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if len > 0 {
+                    self.settings.selected = (self.settings.selected + 1) % len;
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if len > 0 {
+                    self.settings.selected = self.settings.selected.checked_sub(1).unwrap_or(len - 1);
+                }
+            }
+            KeyCode::Home | KeyCode::Char('g') => self.settings.selected = 0,
+            KeyCode::End | KeyCode::Char('G') => self.settings.selected = len.saturating_sub(1),
+            KeyCode::Enter => self.activate_settings_row(),
+            _ => {}
+        }
+    }
+
+    fn activate_settings_row(&mut self) {
+        let rows = self.settings_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let index = self.settings.selected.min(rows.len() - 1);
+        self.settings.selected = index;
+        match rows[index].action.clone() {
+            SettingsAction::None => {}
+            SettingsAction::SwitchUser => self.open_user_switcher(),
+            SettingsAction::SwitchProject => self.open_project_switcher(),
+            SettingsAction::CyclePreset => {
+                self.preset = self.preset.next();
+                self.config.focus_preset = self.preset;
+                if let Err(err) = self.config.save_to_path(&self.config_path) {
+                    self.status_message = format!("Failed to save settings: {err}");
+                    return;
+                }
+                if let Err(err) = self.refresh_all() {
+                    self.status_message = format!("Refresh failed: {err}");
+                    return;
+                }
+                self.status_message = format!("Default focus preset set to '{}'", self.preset);
+            }
+            SettingsAction::EditFocusLimit => {
+                self.settings.mode = SettingsMode::EditFocusLimit;
+                self.settings.focus_limit_input = self.config.focus_limit.to_string();
+                self.settings.focus_limit_history.clear();
+                self.update_focus_limit_prompt();
+            }
+            SettingsAction::OpenGlobalDatabase => {
+                let path = wsid_core::default_global_db_path();
+                self.finish_database_switch(&path);
+            }
+            SettingsAction::OpenWorkspaceDatabase => self.begin_database_path_prompt(),
+            SettingsAction::OpenRecentDatabase(path) => self.finish_database_switch(&path),
+            SettingsAction::DeleteUser(username) => self.open_delete_user_confirm(&username),
+            SettingsAction::About => {
+                self.about_modal_open = true;
+                self.about_scroll = 0;
+                self.status_message = "About WSID & Third-Party Licenses".to_string();
+            }
+        }
+    }
+
+    fn finish_database_switch(&mut self, path: &Path) {
+        match self.switch_database(path) {
+            Ok(()) => {
+                self.settings.mode = SettingsMode::Browse;
+                self.settings.database_path_input.clear();
+                self.status_message = format!("Using database {}", self.db_path.display());
+            }
+            Err(err) => {
+                self.status_message = format!("Cannot open database '{}': {err}", path.display());
+            }
+        }
+    }
+
+    fn update_focus_limit_prompt(&mut self) {
+        self.status_message = format!(
+            "Focus queue size ({}-{}): {}_",
+            wsid_core::MIN_FOCUS_LIMIT,
+            wsid_core::MAX_FOCUS_LIMIT,
+            self.settings.focus_limit_input
+        );
+    }
+
+    fn handle_settings_focus_limit_key(&mut self, key: KeyEvent) {
+        if let Some(changed) = apply_text_shortcut(&key, &mut self.settings.focus_limit_input, &mut self.settings.focus_limit_history) {
             if changed {
-                self.update_user_prompt_message();
+                self.update_focus_limit_prompt();
             }
             return;
         }
@@ -2573,40 +3118,285 @@ impl TuiApp {
         }
         match key.code {
             KeyCode::Esc => {
-                self.user_switching = false;
-                self.user_input.clear();
-                self.status_message = "Cancelled user switch".to_string();
+                self.settings.mode = SettingsMode::Browse;
+                self.settings.focus_limit_input.clear();
+                self.status_message = "Cancelled focus queue size change".to_string();
             }
             KeyCode::Backspace => {
-                self.user_input.pop();
-                self.update_user_prompt_message();
+                self.settings.focus_limit_input.pop();
+                self.update_focus_limit_prompt();
             }
-            KeyCode::Enter => {
-                let input = std::mem::take(&mut self.user_input);
-                self.user_switching = false;
-                match normalize_user(&input).and_then(|u| register_user(&mut self.db, &u)) {
-                    Ok(user) => {
-                        let previous = std::mem::replace(&mut self.user, user.clone());
-                        // Views filtered to the previous identity follow the new one.
-                        for filter in [&mut self.focus_user, &mut self.kanban_user, &mut self.eisenhower_user] {
-                            if *filter == previous {
-                                *filter = user.clone();
-                            }
-                        }
-                        if self.search_assignee_filter.as_deref() == Some(previous.as_str()) {
-                            self.search_assignee_filter = Some(user.clone());
-                        }
-                        let _ = self.refresh_all();
-                        self.status_message = format!("Active user is now @{user}");
-                    }
-                    Err(err) => self.status_message = format!("Cannot switch user: {err}"),
+            KeyCode::Enter => self.submit_focus_limit(),
+            KeyCode::Char(ch) if ch.is_ascii_digit() => {
+                if self.settings.focus_limit_input.len() < 2 {
+                    self.settings.focus_limit_input.push(ch);
                 }
-            }
-            KeyCode::Char(ch) => {
-                self.user_input.push(ch);
-                self.update_user_prompt_message();
+                self.update_focus_limit_prompt();
             }
             _ => {}
+        }
+    }
+
+    fn submit_focus_limit(&mut self) {
+        let raw = self.settings.focus_limit_input.trim().to_string();
+        let limit = match raw.parse::<usize>() {
+            Ok(limit) => limit,
+            Err(_) => {
+                self.status_message = format!(
+                    "Focus queue size must be a whole number between {} and {}",
+                    wsid_core::MIN_FOCUS_LIMIT,
+                    wsid_core::MAX_FOCUS_LIMIT
+                );
+                return;
+            }
+        };
+        if validate_focus_limit(limit).is_err() {
+            self.status_message =
+                format!("Focus queue size must be between {} and {}", wsid_core::MIN_FOCUS_LIMIT, wsid_core::MAX_FOCUS_LIMIT);
+            return;
+        }
+        self.config.focus_limit = limit;
+        if let Err(err) = self.config.save_to_path(&self.config_path) {
+            self.status_message = format!("Failed to save settings: {err}");
+            return;
+        }
+        self.settings.mode = SettingsMode::Browse;
+        self.settings.focus_limit_input.clear();
+        if let Err(err) = self.refresh_all() {
+            self.status_message = format!("Refresh failed: {err}");
+            return;
+        }
+        self.status_message = format!("Focus queue size set to {limit} tasks");
+    }
+
+    fn begin_database_path_prompt(&mut self) {
+        self.settings.mode = SettingsMode::EditDatabasePath;
+        self.settings.database_path_input.clear();
+        self.settings.database_path_history.clear();
+        self.update_database_path_prompt();
+    }
+
+    fn update_database_path_prompt(&mut self) {
+        self.status_message =
+            format!("Open database path or folder (Enter to open, Esc to cancel): {}_", self.settings.database_path_input);
+    }
+
+    fn handle_settings_database_path_key(&mut self, key: KeyEvent) {
+        if let Some(changed) = apply_text_shortcut(&key, &mut self.settings.database_path_input, &mut self.settings.database_path_history) {
+            if changed {
+                self.update_database_path_prompt();
+            }
+            return;
+        }
+        if is_modified_char(&key) {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.settings.mode = SettingsMode::Browse;
+                self.settings.database_path_input.clear();
+                self.status_message = "Cancelled database switch".to_string();
+            }
+            KeyCode::Backspace => {
+                self.settings.database_path_input.pop();
+                self.update_database_path_prompt();
+            }
+            KeyCode::Enter => self.submit_database_path(),
+            KeyCode::Char(ch) => {
+                self.settings.database_path_input.push(ch);
+                self.update_database_path_prompt();
+            }
+            _ => {}
+        }
+    }
+
+    fn submit_database_path(&mut self) {
+        let raw = self.settings.database_path_input.trim().to_string();
+        if raw.is_empty() {
+            self.status_message = "Database path cannot be empty".to_string();
+            return;
+        }
+        match self.switch_database(Path::new(&raw)) {
+            Ok(()) => {
+                self.settings.mode = SettingsMode::Browse;
+                self.settings.database_path_input.clear();
+                self.status_message = format!("Using database {}", self.db_path.display());
+            }
+            Err(err) => {
+                self.status_message = format!("Cannot open database '{raw}': {err}");
+            }
+        }
+    }
+
+    /// Opens `path` and only then replaces the running session, so a bad path
+    /// never leaves the TUI without a usable database.
+    pub fn switch_database(&mut self, path: &Path) -> wsid_core::Result<()> {
+        let next_path = if path.is_dir() { path.join(wsid_core::LOCAL_DB_FILENAME) } else { path.to_path_buf() };
+        let db = Database::open(&next_path)?;
+        let change_detector = DbChangeDetector::new(&db)?;
+
+        let is_global = next_path == wsid_core::default_global_db_path();
+        let mut config = self.config.clone();
+        if !is_global {
+            config.record_recent_workspace(next_path.clone());
+            config.save_to_path(&self.config_path)?;
+        }
+
+        self.db = db;
+        self.db_path = next_path;
+        self.change_detector = change_detector;
+        self.config = config;
+        self.reset_after_database_switch();
+        self.refresh_all()?;
+        Ok(())
+    }
+
+    fn reset_after_database_switch(&mut self) {
+        self.selected_ids.clear();
+        self.bulk_editing = false;
+        self.bulk_input.clear();
+        self.bulk_history.clear();
+
+        self.focus_project = wsid_core::ALL_PROJECTS.to_string();
+        self.kanban_project = self.active_project.clone();
+        self.eisenhower_project = self.active_project.clone();
+        self.focus_user = self.user.clone();
+        self.kanban_user = self.user.clone();
+        self.eisenhower_user = self.user.clone();
+
+        self.search_query.clear();
+        self.search_editing = false;
+        self.search_status_filter = None;
+        self.search_only_mine = false;
+        self.search_tag_filter = None;
+        self.search_assignee_filter = None;
+        self.search_project_filter = None;
+        self.search_sort_col = DatabaseSortColumn::Relevance;
+        self.search_sort_asc = true;
+        self.search_selected = 0;
+        self.search_table_state = TableState::default();
+        self.search_list_state = ListState::default();
+        self.search_history.clear();
+
+        self.focus_selected = 0;
+        self.focus_state = ListState::default();
+        self.kanban_col = 1;
+        self.kanban_row = 0;
+        self.kanban_states = std::array::from_fn(|_| ListState::default());
+        self.eisenhower_quadrant = 0;
+        self.eisenhower_row = 0;
+        self.eisenhower_states = std::array::from_fn(|_| ListState::default());
+
+        self.project_modal_open = false;
+        self.project_modal_query.clear();
+        self.project_modal_selected = 0;
+        self.project_modal_history.clear();
+        self.user_modal_open = false;
+        self.user_modal_query.clear();
+        self.user_modal_selected = 0;
+        self.user_modal_history.clear();
+        self.about_modal_open = false;
+        self.about_scroll = 0;
+
+        self.detail_modal = None;
+        self.detail_prompt_kind = DetailPromptKind::None;
+        self.detail_prompt_input.clear();
+        self.detail_suggestions.clear();
+        self.detail_suggestion_index = 0;
+        self.detail_suggestion_navigated = false;
+        self.detail_comment_preview.clear();
+        self.detail_note_cursor = 0;
+        self.detail_prompt_history.clear();
+        self.attachment_focused = false;
+        self.attachment_cursor = 0;
+        self.attachment_marked.clear();
+        self.form_errors = None;
+
+        self.editing_task_id = None;
+        self.editing_return_tab = None;
+
+        self.settings.selected = 0;
+        self.settings.mode = SettingsMode::Browse;
+        self.settings.focus_limit_input.clear();
+        self.settings.focus_limit_history.clear();
+        self.settings.database_path_input.clear();
+        self.settings.database_path_history.clear();
+        self.settings.delete_confirm = None;
+    }
+
+    fn open_delete_user_confirm(&mut self, username: &str) {
+        if !self.is_primary_user() {
+            self.status_message = format!("Only @{} can manage and delete users", self.config.primary_user);
+            return;
+        }
+        match preview_user_deletion(&self.db, username, &self.config.primary_user) {
+            Ok(preview) => {
+                if preview
+                    .username
+                    .eq_ignore_ascii_case(&self.config.primary_user)
+                {
+                    self.status_message = format!("@{} is the main user and cannot be deleted", preview.username);
+                    return;
+                }
+                self.status_message.clear();
+                self.settings.delete_confirm = Some(UserDeleteConfirm { preview, delete_authored: false });
+            }
+            Err(err) => self.status_message = format!("Cannot delete @{username}: {err}"),
+        }
+    }
+
+    fn handle_user_delete_confirm_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('n') => {
+                self.settings.delete_confirm = None;
+                self.status_message = "Cancelled user deletion".to_string();
+            }
+            KeyCode::Char('a') | KeyCode::Char(' ') => {
+                if let Some(confirm) = self.settings.delete_confirm.as_mut() {
+                    confirm.delete_authored = !confirm.delete_authored;
+                    self.status_message = format!("Also delete authored tasks: {}", if confirm.delete_authored { "ON" } else { "OFF" });
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(confirm) = self.settings.delete_confirm.take() {
+                    self.confirm_delete_user(confirm);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn confirm_delete_user(&mut self, confirm: UserDeleteConfirm) {
+        let username = confirm.preview.username.clone();
+        let primary = self.config.primary_user.clone();
+        match delete_user_from_db(&mut self.db, &username, &primary, confirm.delete_authored, None) {
+            Ok(outcome) => {
+                for filter in [&mut self.focus_user, &mut self.kanban_user, &mut self.eisenhower_user] {
+                    if filter.eq_ignore_ascii_case(&outcome.deleted_user) {
+                        *filter = primary.clone();
+                    }
+                }
+                if self
+                    .search_assignee_filter
+                    .as_deref()
+                    .is_some_and(|user| user.eq_ignore_ascii_case(&outcome.deleted_user))
+                {
+                    self.search_assignee_filter = None;
+                }
+                let _ = self.refresh_all();
+                self.status_message = if outcome.deleted_task_count > 0 {
+                    format!(
+                        "Deleted @{}: {} task(s) reassigned to @{}, {} authored task(s) deleted",
+                        outcome.deleted_user, outcome.reassigned_task_count, outcome.fallback_user, outcome.deleted_task_count
+                    )
+                } else {
+                    format!(
+                        "Deleted @{}: {} task(s) reassigned to @{}",
+                        outcome.deleted_user, outcome.reassigned_task_count, outcome.fallback_user
+                    )
+                };
+            }
+            Err(err) => self.status_message = format!("Cannot delete @{username}: {err}"),
         }
     }
 

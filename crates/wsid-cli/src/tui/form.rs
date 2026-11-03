@@ -439,6 +439,12 @@ impl DataEntryForm {
     pub const SUBMIT_INDEX: usize = FIELD_COUNT;
 
     pub fn new(default_user: &str) -> Self {
+        Self::new_for(default_user, wsid_core::DEFAULT_PROJECT)
+    }
+
+    /// A pristine form whose reporter/assignee/evaluator default to `default_user` and whose
+    /// project defaults to `default_project`.
+    pub fn new_for(default_user: &str, default_project: &str) -> Self {
         let mut state = ListState::default();
         state.select(Some(0));
         let mut fields: [String; FIELD_COUNT] = std::array::from_fn(|_| String::new());
@@ -449,7 +455,7 @@ impl DataEntryForm {
         for i in [12, 13, 14] {
             fields[i] = default_user.to_string();
         }
-        fields[PROJECT] = wsid_core::DEFAULT_PROJECT.to_string();
+        fields[PROJECT] = default_project.to_string();
         Self {
             fields,
             errors: std::array::from_fn(|_| None),
@@ -463,6 +469,25 @@ impl DataEntryForm {
             state,
             dirty_at: None,
             histories: std::array::from_fn(|_| TextHistory::default()),
+        }
+    }
+
+    /// Re-points the user and project fields that still hold the previous active context at the
+    /// new one. Fields the user changed to something else are left alone, so drafts survive.
+    pub fn retarget_context(&mut self, from_user: &str, from_project: &str, to_user: &str, to_project: &str) {
+        let mut changed = false;
+        for i in [12, 13, 14] {
+            if self.fields[i] == from_user && from_user != to_user {
+                self.fields[i] = to_user.to_string();
+                changed = true;
+            }
+        }
+        if self.fields[PROJECT] == from_project && from_project != to_project {
+            self.fields[PROJECT] = to_project.to_string();
+            changed = true;
+        }
+        if changed {
+            self.dirty_at = Some(Instant::now());
         }
     }
 

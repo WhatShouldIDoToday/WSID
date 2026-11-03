@@ -245,6 +245,16 @@ impl FocusPreset {
             Self::UnblockOthers => "unblock_others",
         }
     }
+
+    /// Cycle to the next preset in display order.
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Balanced => Self::QuickWins,
+            Self::QuickWins => Self::EatTheFrog,
+            Self::EatTheFrog => Self::UnblockOthers,
+            Self::UnblockOthers => Self::Balanced,
+        }
+    }
 }
 
 impl fmt::Display for FocusPreset {
