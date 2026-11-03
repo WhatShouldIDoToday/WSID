@@ -19,7 +19,7 @@ use crate::cli_runner::read_system_clipboard_attachment;
 pub use crate::tui::form::DataEntryForm;
 use crate::tui::form::{self, CommentSuggestion, CommentTokenKind, trailing_comment_token};
 use crate::tui::text_edit::{self, EditKind, TextHistory, apply_text_shortcut};
-use crate::tui::user_ref::user_kind_mismatch;
+use crate::tui::user_ref::{user_kind_mismatch, user_label};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
@@ -290,6 +290,8 @@ pub struct TuiApp {
 
     // Kanban View state
     pub all_tasks: Vec<Task>,
+    /// Cached `list_user_kinds`, refreshed with the task lists.
+    pub user_kinds: std::collections::BTreeMap<String, String>,
     pub kanban_col: usize,
     pub kanban_row: usize,
     pub kanban_states: [ListState; 6],
@@ -409,6 +411,7 @@ impl TuiApp {
             Some(wsid_core::ALL_PROJECTS),
         )?;
         let all_tasks = list_tasks(&db)?;
+        let user_kinds = wsid_core::list_user_kinds(&db)?;
         let eisenhower_items = list_eisenhower_matrix(&db, Some(&user), today, config.scoring)?;
         let search_hits = search_tasks(&db, &SearchQuery::default())?;
         let active_project = wsid_core::DEFAULT_PROJECT.to_string();
@@ -433,6 +436,7 @@ impl TuiApp {
             focus_state: ListState::default(),
             show_blocked_banner: true,
             all_tasks,
+            user_kinds,
             kanban_col: 1, // Todo column by default
             kanban_row: 0,
             kanban_states: std::array::from_fn(|_| ListState::default()),
@@ -534,6 +538,7 @@ impl TuiApp {
         }
 
         self.all_tasks = list_tasks(&self.db)?;
+        self.user_kinds = wsid_core::list_user_kinds(&self.db)?;
         {
             let existing: std::collections::HashSet<&str> = self.all_tasks.iter().map(|t| t.id.as_str()).collect();
             self.selected_ids
@@ -2897,6 +2902,11 @@ impl TuiApp {
 
     pub fn is_global_database(&self) -> bool {
         self.db_path == wsid_core::default_global_db_path()
+    }
+
+    /// `@user`, or `@user (kind)` for non-human users, for compact displays.
+    pub fn user_label(&self, user: &str) -> String {
+        user_label(&self.user_kinds, user)
     }
 
     /// `kind · ` for a non-default kind, otherwise empty.

@@ -15,6 +15,7 @@ use wsid_core::{
 
 use crate::tui::app::{ActiveTab, DataEntryForm, DatabaseSortColumn, DetailPromptKind, FocusContext, PickerMode, SettingsMode, TuiApp};
 use crate::tui::form;
+use crate::tui::user_ref::user_label;
 
 const SELECTED_STYLE: Style = Style::new()
     .fg(Color::Black)
@@ -376,7 +377,7 @@ fn render_kanban_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .iter()
             .map(|t| {
                 let line1 = format!("{}[{}] {}", app.mark(&t.id), t.id, t.title);
-                let line2 = format!("  @{} I:{} D:{}", t.assignee, t.importance, t.difficulty);
+                let line2 = format!("  {} I:{} D:{}", app.user_label(&t.assignee), t.importance, t.difficulty);
                 ListItem::new(vec![Line::from(line1), Line::from(line2)])
             })
             .collect();
@@ -690,7 +691,7 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 Cell::from(t.title.clone()),
                 Cell::from(t.status.to_string()),
                 Cell::from(t.project.clone()),
-                Cell::from(format!("@{}", t.assignee)),
+                Cell::from(app.user_label(&t.assignee)),
                 Cell::from(format!("{}/5", t.importance)),
                 Cell::from(format!("{}/5", t.difficulty)),
                 Cell::from(sgdb.to_string()),
@@ -1210,7 +1211,12 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         ),
         Span::styled(format!("({})", t.status), Style::default().fg(Color::Cyan)),
     ]));
-    lines.push(Line::from(format!("Reporter: @{} | Assignee: @{} | Evaluator: @{}", t.reporter, t.assignee, t.evaluator)));
+    lines.push(Line::from(format!(
+        "Reporter: {} | Assignee: {} | Evaluator: {}",
+        user_label(&app.user_kinds, &t.reporter),
+        user_label(&app.user_kinds, &t.assignee),
+        user_label(&app.user_kinds, &t.evaluator)
+    )));
     lines.push(Line::from(format!("Project: {}", t.project)));
 
     let est = t

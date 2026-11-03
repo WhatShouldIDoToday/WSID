@@ -15,7 +15,7 @@ use wsid_core::{
 };
 
 use crate::tui::text_edit::{self, EditKind, TextHistory};
-use crate::tui::user_ref::user_kind_mismatch;
+use crate::tui::user_ref::{user_kind_mismatch, user_label};
 
 /// How long the active field must be idle before it is validated.
 pub const VALIDATION_DEBOUNCE: Duration = Duration::from_millis(400);
@@ -668,13 +668,29 @@ impl DataEntryForm {
             RELATIONS => self.relation_dropdown(db),
             ATTACHMENTS if self.pending_attachment.is_none() => self.path_dropdown(),
             12..=14 => {
-                let prefix = self.fields[self.active_index].clone();
+                // `kind:partial` suggests on the user part and keeps the typed kind.
+                let raw = self.fields[self.active_index]
+                    .trim()
+                    .trim_start_matches('@')
+                    .to_string();
+                let (typed_kind, prefix) = match raw.split_once(':') {
+                    Some((kind, rest)) => (Some(kind.to_string()), rest.to_string()),
+                    None => (None, raw),
+                };
+                let kinds = wsid_core::list_user_kinds(db).unwrap_or_default();
                 let items = suggest_users(db, &prefix, &[user])
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|u| !u.eq_ignore_ascii_case(prefix.trim().trim_start_matches('@')))
+                    .filter(|u| !u.eq_ignore_ascii_case(&prefix))
                     .take(MAX_DROPDOWN_ROWS)
-                    .map(|u| (format!("@{u}"), Choice::Text(u)))
+                    .map(|u| {
+                        let label = user_label(&kinds, &u);
+                        let insert = match &typed_kind {
+                            Some(kind) => format!("{kind}:{u}"),
+                            None => u,
+                        };
+                        (label, Choice::Text(insert))
+                    })
                     .collect();
                 Dropdown::new(items, false)
             }

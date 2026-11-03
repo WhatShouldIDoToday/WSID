@@ -4,6 +4,14 @@ use std::collections::BTreeMap;
 
 use wsid_core::{DEFAULT_USER_KIND, parse_user_ref};
 
+/// `@user`, or `@user (kind)` for non-default kinds, for compact displays.
+pub fn user_label(kinds: &BTreeMap<String, String>, user: &str) -> String {
+    match kinds.get(user) {
+        Some(kind) if kind != DEFAULT_USER_KIND => format!("@{user} ({kind})"),
+        _ => format!("@{user}"),
+    }
+}
+
 /// Warns when `input` types a kind for an existing user whose stored kind differs.
 ///
 /// Returns `None` for untyped refs, unknown users (they are created on save), unparsable input
