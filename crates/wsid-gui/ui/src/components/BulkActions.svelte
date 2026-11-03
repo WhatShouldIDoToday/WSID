@@ -16,6 +16,7 @@
     ids: string[];
     knownTags: string[];
     knownUsers: string[];
+    knownProjects: string[];
     onClear: () => void;
     onDone: (outcome: BulkEditOutcome) => void;
     announce: (msg: string) => void;
@@ -27,6 +28,7 @@
     ids,
     knownTags,
     knownUsers,
+    knownProjects,
     onClear,
     onDone,
     announce,
@@ -104,6 +106,17 @@
     <option value="">Assignee…</option>
     {#each knownUsers as u}
       <option value={u}>@{u}</option>
+    {/each}
+  </select>
+
+  <select
+    aria-label="Set project"
+    disabled={busy}
+    onchange={(e) => pick(e, (v) => void apply({ project: v }))}
+  >
+    <option value="">Project…</option>
+    {#each knownProjects as p}
+      <option value={p}>{p}</option>
     {/each}
   </select>
 

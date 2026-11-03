@@ -371,6 +371,7 @@
         activeUser={session?.active_user ?? "human"}
         knownTags={session?.known_tags ?? []}
         knownUsers={session?.known_users ?? []}
+        knownProjects={session?.known_projects ?? []}
         onSelectTask={openTaskDetail}
         onDataChanged={refreshAllData}
         {announce}
@@ -386,6 +387,7 @@
         }}
         knownTags={session?.known_tags ?? []}
         knownUsers={session?.known_users ?? []}
+        knownProjects={session?.known_projects ?? []}
         onSelectTask={openTaskDetail}
         onDataChanged={refreshAllData}
         {announce}
@@ -394,6 +396,7 @@
       <DatabaseView
         knownTags={session?.known_tags ?? []}
         knownUsers={session?.known_users ?? []}
+        knownProjects={session?.known_projects ?? []}
         {refreshTrigger}
         onSelectTask={openTaskDetail}
         onDataChanged={refreshAllData}
@@ -404,6 +407,7 @@
         activeUser={session?.active_user ?? "human"}
         knownUsers={session?.known_users ?? []}
         knownTags={session?.known_tags ?? []}
+        knownProjects={session?.known_projects ?? []}
         bind:isDirty={entryFormDirty}
         onCreated={async (createdId) => {
           entryFormDirty = false;
@@ -458,6 +462,7 @@
     activeUser={session.active_user}
     knownTags={session.known_tags}
     knownUsers={session.known_users}
+    knownProjects={session.known_projects}
     onClose={closeTaskDetail}
     onSelectTask={openTaskDetail}
     onDataChanged={refreshAllData}

@@ -200,6 +200,7 @@
         >
           <option value="system">System Default (prefers-color-scheme)</option>
           <option value="dark">Dark</option>
+          <option value="oled">OLED (Pure Black)</option>
           <option value="light">Light</option>
         </select>
       </div>

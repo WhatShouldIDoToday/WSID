@@ -47,6 +47,7 @@ export interface Task {
   urgent_override: boolean;
   manual_priority: number;
   tags: string[];
+  project: string;
   reporter: string;
   assignee: string;
   evaluator: string;
@@ -149,6 +150,7 @@ export interface AppSessionSnapshot {
   recent_workspaces: string[];
   known_users: string[];
   known_tags: string[];
+  known_projects: string[];
 }
 
 export interface UserAffectedTask {
@@ -209,6 +211,7 @@ export interface GuiCreateTaskPayload {
   urgent_override?: boolean | null;
   manual_priority?: number | null;
   tags: string[];
+  project?: string | null;
   reporter?: string | null;
   assignee?: string | null;
   evaluator?: string | null;
@@ -229,6 +232,7 @@ export interface GuiUpdateTaskPayload {
   urgent_override?: boolean;
   manual_priority?: number;
   tags?: string[];
+  project?: string;
   reporter?: string;
   assignee?: string;
   evaluator?: string;
@@ -627,6 +631,7 @@ function stripTrailingPunctuation(token: string): {
 export function tokenizeCommentBody(
   body: string,
   knownUsers: string[],
+  mode: "comment" | "description" = "comment",
 ): CommentBodySegment[] {
   if (!body) return [];
   const knownSet = new Set(knownUsers.map((u) => u.toLowerCase()));
@@ -692,16 +697,20 @@ export function tokenizeCommentBody(
     } else {
       const exists = knownSet.has(lowerCandidate);
       const actionDesc =
-        kind === "takenote"
-          ? "spawns a non-blocking related task"
-          : "spawns an urgent blocking subtask";
+        mode === "description"
+          ? "is a known user; this description only references them"
+          : kind === "takenote"
+            ? "spawns a non-blocking related task"
+            : "spawns an urgent blocking subtask";
+      const newUserAction =
+        mode === "description"
+          ? "create that user"
+          : kind === "takenote"
+            ? "spawn a non-blocking related task"
+            : "spawn an urgent blocking subtask";
       const tooltip = exists
         ? `Existing user @${lowerCandidate} in database — ${actionDesc}.`
-        : `User @${lowerCandidate} does not exist in this database yet — posting will create @${lowerCandidate} and ${
-            kind === "takenote"
-              ? "spawn a non-blocking related task"
-              : "spawn an urgent blocking subtask"
-          }.`;
+        : `User @${lowerCandidate} does not exist in this database yet — saving will create @${lowerCandidate} and ${newUserAction}.`;
       const mention: ParsedCommentMention = {
         rawToken:
           kind === "takenote"
@@ -849,6 +858,7 @@ export async function searchTasksData(params: {
   assignee?: string | null;
   reporter?: string | null;
   evaluator?: string | null;
+  project?: string | null;
   limit?: number | null;
 }): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("search_tasks_data", {
@@ -858,6 +868,7 @@ export async function searchTasksData(params: {
     assignee: params.assignee ?? null,
     reporter: params.reporter ?? null,
     evaluator: params.evaluator ?? null,
+    project: params.project ?? null,
     limit: params.limit ?? null,
   });
 }
@@ -907,6 +918,7 @@ export interface BulkTaskPatch {
   importance_at_most?: number;
   difficulty?: number;
   urgent_override?: boolean;
+  project?: string;
   add_tags?: string[];
   remove_tags?: string[];
 }
@@ -1135,7 +1147,7 @@ export async function subscribeToMenuActions(
   });
 }
 
-export type UiThemeMode = "system" | "dark" | "light";
+export type UiThemeMode = "system" | "dark" | "oled" | "light";
 export type UiContrastMode = "system" | "more";
 export type UiColorPalette = "default" | "okabe-ito";
 
@@ -1165,7 +1177,9 @@ export function loadUiPreferences(): UiPreferences {
     const parsed = JSON.parse(raw) as Partial<UiPreferences>;
     return {
       theme:
-        parsed.theme === "dark" || parsed.theme === "light"
+        parsed.theme === "dark" ||
+        parsed.theme === "light" ||
+        parsed.theme === "oled"
           ? parsed.theme
           : "system",
       contrast: parsed.contrast === "more" ? "more" : "system",

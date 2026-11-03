@@ -1,6 +1,7 @@
 <script lang="ts">
   import ConfirmModal from "./ConfirmModal.svelte";
   import DateFieldPicker from "./DateFieldPicker.svelte";
+  import RichTextField from "./RichTextField.svelte";
   import RatingSlider from "./RatingSlider.svelte";
   import TagChipsInput from "./TagChipsInput.svelte";
   import RelationPicker, {
@@ -37,6 +38,7 @@
     activeUser: string;
     knownUsers: string[];
     knownTags: string[];
+    knownProjects: string[];
     isDirty?: boolean;
     onCreated: (createdId: string) => void;
     announce: (msg: string) => void;
@@ -46,6 +48,7 @@
     activeUser,
     knownUsers,
     knownTags,
+    knownProjects,
     isDirty = $bindable(false),
     onCreated,
     announce,
@@ -64,6 +67,7 @@
   let manualPriority = $state<number>(3);
   let urgentOverride = $state<boolean>(false);
   let tags = $state<string[]>([]);
+  let project = $state<string>("default");
   let reporter = $state<string>("");
   let assignee = $state<string>("");
   let evaluator = $state<string>("");
@@ -122,6 +126,7 @@
       urgent_override: urgentOverride,
       manual_priority: Number(manualPriority),
       tags: [...tags],
+      project: project.trim() || "default",
       reporter: reporter.trim() || activeUser,
       assignee: assignee.trim() || activeUser,
       evaluator: evaluator.trim() || activeUser,
@@ -551,6 +556,7 @@
         urgent_override: urgentOverride,
         manual_priority: Number(manualPriority),
         tags,
+        project: project.trim() || "default",
         reporter: reporter.trim() || activeUser,
         assignee: assignee.trim() || activeUser,
         evaluator: evaluator.trim() || activeUser,
@@ -638,17 +644,15 @@
 
       <div class="form-field">
         <label for="entry-desc">Description</label>
-        <textarea
+        <RichTextField
           id="entry-desc"
-          rows="4"
+          rows={4}
           bind:value={description}
-          onpaste={(e) => {
-            if (e.clipboardData?.files?.length) {
-              void handlePasteFiles(e.clipboardData.files);
-            }
-          }}
+          {knownUsers}
+          mode="description"
+          onPasteFiles={handlePasteFiles}
           placeholder="Detailed acceptance criteria, notes, or context. Paste images directly with Cmd/Ctrl+V."
-        ></textarea>
+        />
       </div>
 
       <div class="form-grid-dates">
@@ -798,6 +802,28 @@
         bind:inputText={tagInputText}
         {knownTags}
       />
+
+      <div class="form-field">
+        <label for="entry-project">Project</label>
+        <input
+          id="entry-project"
+          type="text"
+          bind:value={project}
+          list="project-datalist"
+          spellcheck="false"
+          placeholder="default"
+          pattern="[A-Za-z0-9_-]+"
+        />
+        <datalist id="project-datalist">
+          {#each knownProjects as p}
+            <option value={p}></option>
+          {/each}
+        </datalist>
+        <span class="field-hint">
+          Letters, numbers, underscores, and dashes. Defaults to
+          <code>default</code>.
+        </span>
+      </div>
 
       <!-- Unified Fuzzy Relation Picker -->
       <div class="form-field">

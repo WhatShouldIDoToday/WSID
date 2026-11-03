@@ -1,4 +1,7 @@
 :root {
+  /* Relative scale driven by the Settings slider; keeps every rem-relative size
+     proportional to the user's system font size (no hardcoded px root). */
+  font-size: calc(100% * var(--ui-font-scale, 1));
   --bg-app: #0f172a;
   --bg-surface: #1e293b;
   --bg-elevated: #283548;
@@ -37,7 +40,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
+  :root:not([data-theme="dark"]):not([data-theme="oled"]) {
     --bg-app: #f8fafc;
     --bg-surface: #ffffff;
     --bg-elevated: #f1f5f9;
@@ -93,6 +96,35 @@
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* OLED: true-black surfaces for panels that emit their own light. Text and
+   accent colors keep the dark-theme contrast ratios (all >= 7:1 on black). */
+:root[data-theme="oled"] {
+  --bg-app: #000000;
+  --bg-surface: #0a0a0a;
+  --bg-elevated: #141414;
+  --bg-input: #000000;
+  --bg-header-sub: #050505;
+  --text-primary: #f8fafc;
+  --text-secondary: #d4dbe5;
+  --text-muted: #a3aebd;
+  --border-subtle: #262626;
+  --border-strong: #7b8794;
+  --accent-primary: #67cdfb;
+  --accent-primary-hover: #a5e3fd;
+  --accent-text-dark: #00131f;
+  --focus-ring: #facc15;
+  --status-todo: #7db6fb;
+  --status-in-progress: #52d8a8;
+  --status-in-review: #d3a0f8;
+  --status-stuck: #fb9a9a;
+  --status-completed: #a3aebd;
+  --danger: #fb9a9a;
+  --danger-text: #ffd6d6;
+  --warning: #fbd24e;
+  --success: #52d8a8;
   color-scheme: dark;
 }
 
@@ -1797,4 +1829,71 @@ input[type="text"].tag-compact-input {
 .drag-ghost-meta {
   font-size: 0.76rem;
   color: var(--text-muted);
+}
+
+/* Project badge: shown on cards/rows when a view spans projects. */
+.project-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.45rem;
+  border-radius: 0.25rem;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+/* Rich text rendering shared by descriptions and comments. */
+.rich-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+.rich-text-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mention-menu {
+  position: absolute;
+  z-index: 40;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin: 0.2rem 0 0;
+  padding: 0.25rem;
+  list-style: none;
+  max-height: 14rem;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.375rem;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+}
+
+.mention-menu li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.3rem 0.45rem;
+  border-radius: 0.25rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.mention-menu li.active,
+.mention-menu li:hover {
+  background: var(--bg-input);
+  outline: 1px solid var(--accent-primary);
+}
+
+.mention-menu-detail {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  white-space: nowrap;
 }

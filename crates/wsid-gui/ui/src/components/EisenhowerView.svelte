@@ -22,6 +22,7 @@
     filterByUser: boolean;
     knownTags: string[];
     knownUsers: string[];
+    knownProjects: string[];
     onToggleUserFilter: (enabled: boolean) => void;
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
@@ -34,11 +35,29 @@
     filterByUser,
     knownTags,
     knownUsers,
+    knownProjects,
     onToggleUserFilter,
     onSelectTask,
     onDataChanged,
     announce,
   }: Props = $props();
+
+  const PROJECT_ALL = "all";
+  /** Project shown on the matrix; Eisenhower starts on `default`, not `all`. */
+  let projectFilter = $state<string>("default");
+  let projectOptions = $derived(
+    [
+      ...new Set([
+        "default",
+        ...knownProjects,
+        ...items.map((i) => i.task.project),
+      ]),
+    ]
+      .filter(Boolean)
+      .sort((a, b) =>
+        a === "default" ? -1 : b === "default" ? 1 : a.localeCompare(b),
+      ),
+  );
 
   const QUADRANTS: EisenhowerQuadrant[] = [
     "q1_do_first",
@@ -65,7 +84,11 @@
   }
 
   function itemsForQuadrant(q: EisenhowerQuadrant): EisenhowerClassification[] {
-    return items.filter((item) => item.quadrant === q);
+    return items.filter(
+      (item) =>
+        item.quadrant === q &&
+        (projectFilter === PROJECT_ALL || item.task.project === projectFilter),
+    );
   }
 
   function isInteractiveTarget(target: EventTarget | null): boolean {
@@ -253,6 +276,22 @@
     </h2>
 
     <div class="control-inline">
+      <label for="matrix-project-select" class="field-label" style="margin: 0;">
+        Project
+      </label>
+      <select
+        id="matrix-project-select"
+        bind:value={projectFilter}
+        onchange={() => announce(`Matrix project filter: ${projectFilter}`)}
+      >
+        {#each projectOptions as project (project)}
+          <option value={project}>{project}</option>
+        {/each}
+        <option value={PROJECT_ALL}>All projects</option>
+      </select>
+    </div>
+
+    <div class="control-inline">
       <input
         id="matrix-user-toggle"
         type="checkbox"
@@ -290,6 +329,7 @@
       ids={selection.ids}
       {knownTags}
       {knownUsers}
+      {knownProjects}
       {announce}
       onClear={() => selection.clear()}
       onDone={(outcome) => {

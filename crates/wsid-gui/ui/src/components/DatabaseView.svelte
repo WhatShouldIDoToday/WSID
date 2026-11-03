@@ -15,6 +15,7 @@
   interface Props {
     knownTags: string[];
     knownUsers: string[];
+    knownProjects: string[];
     refreshTrigger: number;
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
@@ -24,6 +25,7 @@
   let {
     knownTags,
     knownUsers,
+    knownProjects,
     refreshTrigger,
     onSelectTask,
     onDataChanged,
@@ -37,6 +39,7 @@
     | "id"
     | "title"
     | "status"
+    | "project"
     | "assignee"
     | "importance"
     | "difficulty"
@@ -46,6 +49,7 @@
   let statusFilter = $state<string>("");
   let tagFilter = $state<string>("");
   let assigneeFilter = $state<string>("");
+  let projectFilter = $state<string>("");
   let hits = $state<SearchHit[]>([]);
   let sortCol = $state<SortCol>("score");
   let sortAsc = $state<boolean>(false);
@@ -57,6 +61,7 @@
         status: (statusFilter || null) as TaskStatus | null,
         tag: tagFilter || null,
         assignee: assigneeFilter || null,
+        project: projectFilter || null,
       });
       hits = results;
       selection.prune(results.map((h) => h.task.id));
@@ -71,6 +76,7 @@
     void statusFilter;
     void tagFilter;
     void assigneeFilter;
+    void projectFilter;
     void executeSearch();
   });
 
@@ -108,6 +114,9 @@
           break;
         case "status":
           cmp = a.task.status.localeCompare(b.task.status);
+          break;
+        case "project":
+          cmp = a.task.project.localeCompare(b.task.project);
           break;
         case "assignee":
           cmp = a.task.assignee.localeCompare(b.task.assignee);
@@ -186,6 +195,16 @@
     </div>
 
     <div class="form-field">
+      <label for="db-project-filter">Project</label>
+      <select id="db-project-filter" bind:value={projectFilter}>
+        <option value="">All Projects</option>
+        {#each knownProjects as p}
+          <option value={p}>{p}</option>
+        {/each}
+      </select>
+    </div>
+
+    <div class="form-field">
       <label for="db-assignee-filter">Assignee</label>
       <select id="db-assignee-filter" bind:value={assigneeFilter}>
         <option value="">All Assignees</option>
@@ -207,6 +226,7 @@
       ids={selection.ids}
       {knownTags}
       {knownUsers}
+      {knownProjects}
       {announce}
       onClear={() => selection.clear()}
       onDone={(outcome) => {
@@ -259,6 +279,15 @@
               Status {sortCol === "status" ? (sortAsc ? "▲" : "▼") : ""}
             </button>
           </th>
+          <th scope="col" aria-sort={ariaSortFor("project")}>
+            <button
+              type="button"
+              class="sort-btn"
+              onclick={() => toggleSort("project")}
+            >
+              Project {sortCol === "project" ? (sortAsc ? "▲" : "▼") : ""}
+            </button>
+          </th>
           <th scope="col" aria-sort={ariaSortFor("assignee")}>
             <button
               type="button"
@@ -304,7 +333,7 @@
         {#if sortedHits.length === 0}
           <tr>
             <td
-              colspan="11"
+              colspan="12"
               style="text-align: center; padding: 1.5rem; color: var(--text-muted);"
             >
               No tasks match the current search and filters.
@@ -343,6 +372,9 @@
               </td>
               <td>
                 <span class="badge">{STATUS_LABELS[hit.task.status]}</span>
+              </td>
+              <td>
+                <span class="project-badge">{hit.task.project}</span>
               </td>
               <td>@{hit.task.assignee}</td>
               <td>{hit.task.importance}/5</td>

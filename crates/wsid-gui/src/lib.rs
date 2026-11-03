@@ -16,9 +16,9 @@ use wsid_core::{
     compute_focus_queue, create_task_from_draft, default_config_path, default_global_db_path, delete_task, delete_task_note,
     delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
     get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
-    list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os, parse_deadline_datetime, preview_user_deletion,
-    register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status,
-    unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task, validate_task_draft,
+    list_known_projects, list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os, parse_deadline_datetime,
+    preview_user_deletion, register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks,
+    transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task, validate_task_draft,
 };
 
 pub struct GuiAppState {
@@ -62,6 +62,7 @@ pub struct AppSessionSnapshot {
     pub recent_workspaces: Vec<String>,
     pub known_users: Vec<String>,
     pub known_tags: Vec<String>,
+    pub known_projects: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +90,7 @@ pub struct GuiCreateTaskPayload {
     pub urgent_override: Option<bool>,
     pub manual_priority: Option<i8>,
     pub tags: Vec<String>,
+    pub project: Option<String>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
@@ -116,6 +118,7 @@ pub struct GuiUpdateTaskPayload {
     pub urgent_override: Option<bool>,
     pub manual_priority: Option<i8>,
     pub tags: Option<Vec<String>>,
+    pub project: Option<String>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
@@ -157,6 +160,7 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
             .collect(),
         known_users,
         known_tags: tags.into_iter().collect(),
+        known_projects: list_known_projects(&db).map_err(|e| e.to_string())?,
     })
 }
 
@@ -188,6 +192,7 @@ pub fn payload_to_draft(payload: GuiCreateTaskPayload) -> Result<TaskDraft, Stri
         manual_priority: payload.manual_priority.map(|n| Scalar::Int(i64::from(n))),
         urgent_override: payload.urgent_override.map(Scalar::Bool),
         tags: payload.tags,
+        project: payload.project,
         relations: payload
             .initial_relations
             .into_iter()
@@ -516,6 +521,7 @@ fn search_tasks_data(
     assignee: Option<String>,
     reporter: Option<String>,
     evaluator: Option<String>,
+    project: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<SearchHit>, String> {
     let guard = state
@@ -526,7 +532,8 @@ fn search_tasks_data(
         Some(s) if !s.is_empty() => Some(TaskStatus::from_str(s).map_err(|e| e.to_string())?),
         _ => None,
     };
-    search_tasks(&db, &SearchQuery { query, status: parsed_status, tag, assignee, reporter, evaluator, limit }).map_err(|e| e.to_string())
+    search_tasks(&db, &SearchQuery { query, status: parsed_status, tag, assignee, reporter, evaluator, project, limit })
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -595,6 +602,7 @@ fn update_existing_task(state: State<'_, SharedGuiState>, payload: GuiUpdateTask
             urgent_override: payload.urgent_override,
             manual_priority: payload.manual_priority,
             tags: payload.tags,
+            project: payload.project,
             reporter: payload.reporter,
             assignee: payload.assignee,
             evaluator: payload.evaluator,
@@ -622,6 +630,7 @@ struct GuiBulkPatch {
     importance_at_most: Option<u8>,
     difficulty: Option<u8>,
     urgent_override: Option<bool>,
+    project: Option<String>,
     #[serde(default)]
     add_tags: Vec<String>,
     #[serde(default)]
@@ -646,6 +655,7 @@ fn bulk_edit_tasks(state: State<'_, SharedGuiState>, ids: Vec<String>, patch: Gu
         importance_at_most: patch.importance_at_most,
         difficulty: patch.difficulty,
         urgent_override: patch.urgent_override,
+        project: patch.project,
         add_tags: patch.add_tags,
         remove_tags: patch.remove_tags,
     };

@@ -4,6 +4,8 @@
   import DateFieldPicker from "./DateFieldPicker.svelte";
   import RatingSlider from "./RatingSlider.svelte";
   import TagChipsInput from "./TagChipsInput.svelte";
+  import RichTextField from "./RichTextField.svelte";
+  import RichTextDisplay from "./RichTextDisplay.svelte";
   import RelationPicker, {
     type SelectedRelationEntry,
   } from "./RelationPicker.svelte";
@@ -54,6 +56,7 @@
     activeUser: string;
     knownUsers?: string[];
     knownTags?: string[];
+    knownProjects?: string[];
     onClose: () => void;
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
@@ -65,6 +68,7 @@
     activeUser,
     knownUsers = [],
     knownTags = [],
+    knownProjects = [],
     onClose,
     onSelectTask,
     onDataChanged,
@@ -88,6 +92,7 @@
   let editUrgentOverride = $state<boolean>(false);
   let editManualPriority = $state<number>(3);
   let editTags = $state<string[]>([]);
+  let editProject = $state<string>("default");
   let editAssignee = $state<string>("");
   let editEvaluator = $state<string>("");
   let editReporter = $state<string>("");
@@ -158,6 +163,7 @@
     editUrgentOverride = d.task.urgent_override;
     editManualPriority = d.task.manual_priority;
     editTags = [...d.task.tags];
+    editProject = d.task.project;
     editAssignee = d.task.assignee;
     editEvaluator = d.task.evaluator;
     editReporter = d.task.reporter;
@@ -275,6 +281,7 @@
       editAssignee !== detail.task.assignee ||
       editEvaluator !== detail.task.evaluator ||
       editReporter !== detail.task.reporter ||
+      editProject !== detail.task.project ||
       editTags.join(",") !== detail.task.tags.join(",")
     );
   }
@@ -446,6 +453,7 @@
         urgent_override: editUrgentOverride,
         manual_priority: Number(editManualPriority),
         tags: editTags,
+        project: editProject,
         assignee: editAssignee,
         evaluator: editEvaluator,
         reporter: editReporter,
@@ -620,9 +628,9 @@
     }
   }
 
-  async function handleCommentPaste(e: ClipboardEvent) {
-    const items = e.clipboardData?.files;
-    if (!items || items.length === 0) return;
+  async function handleCommentPasteFiles(files: FileList) {
+    const items = files;
+    if (items.length === 0) return;
     for (const file of Array.from(items)) {
       try {
         const b64 = await fileToBase64(file);
@@ -860,8 +868,13 @@
 
           <div class="form-field">
             <label for="edit-desc">Description</label>
-            <textarea id="edit-desc" rows="4" bind:value={editDescription}
-            ></textarea>
+            <RichTextField
+              id="edit-desc"
+              rows={4}
+              bind:value={editDescription}
+              {knownUsers}
+              mode="description"
+            />
           </div>
 
           <div class="form-grid-dates">
@@ -966,6 +979,23 @@
 
           <TagChipsInput id="edit-tags" bind:tags={editTags} {knownTags} />
 
+          <div class="form-field">
+            <label for="edit-project">Project</label>
+            <input
+              id="edit-project"
+              type="text"
+              bind:value={editProject}
+              list="edit-project-datalist"
+              spellcheck="false"
+              pattern="[A-Za-z0-9_-]+"
+            />
+            <datalist id="edit-project-datalist">
+              {#each knownProjects as p}
+                <option value={p}></option>
+              {/each}
+            </datalist>
+          </div>
+
           <div class="control-inline">
             <input
               id="edit-urgent"
@@ -1030,9 +1060,18 @@
             </div>
           {/if}
 
-          <div style="white-space: pre-wrap; color: var(--text-primary);">
-            {detail.task.description || "No description provided."}
+          <div class="meta-row" style="margin-bottom: 0.75rem;">
+            <span class="project-badge" title="Project">
+              {detail.task.project}
+            </span>
           </div>
+
+          <RichTextDisplay
+            body={detail.task.description}
+            {knownUsers}
+            mode="description"
+            {onSelectTask}
+          />
         </section>
       {/if}
 
@@ -1314,40 +1353,13 @@
                     Delete Note
                   </button>
                 </div>
-                <div class="comment-note-body">
-                  {#each tokenizeCommentBody(note.body, knownUsers) as seg}
-                    {#if seg.type === "mention" && seg.mention}
-                      <span
-                        class={`comment-inline-mention mention-${seg.mention.kind} ${seg.mention.exists ? "mention-exists" : "mention-missing"}`}
-                        data-tooltip={seg.mention.tooltip}
-                        title={seg.mention.tooltip}
-                        aria-label={seg.mention.tooltip}
-                      >
-                        {seg.text}
-                        <span class="mention-status-dot" aria-hidden="true">
-                          {seg.mention.kind === "invalid"
-                            ? "✕"
-                            : seg.mention.exists
-                              ? "✓"
-                              : "+"}
-                        </span>
-                      </span>
-                    {:else if seg.type === "task_ref" && seg.taskId}
-                      <button
-                        type="button"
-                        class="comment-inline-task-ref"
-                        onclick={() => {
-                          if (seg.taskId) onSelectTask(seg.taskId);
-                        }}
-                        title={`Open task ${seg.taskId}`}
-                      >
-                        {seg.text}
-                      </button>
-                    {:else}
-                      {seg.text}
-                    {/if}
-                  {/each}
-                </div>
+                <RichTextDisplay
+                  body={note.body}
+                  {knownUsers}
+                  mode="comment"
+                  {onSelectTask}
+                  class="comment-note-body"
+                />
                 {#if note.attachments.length > 0}
                   <AttachmentGallery
                     attachments={note.attachments}
@@ -1386,13 +1398,15 @@
             <label for="new-comment-body">
               Add Comment (as @{activeUser})
             </label>
-            <textarea
+            <RichTextField
               id="new-comment-body"
-              rows="3"
+              rows={3}
               bind:value={commentBody}
-              onpaste={handleCommentPaste}
+              {knownUsers}
+              mode="comment"
+              onPasteFiles={handleCommentPasteFiles}
               placeholder="Write a comment... Use @user for blocking subtasks, @takenote:user for non-blocking heads-up, or #AB1234 to link tasks. Paste images directly with Cmd/Ctrl+V."
-            ></textarea>
+            />
 
             {#if commentMentionTokens.length > 0}
               <div

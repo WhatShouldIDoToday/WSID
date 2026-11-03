@@ -21,6 +21,7 @@
     activeUser: string;
     knownTags: string[];
     knownUsers: string[];
+    knownProjects: string[];
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
     announce: (msg: string) => void;
@@ -31,10 +32,24 @@
     activeUser,
     knownTags,
     knownUsers,
+    knownProjects,
     onSelectTask,
     onDataChanged,
     announce,
   }: Props = $props();
+
+  const PROJECT_ALL = "all";
+
+  /** Project shown on the board; Kanban starts on `default`, not `all`. */
+  let projectFilter = $state<string>("default");
+
+  let projectOptions = $derived(
+    [...new Set(["default", ...knownProjects, ...tasks.map((t) => t.project)])]
+      .filter(Boolean)
+      .sort((a, b) =>
+        a === "default" ? -1 : b === "default" ? 1 : a.localeCompare(b),
+      ),
+  );
 
   const selection = new Selection();
   /** Ids being dragged (the whole selection when the grabbed card is selected). */
@@ -53,11 +68,15 @@
   let pointerDrag = $state<PointerDragState<Task> | null>(null);
 
   let filteredTasks = $derived(
-    filterMyTasksOnly
-      ? tasks.filter(
-          (t) => t.assignee.toLowerCase() === activeUser.toLowerCase(),
-        )
-      : tasks,
+    tasks
+      .filter(
+        (t) => projectFilter === PROJECT_ALL || t.project === projectFilter,
+      )
+      .filter((t) =>
+        filterMyTasksOnly
+          ? t.assignee.toLowerCase() === activeUser.toLowerCase()
+          : true,
+      ),
   );
 
   function tasksForColumn(status: TaskStatus): Task[] {
@@ -221,6 +240,22 @@
     </h2>
 
     <div class="control-inline">
+      <label for="kanban-project-select" class="field-label" style="margin: 0;">
+        Project
+      </label>
+      <select
+        id="kanban-project-select"
+        bind:value={projectFilter}
+        onchange={() => announce(`Kanban project filter: ${projectFilter}`)}
+      >
+        {#each projectOptions as project (project)}
+          <option value={project}>{project}</option>
+        {/each}
+        <option value={PROJECT_ALL}>All projects</option>
+      </select>
+    </div>
+
+    <div class="control-inline">
       <input
         id="kanban-user-filter"
         type="checkbox"
@@ -237,6 +272,7 @@
       ids={selection.ids}
       {knownTags}
       {knownUsers}
+      {knownProjects}
       {announce}
       onClear={() => selection.clear()}
       onDone={(outcome) => {
@@ -299,6 +335,9 @@
                           )}
                       />
                       <span class="task-id-badge">{task.id}</span>
+                      {#if projectFilter === PROJECT_ALL}
+                        <span class="project-badge">{task.project}</span>
+                      {/if}
                     </span>
                     <span style="font-size: 0.78rem;">@{task.assignee}</span>
                   </div>
