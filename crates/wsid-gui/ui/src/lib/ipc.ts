@@ -150,8 +150,32 @@ export interface AppSessionSnapshot {
   focus_limit: number;
   recent_workspaces: string[];
   known_users: string[];
+  /** Kind per user (`human` unless set, e.g. `claude`). Read with `userKindOf`. */
+  user_kinds: Record<string, string>;
   known_tags: string[];
   known_projects: string[];
+}
+
+export const DEFAULT_USER_KIND = "human";
+
+/** Kind of `user`, falling back to `human` for users without an explicit kind. */
+export function userKindOf(
+  kinds: Record<string, string>,
+  user: string,
+): string {
+  return kinds[user] ?? DEFAULT_USER_KIND;
+}
+
+/** Distinct kinds across all users, `human` first, for suggestions. */
+export function knownUserKinds(kinds: Record<string, string>): string[] {
+  return [...new Set([DEFAULT_USER_KIND, ...Object.values(kinds)])].sort(
+    (a, b) =>
+      a === DEFAULT_USER_KIND
+        ? -1
+        : b === DEFAULT_USER_KIND
+          ? 1
+          : a.localeCompare(b),
+  );
 }
 
 export interface UserAffectedTask {
@@ -814,6 +838,13 @@ export async function getSessionState(): Promise<AppSessionSnapshot> {
 
 export async function setActiveUser(user: string): Promise<AppSessionSnapshot> {
   return invoke<AppSessionSnapshot>("set_active_user", { user });
+}
+
+export async function setUserKind(
+  user: string,
+  kind: string,
+): Promise<AppSessionSnapshot> {
+  return invoke<AppSessionSnapshot>("set_user_kind", { user, kind });
 }
 
 export async function setActiveProject(

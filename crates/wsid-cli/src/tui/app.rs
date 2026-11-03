@@ -1297,11 +1297,17 @@ impl TuiApp {
         let mut users = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
         users.sort();
         users.dedup();
+        let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
         for user in users {
             if user == wsid_core::ALL_USERS {
                 continue;
             }
-            let label = if user == self.user { format!("@{user} (active)") } else { format!("@{user}") };
+            let kind = kinds
+                .get(&user)
+                .map(String::as_str)
+                .unwrap_or(wsid_core::DEFAULT_USER_KIND);
+            let kind_tag = if kind == wsid_core::DEFAULT_USER_KIND { String::new() } else { format!(" · {kind}") };
+            let label = if user == self.user { format!("@{user}{kind_tag} (active)") } else { format!("@{user}{kind_tag}") };
             options.push((user, label));
         }
         let current = self.user_modal_current_for(mode);

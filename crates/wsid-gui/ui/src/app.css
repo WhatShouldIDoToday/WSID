@@ -1867,10 +1867,36 @@ input[type="text"].tag-compact-input {
   gap: 0.4rem;
 }
 
+.user-mgmt-identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.user-kind-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.84rem;
+}
+
+.user-kind-form input[type="text"] {
+  width: 9rem;
+}
+
+.user-pill-kind {
+  font-weight: 500;
+  opacity: 0.9;
+}
+
 .user-mgmt-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.75rem;
   padding: 0.5rem 0.75rem;
   background: var(--bg-input);

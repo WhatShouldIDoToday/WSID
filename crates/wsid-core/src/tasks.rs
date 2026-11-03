@@ -126,6 +126,52 @@ pub fn register_user(db: &mut Database, raw_user: &str) -> Result<String> {
     register_user_conn(&db.conn, raw_user)
 }
 
+/// Kind assigned to every user unless set otherwise (e.g. `claude`, `opencode`, `jira`).
+pub const DEFAULT_USER_KIND: &str = "human";
+
+/// `takenote` is the `@takenote:` directive, so it cannot also name a kind.
+pub const RESERVED_USER_KIND: &str = "takenote";
+
+/// Normalizes a user kind into a lowercase token matching `^[a-z0-9_-]+$`.
+pub fn normalize_user_kind(raw: &str) -> Result<String> {
+    let stripped = raw.trim().to_ascii_lowercase();
+    if stripped.is_empty() {
+        return Err(WsidError::Validation("user kind cannot be empty".to_string()));
+    }
+    if !stripped
+        .bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+    {
+        return Err(WsidError::Validation(format!("invalid user kind '{raw}': kinds may only contain letters, numbers, '_', or '-'")));
+    }
+    if stripped == RESERVED_USER_KIND {
+        return Err(WsidError::Validation(format!("'{RESERVED_USER_KIND}' is reserved and cannot be used as a user kind")));
+    }
+    Ok(stripped)
+}
+
+/// Sets the kind of an existing user. The user must already exist; use [`register_user`] first.
+pub fn set_user_kind(db: &mut Database, raw_user: &str, raw_kind: &str) -> Result<()> {
+    let user = normalize_user(raw_user)?;
+    let kind = normalize_user_kind(raw_kind)?;
+    let changed = db
+        .conn
+        .execute("UPDATE users SET kind = ?2 WHERE username = ?1", params![user, kind])?;
+    if changed == 0 {
+        return Err(WsidError::Validation(format!("user '{user}' does not exist")));
+    }
+    Ok(())
+}
+
+/// Maps every known user to its kind (users without an explicit kind are `human`).
+pub fn list_user_kinds(db: &Database) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT username, kind FROM users ORDER BY username")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
+}
+
 /// Lists all known users in the database (`users`, `tasks`, `task_notes`, plus any `extra_users`).
 pub fn list_known_users(db: &Database, extra_users: &[&str]) -> Result<Vec<String>> {
     let mut set = BTreeSet::new();
@@ -1253,6 +1299,27 @@ mod tests {
             .with_timezone(&Local)
             .date_naive();
         assert_eq!(parse_deadline_naive_date(near_midnight_utc), Some(expected_local_date));
+    }
+
+    #[test]
+    fn user_kinds_default_to_human_normalize_and_require_existing_users() {
+        let mut db = open_in_memory_db().unwrap();
+
+        register_user(&mut db, "bob").unwrap();
+        assert_eq!(list_user_kinds(&db).unwrap().get("bob").map(String::as_str), Some(DEFAULT_USER_KIND));
+
+        set_user_kind(&mut db, "@Bob", "  Claude ").unwrap();
+        assert_eq!(list_user_kinds(&db).unwrap().get("bob").map(String::as_str), Some("claude"));
+
+        assert!(set_user_kind(&mut db, "ghost", "claude").is_err());
+        assert!(normalize_user_kind("   ").is_err());
+        assert!(normalize_user_kind("two words").is_err());
+        assert!(normalize_user_kind("takenote").is_err());
+        assert_eq!(normalize_user_kind("opencode").unwrap(), "opencode");
+
+        // Deleting the user removes the kind row with it
+        delete_user_from_db(&mut db, "bob", "davidb", true, None).unwrap();
+        assert!(!list_user_kinds(&db).unwrap().contains_key("bob"));
     }
 
     #[test]

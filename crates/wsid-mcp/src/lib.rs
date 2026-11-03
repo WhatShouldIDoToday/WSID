@@ -315,6 +315,10 @@ mod tests {
                 .any(|u| u == "claude")
         );
         call_tool(&mut server, 4, "register_user", json!({ "user": "newguy" }));
+        let kind = call_tool(&mut server, 4, "set_user_kind", json!({ "user": "newguy", "kind": "Claude" }));
+        assert_eq!(kind["kind"], "claude");
+        let users = call_tool(&mut server, 4, "list_users", json!({}));
+        assert_eq!(users["kinds"]["newguy"], "claude");
         let users = call_tool(&mut server, 5, "list_users", json!({}));
         assert!(
             users["users"]

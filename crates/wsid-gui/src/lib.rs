@@ -16,10 +16,10 @@ use wsid_core::{
     compute_focus_queue_in_project, create_task_from_draft, default_config_path, default_global_db_path, delete_task, delete_task_note,
     delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
     get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
-    list_known_projects, list_known_users, list_task_notes, list_tasks, normalize_project, normalize_user, open_file_in_os,
-    parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment,
-    search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
-    update_task_relation, validate_focus_limit, validate_task_draft,
+    list_known_projects, list_known_users, list_task_notes, list_tasks, list_user_kinds, normalize_project, normalize_user,
+    open_file_in_os, parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment, resolve_active_db_path,
+    save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
+    update_attachment_description, update_task, update_task_relation, validate_focus_limit, validate_task_draft,
 };
 
 pub struct GuiAppState {
@@ -66,6 +66,8 @@ pub struct AppSessionSnapshot {
     pub focus_limit: usize,
     pub recent_workspaces: Vec<String>,
     pub known_users: Vec<String>,
+    /// Kind per known user (`human` unless set, e.g. `claude`). Keys match `known_users`.
+    pub user_kinds: std::collections::BTreeMap<String, String>,
     pub known_tags: Vec<String>,
     pub known_projects: Vec<String>,
 }
@@ -165,6 +167,7 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
             .map(|p| p.to_string_lossy().to_string())
             .collect(),
         known_users,
+        user_kinds: list_user_kinds(&db).map_err(|e| e.to_string())?,
         known_tags: tags.into_iter().collect(),
         known_projects: list_known_projects(&db).map_err(|e| e.to_string())?,
     })
@@ -312,6 +315,16 @@ fn get_session_state(state: State<'_, SharedGuiState>) -> Result<AppSessionSnaps
     let guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
+    build_session_snapshot(&guard)
+}
+
+#[tauri::command]
+fn set_user_kind(state: State<'_, SharedGuiState>, user: String, kind: String) -> Result<AppSessionSnapshot, String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let mut db = guard.open_db()?;
+    wsid_core::set_user_kind(&mut db, &user, &kind).map_err(|e| e.to_string())?;
     build_session_snapshot(&guard)
 }
 
@@ -1146,6 +1159,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_session_state,
             set_active_user,
+            set_user_kind,
             set_active_project,
             preview_delete_user,
             delete_user,

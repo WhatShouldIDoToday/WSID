@@ -1,6 +1,8 @@
 <script lang="ts">
   import Select from "./ui/Select.svelte";
+  import UserPill from "./UserPill.svelte";
   import { Dialog } from "bits-ui";
+  import { knownUserKinds, setUserKind, userKindOf } from "../lib/ipc";
   import {
     type AppSessionSnapshot,
     type FocusPreset,
@@ -25,6 +27,7 @@
     onFocusLimitChange: (limit: number) => void | Promise<void>;
     onOpenAbout: () => void;
     onUserDeleted: () => void | Promise<void>;
+    onUserKindChanged: () => void | Promise<void>;
     onSelectTask?: (id: string) => void;
     announce: (msg: string) => void;
   }
@@ -42,9 +45,30 @@
     onFocusLimitChange,
     onOpenAbout,
     onUserDeleted,
+    onUserKindChanged,
     onSelectTask,
     announce,
   }: Props = $props();
+
+  /** Unsaved kind edits per user; a user without a draft shows their saved kind. */
+  let kindDrafts = $state<Record<string, string>>({});
+  let kindOptions = $derived(knownUserKinds(session.user_kinds));
+
+  async function saveUserKind(username: string) {
+    const kind = (
+      kindDrafts[username] ?? userKindOf(session.user_kinds, username)
+    ).trim();
+    userMgmtError = null;
+    try {
+      await setUserKind(username, kind);
+      delete kindDrafts[username];
+      announce(`Set @${username} kind to ${kind.toLowerCase()}.`);
+      await onUserKindChanged();
+    } catch (err) {
+      userMgmtError = String(err);
+      announce(`Failed to set kind for @${username}: ${String(err)}`);
+    }
+  }
 
   let isMainUser = $derived(
     session.active_user.toLowerCase() === session.primary_user.toLowerCase(),
@@ -393,11 +417,17 @@
           </div>
         {/if}
 
+        <datalist id="user-kind-options">
+          {#each kindOptions as kind (kind)}
+            <option value={kind}></option>
+          {/each}
+        </datalist>
+
         <ul class="user-mgmt-list" aria-label="Registered database users">
           {#each session.known_users as user (user)}
             <li class="user-mgmt-row">
-              <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <strong style="font-family: var(--font-mono);">@{user}</strong>
+              <div class="user-mgmt-identity">
+                <UserPill {user} kind={userKindOf(session.user_kinds, user)} />
                 {#if user.toLowerCase() === session.primary_user.toLowerCase()}
                   <span class="badge">Main User</span>
                 {/if}
@@ -405,6 +435,30 @@
                   <span class="badge">Active</span>
                 {/if}
               </div>
+
+              <form
+                class="user-kind-form"
+                onsubmit={(e) => {
+                  e.preventDefault();
+                  void saveUserKind(user);
+                }}
+              >
+                <label for={`user-kind-${user}`}>Kind for @{user}</label>
+                <input
+                  id={`user-kind-${user}`}
+                  type="text"
+                  list="user-kind-options"
+                  autocomplete="off"
+                  value={kindDrafts[user] ??
+                    userKindOf(session.user_kinds, user)}
+                  oninput={(e) => {
+                    kindDrafts[user] = (
+                      e.currentTarget as HTMLInputElement
+                    ).value;
+                  }}
+                />
+                <button type="submit" class="btn-sm">Save kind</button>
+              </form>
 
               {#if user.toLowerCase() !== session.primary_user.toLowerCase()}
                 <button

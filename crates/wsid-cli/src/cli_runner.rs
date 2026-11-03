@@ -10,9 +10,9 @@ use wsid_core::{
     attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft, delete_task_note,
     delete_user_from_db, format_deadline_display, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks,
     get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks,
-    list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, open_file_in_os, preview_user_deletion, register_user,
-    remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
-    update_attachment_description,
+    list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, list_user_kinds, normalize_user, normalize_user_kind,
+    open_file_in_os, preview_user_deletion, register_user, remove_attachment, save_clipboard_attachment, search_tasks, set_user_kind,
+    transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description,
 };
 use wsid_mcp::McpServer;
 
@@ -608,18 +608,36 @@ fn run_users<W: Write>(
     match action {
         UsersAction::List => {
             let users = list_known_users(&db, &[config.primary_user.as_str(), config.default_user.as_str()])?;
+            let kinds = list_user_kinds(&db)?;
             match mode {
                 OutputMode::Json => writeln!(
                     out,
                     "{}",
-                    serde_json::to_string_pretty(&json!({ "primary_user": config.primary_user, "users": users })).unwrap_or_default()
+                    serde_json::to_string_pretty(&json!({ "primary_user": config.primary_user, "users": users, "kinds": kinds }))
+                        .unwrap_or_default()
                 )?,
                 OutputMode::Accessible | OutputMode::Standard => {
                     for u in users {
                         let tag = if u.eq_ignore_ascii_case(&config.primary_user) { " (main user)" } else { "" };
-                        writeln!(out, "@{u}{tag}")?;
+                        let kind = kinds
+                            .get(&u)
+                            .map(String::as_str)
+                            .unwrap_or(wsid_core::DEFAULT_USER_KIND);
+                        let kind_tag = if kind == wsid_core::DEFAULT_USER_KIND { String::new() } else { format!(" [{kind}]") };
+                        writeln!(out, "@{u}{tag}{kind_tag}")?;
                     }
                 }
+            }
+        }
+        UsersAction::Kind { user: target, kind } => {
+            set_user_kind(&mut db, &target, &kind)?;
+            let norm_user = normalize_user(&target)?;
+            let norm_kind = normalize_user_kind(&kind)?;
+            match mode {
+                OutputMode::Json => {
+                    writeln!(out, "{}", serde_json::to_string_pretty(&json!({ "user": norm_user, "kind": norm_kind })).unwrap_or_default())?
+                }
+                _ => writeln!(out, "Set  kind to {norm_kind}.")?,
             }
         }
         UsersAction::Add { user: new_user } => {

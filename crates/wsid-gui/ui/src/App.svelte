@@ -542,6 +542,7 @@
           announce("Opened About and Third-Party Licenses dialog.");
         }}
         onUserDeleted={refreshAllData}
+        onUserKindChanged={refreshAllData}
         onSelectTask={openTaskDetail}
         {announce}
       />

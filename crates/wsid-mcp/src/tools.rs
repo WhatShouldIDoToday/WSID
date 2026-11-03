@@ -8,9 +8,9 @@ use wsid_core::{
     TaskDraft, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, bulk_delete_tasks,
     bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft, delete_task, delete_task_note, get_blocked_tasks,
     get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks,
-    get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_task_relations, parse_deadline_datetime,
-    parse_duration_minutes, register_user, remove_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
-    unlink_tasks, update_attachment_description, update_task,
+    get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_task_relations, list_user_kinds,
+    parse_deadline_datetime, parse_duration_minutes, register_user, remove_attachment, search_tasks, set_user_kind, transition_task_status,
+    unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
 };
 
 use crate::protocol::CallToolResult;
@@ -50,6 +50,13 @@ struct ListUsersArgs {}
 #[derive(Debug, Clone, Deserialize)]
 struct RegisterUserArgs {
     pub user: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetUserKindArgs {
+    pub user: String,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -244,17 +251,27 @@ pub fn dispatch_tool(
         }
         "list_users" => {
             let _args: ListUsersArgs = parse_args(args_val)?;
+            let kinds = list_user_kinds(db).map_err(|e| e.to_string())?;
             list_known_users(db, &[config.primary_user.as_str(), config.default_user.as_str()]).map(|users| {
                 CallToolResult::ok_json(&json!({
                     "default_user": config.default_user,
                     "primary_user": config.primary_user,
                     "users": users,
+                    "kinds": kinds,
                 }))
             })
         }
         "register_user" => {
             let args: RegisterUserArgs = parse_args(args_val)?;
             register_user(db, &args.user).map(|user| CallToolResult::ok_json(&json!({ "registered": user })))
+        }
+        "set_user_kind" => {
+            let args: SetUserKindArgs = parse_args(args_val)?;
+            set_user_kind(db, &args.user, &args.kind).and_then(|()| {
+                let user = wsid_core::normalize_user(&args.user)?;
+                let kind = wsid_core::normalize_user_kind(&args.kind)?;
+                Ok(CallToolResult::ok_json(&json!({ "user": user, "kind": kind })))
+            })
         }
         "get_eisenhower_matrix" => {
             let args: EisenhowerArgs = parse_args(args_val)?;

@@ -58,9 +58,10 @@ pub use scoring::{
 };
 pub use search::{SearchHit, SearchQuery, query_fts_trigram_ids, search_tasks};
 pub use tasks::{
-    ALL_PROJECTS, ALL_USERS, DEFAULT_PROJECT, create_task, delete_task, delete_task_with_attachments_dir, delete_user_from_db,
-    format_deadline_date, format_deadline_display, format_duration_minutes, get_task, list_known_projects, list_known_users, list_tasks,
-    local_tz_abbr, normalize_project, normalize_tag, normalize_tags, normalize_user, parse_deadline_datetime, parse_deadline_naive_date,
-    parse_duration_minutes, preview_user_deletion, register_user, update_task, validate_dates, validate_difficulty, validate_importance,
-    validate_manual_priority, validate_not_past, validate_time_estimate,
+    ALL_PROJECTS, ALL_USERS, DEFAULT_PROJECT, DEFAULT_USER_KIND, create_task, delete_task, delete_task_with_attachments_dir,
+    delete_user_from_db, format_deadline_date, format_deadline_display, format_duration_minutes, get_task, list_known_projects,
+    list_known_users, list_tasks, list_user_kinds, local_tz_abbr, normalize_project, normalize_tag, normalize_tags, normalize_user,
+    normalize_user_kind, parse_deadline_datetime, parse_deadline_naive_date, parse_duration_minutes, preview_user_deletion, register_user,
+    set_user_kind, update_task, validate_dates, validate_difficulty, validate_importance, validate_manual_priority, validate_not_past,
+    validate_time_estimate,
 };
