@@ -535,6 +535,14 @@ mod tests {
         assert!(app.about_modal_open);
         app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert_eq!(app.about_scroll, 1);
+        app.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
+        assert_eq!(app.about_scroll, u16::MAX, "G asks for the last row");
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        assert!(app.about_scroll > 1 && app.about_scroll < u16::MAX, "G clamps to the wrapped bottom: {}", app.about_scroll);
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert_eq!(app.about_scroll, 0, "g jumps back to the top");
         terminal
             .draw(|f| crate::tui::ui::render(f, &mut app))
             .unwrap();
@@ -1017,7 +1025,10 @@ mod tests {
         let unfocused = screen(&terminal);
         assert!(!unfocused.contains("▶ [ ]"), "no attachment cursor before focus: {unfocused}");
         assert!(!unfocused.contains("Linked file | text/plain"), "no details block before focus: {unfocused}");
-        assert!(unfocused.contains("Attachments (3) — press [a] to focus list"), "unfocused header: {unfocused}");
+        assert!(unfocused.contains("Attachments (3):"), "unfocused header: {unfocused}");
+        // The modal owns the keyboard, so the footer must show its keys only.
+        assert!(unfocused.contains("[Esc] Close"), "detail footer: {unfocused}");
+        assert!(!unfocused.contains("[p] Preset"), "no stale Focus hints under the modal: {unfocused}");
 
         // Focus attachments list with 'a'
         press(&mut app, KeyCode::Char('a'));
@@ -1076,5 +1087,47 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert!(!app.attachment_focused);
         assert!(app.detail_modal.is_some());
+    }
+
+    #[test]
+    fn tui_focus_context_owns_keys_and_footer_in_priority_order() {
+        use crate::tui::app::{DetailPromptKind, FocusContext};
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("tui_focus.db");
+        let task_id = {
+            let mut db = Database::open(&db_path).unwrap();
+            wsid_core::create_task(&mut db, wsid_core::CreateTaskInput { title: "Focus".to_string(), ..Default::default() }, "alice")
+                .unwrap()
+                .id
+        };
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+
+        // Plain list view.
+        assert_eq!(app.focus_context(), FocusContext::Tab(crate::tui::app::ActiveTab::Focus));
+
+        // A detail prompt outranks the modal and the tab underneath it.
+        app.open_detail_for(&task_id);
+        assert_eq!(app.focus_context(), FocusContext::DetailModal);
+        app.detail_prompt_kind = DetailPromptKind::JumpToTask;
+        assert_eq!(app.focus_context(), FocusContext::DetailPrompt(DetailPromptKind::JumpToTask));
+        app.detail_prompt_kind = DetailPromptKind::None;
+        app.attachment_focused = true;
+        assert_eq!(app.focus_context(), FocusContext::DetailAttachments);
+        app.attachment_focused = false;
+        assert_eq!(app.focus_context(), FocusContext::DetailModal);
+
+        // Modals above the detail modal.
+        app.project_modal_open = true;
+        assert_eq!(app.focus_context(), FocusContext::ProjectModal);
+        app.about_modal_open = true;
+        assert_eq!(app.focus_context(), FocusContext::AboutModal);
+        app.form_errors = Some(vec![(None, "boom".to_string())]);
+        assert_eq!(app.focus_context(), FocusContext::FormErrorModal);
+
+        // The validation modal swallows keys instead of quitting on 'q'.
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(!app.should_quit);
+        assert!(app.form_errors.is_none());
     }
 }

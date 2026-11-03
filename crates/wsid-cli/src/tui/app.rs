@@ -139,7 +139,7 @@ impl TaskDetailSnapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailPromptKind {
     None,
     AddComment,
@@ -149,6 +149,28 @@ pub enum DetailPromptKind {
     JumpToTask,
     ConfirmDeleteTask,
     ConfirmDeleteNote,
+}
+
+/// What currently owns the keyboard.
+///
+/// Every key press is routed to exactly one context, and the footer draws the
+/// hints for that same context, so a modal never shows the bindings of the view
+/// underneath it and never lists its own keys twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusContext {
+    FormErrorModal,
+    AboutModal,
+    ProjectModal,
+    /// A prompt inside the task detail modal (comment, attach, jump, delete...).
+    DetailPrompt(DetailPromptKind),
+    /// The attachment list inside the task detail modal has focus.
+    DetailAttachments,
+    /// The task detail modal itself, with no prompt open.
+    DetailModal,
+    SearchInput,
+    UserSwitchPrompt,
+    BulkEditPrompt,
+    Tab(ActiveTab),
 }
 
 /// Modifiers that turn a keystroke into a shortcut or a terminal/OS action
@@ -502,10 +524,7 @@ impl TuiApp {
     pub fn open_detail_for(&mut self, task_id: &str) {
         match self.load_detail_snapshot(task_id, 0) {
             Ok(snapshot) => {
-                self.status_message = format!(
-                    "Inspecting [{}] — a:attachments, c:comment, E:edit, D:delete, N/X:note, f:attach, o:open, u:unblock, Esc:close",
-                    snapshot.task.id
-                );
+                self.status_message = format!("Inspecting [{}] {}", snapshot.task.id, snapshot.task.title);
                 self.detail_modal = Some(snapshot);
                 self.detail_note_cursor = 0;
                 self.attachment_focused = false;
@@ -521,6 +540,33 @@ impl TuiApp {
         }
     }
 
+    /// The single authority for both key routing and footer hints.
+    pub fn focus_context(&self) -> FocusContext {
+        if self.form_errors.is_some() {
+            FocusContext::FormErrorModal
+        } else if self.about_modal_open {
+            FocusContext::AboutModal
+        } else if self.project_modal_open {
+            FocusContext::ProjectModal
+        } else if self.detail_modal.is_some() {
+            if self.detail_prompt_kind != DetailPromptKind::None {
+                FocusContext::DetailPrompt(self.detail_prompt_kind)
+            } else if self.attachment_focused {
+                FocusContext::DetailAttachments
+            } else {
+                FocusContext::DetailModal
+            }
+        } else if self.active_tab == ActiveTab::Database && self.search_editing {
+            FocusContext::SearchInput
+        } else if self.user_switching {
+            FocusContext::UserSwitchPrompt
+        } else if self.bulk_editing {
+            FocusContext::BulkEditPrompt
+        } else {
+            FocusContext::Tab(self.active_tab)
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) {
         // Global Ctrl+C always exits cleanly
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -528,72 +574,51 @@ impl TuiApp {
             return;
         }
 
-        // Form validation modal blocks all other input until dismissed
-        if self.form_errors.is_some() {
-            if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
-                let first = self
-                    .form_errors
-                    .take()
-                    .and_then(|errs| errs.into_iter().find_map(|(i, _)| i));
-                if let Some(i) = first {
-                    self.entry_form.set_active_index(&self.db, &self.user, i);
-                }
+        match self.focus_context() {
+            FocusContext::FormErrorModal => self.dismiss_form_errors(key),
+            FocusContext::AboutModal => self.handle_about_modal_key(key),
+            FocusContext::ProjectModal => self.handle_project_modal_key(key),
+            FocusContext::DetailPrompt(_) | FocusContext::DetailAttachments | FocusContext::DetailModal => {
+                self.handle_detail_modal_key(key);
+            }
+            FocusContext::SearchInput => self.handle_search_input_key(key),
+            FocusContext::UserSwitchPrompt => self.handle_user_input_key(key),
+            FocusContext::BulkEditPrompt => self.handle_bulk_input_key(key),
+            FocusContext::Tab(ActiveTab::DataEntry) => self.handle_entry_tab_key(key),
+            FocusContext::Tab(_) => self.handle_list_tab_key(key),
+        }
+    }
+
+    /// The validation modal swallows input until it is dismissed; Enter/Esc/q
+    /// jump straight to the first field that needs fixing.
+    fn dismiss_form_errors(&mut self, key: KeyEvent) {
+        if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
+            let first = self
+                .form_errors
+                .take()
+                .and_then(|errs| errs.into_iter().find_map(|(i, _)| i));
+            if let Some(i) = first {
+                self.entry_form.set_active_index(&self.db, &self.user, i);
+            }
+        }
+    }
+
+    fn handle_entry_tab_key(&mut self, key: KeyEvent) {
+        // Esc leaves the tab only when no dropdown wants it first.
+        if key.code == KeyCode::Esc && !self.entry_form.wants_escape() {
+            if self.editing_task_id.is_some() {
+                self.cancel_edit_task();
+            } else {
+                self.active_tab = ActiveTab::Focus;
+                self.status_message = "Switched to Focus View".to_string();
             }
             return;
         }
+        self.handle_data_entry_key(key);
+    }
 
-        // 0. If the About / Licenses modal is open, route keys to it
-        if self.about_modal_open {
-            self.handle_about_modal_key(key);
-            return;
-        }
-
-        // 0a. Project filter modal captures typing
-        if self.project_modal_open {
-            self.handle_project_modal_key(key);
-            return;
-        }
-
-        // 1. If the Task Detail Modal is open, route keys to it
-        if self.detail_modal.is_some() {
-            self.handle_detail_modal_key(key);
-            return;
-        }
-
-        // 2. If Database search bar is actively being edited, route typing to it
-        if self.active_tab == ActiveTab::Database && self.search_editing {
-            self.handle_search_input_key(key);
-            return;
-        }
-
-        // 2a. Active-user switch prompt captures typing
-        if self.user_switching {
-            self.handle_user_input_key(key);
-            return;
-        }
-
-        // 2b. Bulk-edit prompt captures typing
-        if self.bulk_editing {
-            self.handle_bulk_input_key(key);
-            return;
-        }
-
-        // 3. If on DataEntry tab, route typing to form unless switching tabs via Alt/F-keys or Esc
-        if self.active_tab == ActiveTab::DataEntry {
-            if key.code == KeyCode::Esc && !self.entry_form.wants_escape() {
-                if self.editing_task_id.is_some() {
-                    self.cancel_edit_task();
-                } else {
-                    self.active_tab = ActiveTab::Focus;
-                    self.status_message = "Switched to Focus View".to_string();
-                }
-                return;
-            }
-            self.handle_data_entry_key(key);
-            return;
-        }
-
-        // 4. Global navigation keys across Focus, Kanban, Eisenhower, Database.
+    /// Shortcuts shared by every list view, then the active view's own keys.
+    fn handle_list_tab_key(&mut self, key: KeyEvent) {
         // Modified characters belong to the terminal/OS, so they never fire
         // single-letter shortcuts (e.g. Ctrl+A does not toggle accessible mode).
         if is_modified_char(&key) {
@@ -655,7 +680,7 @@ impl TuiApp {
             KeyCode::Char('?') => {
                 self.about_modal_open = true;
                 self.about_scroll = 0;
-                self.status_message = "About WSID & Third-Party Licenses — [j/k/PgUp/PgDn] Scroll, [Esc/?/q] Close".to_string();
+                self.status_message = "About WSID & Third-Party Licenses".to_string();
                 return;
             }
             _ => {}
@@ -1493,6 +1518,10 @@ impl TuiApp {
             KeyCode::Home | KeyCode::Char('g') => {
                 self.about_scroll = 0;
             }
+            KeyCode::End | KeyCode::Char('G') => {
+                // Clamped against the wrapped line count when rendered.
+                self.about_scroll = u16::MAX;
+            }
             _ => {}
         }
     }
@@ -1641,39 +1670,31 @@ impl TuiApp {
                     self.attachment_focused = true;
                     self.attachment_cursor = self.attachment_cursor.min(atts.len() - 1);
                     let att = &atts[self.attachment_cursor];
-                    self.status_message = format!(
-                        "Attachments focused ({}/{}) — {} (Up/Down:move, Space:mark, o:open, O:all, e:alt, x:remove, Esc:leave)",
-                        self.attachment_cursor + 1,
-                        atts.len(),
-                        att.file_name
-                    );
+                    self.status_message =
+                        format!("Attachments focused ({}/{}) — {}", self.attachment_cursor + 1, atts.len(), att.file_name);
                 }
             }
             KeyCode::Char('c') => {
                 self.detail_prompt_kind = DetailPromptKind::AddComment;
                 self.detail_prompt_input.clear();
                 self.clear_comment_suggestions();
-                self.status_message =
-                    "Add comment (supports @user, @takenote:user, #AB1234) — Tab completes suggestions, Enter to post, Esc to cancel"
-                        .to_string();
+                self.status_message = "New comment — @user, @takenote:user, and #AB1234 are linked".to_string();
             }
             KeyCode::Char('f') => {
                 self.detail_prompt_kind = DetailPromptKind::AttachFile;
                 self.detail_prompt_input.clear();
-                self.status_message = "Attach file: enter `/path/to/file | optional alt text` — Enter to attach, Esc to cancel".to_string();
+                self.status_message = "Attach file: /path/to/file | optional alt text".to_string();
             }
             KeyCode::Char('v') => {
                 self.detail_prompt_kind = DetailPromptKind::AttachClipboard;
                 self.detail_prompt_input.clear();
-                self.status_message =
-                    "Paste from clipboard into app-data: enter optional alt text (or leave empty for file name) — Enter to save"
-                        .to_string();
+                self.status_message = "Paste from clipboard: optional alt text (empty uses the file name)".to_string();
             }
             KeyCode::Char('e') => {
                 if let Some(att) = atts.get(self.attachment_cursor.min(atts.len().saturating_sub(1))) {
                     self.detail_prompt_kind = DetailPromptKind::EditAttachmentDesc;
                     self.detail_prompt_input = att.description.clone();
-                    self.status_message = format!("Edit alt text for {} (#{}) — Enter to save, Esc to cancel", att.file_name, att.id);
+                    self.status_message = format!("Edit alt text for {} (#{})", att.file_name, att.id);
                 } else {
                     self.status_message = "No attachments on this task or its notes".to_string();
                 }
@@ -1724,7 +1745,7 @@ impl TuiApp {
                     .map(|t| t.id.clone())
                     .unwrap_or_default();
                 self.detail_prompt_input = default_jump;
-                self.status_message = "Jump to task ID: enter short ID (e.g. AB1234) and press Enter".to_string();
+                self.status_message = "Jump to task ID (e.g. AB1234)".to_string();
             }
             KeyCode::Char('s') => {
                 self.apply_status_transition(&snapshot.task.id, TaskStatus::InProgress);
@@ -1912,7 +1933,7 @@ impl TuiApp {
             return;
         };
         let input = self.detail_prompt_input.trim().to_string();
-        let kind = self.detail_prompt_kind.clone();
+        let kind = self.detail_prompt_kind;
         self.detail_prompt_kind = DetailPromptKind::None;
         self.detail_prompt_input.clear();
         self.clear_comment_suggestions();

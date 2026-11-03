@@ -13,7 +13,7 @@ use wsid_core::{
     get_about_metadata,
 };
 
-use crate::tui::app::{ActiveTab, DataEntryForm, DatabaseSortColumn, DetailPromptKind, TuiApp};
+use crate::tui::app::{ActiveTab, DataEntryForm, DatabaseSortColumn, DetailPromptKind, FocusContext, TuiApp};
 use crate::tui::form;
 
 const SELECTED_STYLE: Style = Style::new()
@@ -31,8 +31,9 @@ fn quadrant_title(q: EisenhowerQuadrant) -> &'static str {
 }
 
 pub fn render(frame: &mut Frame, app: &mut TuiApp) {
+    let footer_h = footer_height(app, frame.area().width);
     let [header_area, content_area, footer_area] =
-        Layout::vertical([Constraint::Length(2), Constraint::Fill(1), Constraint::Length(2)]).areas(frame.area());
+        Layout::vertical([Constraint::Length(2), Constraint::Fill(1), Constraint::Length(footer_h)]).areas(frame.area());
 
     render_header(frame, header_area, app);
 
@@ -881,8 +882,6 @@ fn render_form_error_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
         let name = idx.map_or("Task", |i| short_label(form::FIELDS[i].label));
         lines.push(Line::from(vec![Span::styled("✗ ", red), Span::styled(format!("{name}: "), red), Span::raw(msg.clone())]));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("[Enter/Esc] Back to the form", Style::default().fg(Color::Cyan))));
 
     let height = (lines.len() as u16 + 2).min(area.height);
     let width = (area.width * 7 / 10).max(40).min(area.width);
@@ -909,24 +908,69 @@ fn looks_like_error(msg: &str) -> bool {
         .any(|w| lower.contains(w))
 }
 
-fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
-    let hints = match app.active_tab {
-        ActiveTab::Focus => {
-            "[1-5] Views | [P] Project | [j/k] Select | [Enter] Inspect | [p] Preset | [s] Start | [d] Done | [x] Stuck | [b] Blocked | [U] User | [q] Quit"
+/// Hints for whatever currently owns the keyboard (`TuiApp::focus_context`).
+///
+/// This is the only place keyboard shortcuts are advertised: modals no longer
+/// repeat them in their titles, bodies, or status messages.
+fn focus_hints(app: &TuiApp) -> String {
+    match app.focus_context() {
+        FocusContext::FormErrorModal => "[Enter/Esc/q] Back to the form".to_string(),
+        FocusContext::AboutModal => "[j/k] Scroll | [PgUp/PgDn] Page | [g/G] Top/Bottom | [Esc/?/q] Close".to_string(),
+        FocusContext::ProjectModal => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Esc] Cancel".to_string(),
+        FocusContext::DetailPrompt(DetailPromptKind::AddComment) => {
+            "[Tab] Complete | [Up/Down] Suggestion | [Enter] Post | [Esc] Cancel".to_string()
         }
-        ActiveTab::Kanban => {
-            "[1-5] Views | [P] Project | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [U] User | [Enter] Inspect | [q] Quit"
+        FocusContext::DetailPrompt(DetailPromptKind::ConfirmDeleteTask | DetailPromptKind::ConfirmDeleteNote) => {
+            "[Enter] Delete | [Esc] Cancel".to_string()
         }
-        ActiveTab::Eisenhower => {
+        FocusContext::DetailPrompt(_) => "[Enter] Submit | [Esc] Cancel".to_string(),
+        FocusContext::DetailAttachments => {
+            "[Up/Down] Move | [Space] Mark | [o] Open | [O] All | [e] Alt | [x] Remove | [f] Attach | [v] Clipboard | [Esc] Leave"
+                .to_string()
+        }
+        FocusContext::DetailModal => {
+            "[j/k] Scroll | [a] Attachments | [c] Comment | [E] Edit | [D] Delete | [N/X] Note | [f/v] Attach/Clip | [o/O] Open/All | [g] Jump | [u] Unblock | [s/r/d/x] Status | [Esc] Close"
+                .to_string()
+        }
+        FocusContext::SearchInput => "[Enter/Esc] Finish | [Bksp] Delete".to_string(),
+        FocusContext::UserSwitchPrompt => "[Enter] Switch user | [Esc] Cancel".to_string(),
+        FocusContext::BulkEditPrompt => "[Enter] Apply | [Esc] Cancel".to_string(),
+        FocusContext::Tab(ActiveTab::Focus) => {
+            "[1-5] Views | [P] Project | [j/k] Select | [Enter] Inspect | [p] Preset | [s] Start | [d] Done | [x] Stuck | [b] Blocked | [U] User | [?] Help | [q] Quit"
+                .to_string()
+        }
+        FocusContext::Tab(ActiveTab::Kanban) => {
+            "[1-5] Views | [P] Project | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [U] User | [Enter] Inspect | [?] Help | [q] Quit"
+                .to_string()
+        }
+        FocusContext::Tab(ActiveTab::Eisenhower) => {
             "[1-5] Views | [P] Project | [h/l/Tab/S-Tab] Quadrant | [j/k] Task | [+/-] Imp | [</>] Urgency | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
+                .to_string()
         }
-        ActiveTab::Database => {
-            "[1-5] Views | [P] Project | [/] Search/filter column | [f] Status | [t] Tag | [u] User | [m] Mine | [o] Column | [O] Asc/Desc | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [q] Quit"
+        FocusContext::Tab(ActiveTab::Database) => {
+            "[1-5] Views | [P] Project | [/] Search/filter column | [f] Status | [t] Tag | [u] User | [m] Mine | [o] Column | [O] Asc/Desc | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [?] Help"
+                .to_string()
         }
-        ActiveTab::DataEntry => app.entry_form.hint(),
-    };
+        FocusContext::Tab(ActiveTab::DataEntry) => app.entry_form.hint().to_string(),
+    }
+}
 
-    let mut spans: Vec<Span> = Vec::new();
+fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    let footer = Paragraph::new(footer_line(app))
+        .style(Style::default().fg(Color::Cyan))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(panel_borders(Borders::TOP, app.accessible_mode))
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+    frame.render_widget(footer, area);
+}
+
+/// `status │ hints`, or just the hints when there is no status to show.
+fn footer_line(app: &TuiApp) -> Line<'static> {
+    let hints = focus_hints(app);
+    let mut spans: Vec<Span<'static>> = Vec::new();
     if app.status_message.is_empty() {
         spans.push(Span::raw(format!(" {hints}")));
     } else {
@@ -938,15 +982,17 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
         spans.push(Span::styled(format!(" {}", app.status_message), style));
         spans.push(Span::raw(format!("  │  {hints}")));
     }
+    Line::from(spans)
+}
 
-    let footer = Paragraph::new(Line::from(spans))
-        .style(Style::default().fg(Color::Cyan))
-        .block(
-            Block::default()
-                .borders(panel_borders(Borders::TOP, app.accessible_mode))
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-    frame.render_widget(footer, area);
+/// Rows the footer needs at `width` (including its top border), so long modal
+/// hints wrap instead of silently losing their tail.
+fn footer_height(app: &TuiApp, width: u16) -> u16 {
+    let usable = width.saturating_sub(2).max(1);
+    let rows = Paragraph::new(footer_line(app))
+        .wrap(Wrap { trim: false })
+        .line_count(usable);
+    rows.clamp(1, 4) as u16 + 1
 }
 
 fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
@@ -1007,11 +1053,9 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     let all_atts = detail.all_attachments();
     let att_cursor = app.attachment_cursor.min(all_atts.len().saturating_sub(1));
     let att_header = if app.attachment_focused {
-        format!("Attachments ({}) [FOCUSED — Up/Down:move Space:mark o:open O:all e:alt x:remove Esc:leave]:", all_atts.len())
-    } else if all_atts.is_empty() {
-        "Attachments (0):".to_string()
+        format!("Attachments ({}) [FOCUSED]:", all_atts.len())
     } else {
-        format!("Attachments ({}) — press [a] to focus list, [o] to open, [O] to open all:", all_atts.len())
+        format!("Attachments ({}):", all_atts.len())
     };
     lines.push(Line::from(Span::styled(
         att_header,
@@ -1020,7 +1064,7 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .add_modifier(Modifier::BOLD),
     )));
     if all_atts.is_empty() {
-        lines.push(Line::from("  (None — press [f] to attach a file or [v] to paste from clipboard)"));
+        lines.push(Line::from("  (None)"));
     } else {
         for (idx, att) in all_atts.iter().enumerate() {
             let selected = app.attachment_focused && idx == att_cursor;
@@ -1092,7 +1136,7 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     lines.push(Line::from(""));
 
     lines.push(Line::from(Span::styled(
-        "Relationships & Dependencies (press [g] to jump by ID):",
+        "Relationships & Dependencies:",
         Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
@@ -1112,7 +1156,7 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .add_modifier(Modifier::BOLD),
     )));
     if detail.notes.is_empty() {
-        lines.push(Line::from("  (No comments yet — press 'c' to add one)"));
+        lines.push(Line::from("  (No comments yet)"));
     } else {
         let cursor = app.detail_note_cursor.min(detail.notes.len() - 1);
         for (idx, n) in detail.notes.iter().enumerate() {
@@ -1150,15 +1194,24 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         Vec::new()
     };
     let suggestion_rows = suggestion_lines.len() as u16;
+    // The prompt line is only drawn while a prompt is actually open; its
+    // keybindings live in the footer, not inside the modal.
+    let prompt_rows = if app.detail_prompt_kind == DetailPromptKind::None { 0 } else { 3 };
 
     let [body_area, suggestion_area, prompt_area] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(suggestion_rows), Constraint::Length(3)]).areas(inner_area);
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(suggestion_rows), Constraint::Length(prompt_rows)]).areas(inner_area);
 
     if suggestion_rows > 0 {
         frame.render_widget(Paragraph::new(suggestion_lines), suggestion_area);
     }
 
-    let max_scroll = (lines.len() as u16).saturating_sub(body_area.height);
+    // Count wrapped rows, otherwise long descriptions leave the tail unreachable.
+    let wrapped_rows = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(body_area.width.max(1));
+    let max_scroll = wrapped_rows
+        .saturating_sub(body_area.height as usize)
+        .min(u16::MAX as usize) as u16;
     detail.scroll = detail.scroll.min(max_scroll);
 
     let body = Paragraph::new(lines.clone())
@@ -1166,21 +1219,14 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         .wrap(Wrap { trim: false });
     frame.render_widget(body, body_area);
 
-    if !app.accessible_mode && lines.len() as u16 > body_area.height {
-        let mut scrollbar_state = ScrollbarState::new(lines.len()).position(detail.scroll as usize);
+    if !app.accessible_mode && wrapped_rows > body_area.height as usize {
+        let mut scrollbar_state = ScrollbarState::new(wrapped_rows).position(detail.scroll as usize);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         frame.render_stateful_widget(scrollbar, body_area, &mut scrollbar_state);
     }
 
     let (prompt_line, prompt_prefix_len) = match app.detail_prompt_kind {
-        DetailPromptKind::None => {
-            let footer_hint = if app.attachment_focused {
-                "[Up/Down] Move | [Space] Mark | [o] Open | [O] Open All | [e] Edit Alt | [x] Remove | [f] Attach | [v] Clipboard | [Esc] Leave Attachments"
-            } else {
-                "[a] Attachments | [o/O] Open/All | [e] Alt | [f/v] Attach/Clip | [E] Edit | [D] Delete | [c] Comment | [N/X] Note | [g] Jump | [u] Unblock | [s/r/d/x] Status | [Esc] Close"
-            };
-            (Line::from(Span::styled(footer_hint, Style::default().fg(Color::Cyan))), None)
-        }
+        DetailPromptKind::None => (Line::default(), None),
         DetailPromptKind::AddComment => {
             let prefix = "New Comment (@user, @takenote:user, #ID): ";
             (
@@ -1258,25 +1304,26 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         }
     };
 
-    let prompt_block = Block::default()
-        .borders(panel_borders(Borders::TOP, app.accessible_mode))
-        .border_style(Style::default().fg(Color::DarkGray));
-    let prompt_inner = prompt_block.inner(prompt_area);
-    let mut prompt_widget = Paragraph::new(prompt_line).block(prompt_block);
-    if prompt_prefix_len.is_none() {
-        prompt_widget = prompt_widget.wrap(Wrap { trim: false });
-    }
-    frame.render_widget(prompt_widget, prompt_area);
+    if prompt_rows > 0 {
+        let prompt_block = Block::default()
+            .borders(panel_borders(Borders::TOP, app.accessible_mode))
+            .border_style(Style::default().fg(Color::DarkGray));
+        let prompt_inner = prompt_block.inner(prompt_area);
+        let prompt_widget = Paragraph::new(prompt_line)
+            .block(prompt_block)
+            .wrap(Wrap { trim: false });
+        frame.render_widget(prompt_widget, prompt_area);
 
-    if let Some(prefix_len) = prompt_prefix_len
-        && prompt_inner.height > 0
-    {
-        let input_len = app.detail_prompt_input.chars().count();
-        let cursor_x = prompt_inner
-            .x
-            .saturating_add((prefix_len + input_len) as u16)
-            .min(prompt_inner.right().saturating_sub(1));
-        frame.set_cursor_position(Position::new(cursor_x, prompt_inner.y));
+        if let Some(prefix_len) = prompt_prefix_len
+            && prompt_inner.height > 0
+        {
+            let input_len = app.detail_prompt_input.chars().count();
+            let cursor_x = prompt_inner
+                .x
+                .saturating_add((prefix_len + input_len) as u16)
+                .min(prompt_inner.right().saturating_sub(1));
+            frame.set_cursor_position(Position::new(cursor_x, prompt_inner.y));
+        }
     }
 }
 
@@ -1393,9 +1440,6 @@ fn render_about_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD),
     )));
-    lines.push(Line::from(
-        "Use [j/k] or [Up/Down] to scroll line-by-line, [PgUp/PgDn] for pages, [g/G] for top/bottom, [Esc/?/q] to close.",
-    ));
     lines.push(Line::from(""));
 
     for group in &about.rust_licenses.licenses {
@@ -1428,21 +1472,27 @@ fn render_about_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         lines.push(Line::from(format!("  {l}")));
     }
 
-    let modal_block = panel_block(" Help, Status & Licenses — [Esc/?/q] Close ", Borders::ALL, app.accessible_mode)
-        .border_style(Style::default().fg(Color::Cyan));
+    let modal_block =
+        panel_block(" Help, Status & Licenses ", Borders::ALL, app.accessible_mode).border_style(Style::default().fg(Color::Cyan));
     let inner_area = modal_block.inner(popup_area);
     frame.render_widget(modal_block, popup_area);
 
-    let max_scroll = (lines.len() as u16).saturating_sub(inner_area.height);
+    // License text wraps, so scroll bounds must come from the wrapped row count.
+    let wrapped_rows = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(inner_area.width.max(1));
+    let max_scroll = wrapped_rows
+        .saturating_sub(inner_area.height as usize)
+        .min(u16::MAX as usize) as u16;
     app.about_scroll = app.about_scroll.min(max_scroll);
 
-    let modal = Paragraph::new(lines.clone())
+    let modal = Paragraph::new(lines)
         .scroll((app.about_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(modal, inner_area);
 
-    if !app.accessible_mode && lines.len() as u16 > inner_area.height {
-        let mut scrollbar_state = ScrollbarState::new(lines.len()).position(app.about_scroll as usize);
+    if !app.accessible_mode && wrapped_rows > inner_area.height as usize {
+        let mut scrollbar_state = ScrollbarState::new(wrapped_rows).position(app.about_scroll as usize);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         frame.render_stateful_widget(scrollbar, inner_area, &mut scrollbar_state);
     }
