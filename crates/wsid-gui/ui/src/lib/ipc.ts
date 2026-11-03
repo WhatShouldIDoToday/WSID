@@ -865,6 +865,20 @@ export async function createNewTask(
   return invoke<Task>("create_new_task", { payload });
 }
 
+export interface FieldIssue {
+  field: string;
+  level: "error" | "info";
+  message: string;
+  index: number | null;
+}
+
+/** Server-side validation of a new-task payload (relation targets, files, new users, dates). */
+export async function validateNewTask(
+  payload: GuiCreateTaskPayload,
+): Promise<FieldIssue[]> {
+  return invoke<FieldIssue[]>("validate_new_task", { payload });
+}
+
 export async function updateExistingTask(
   payload: GuiUpdateTaskPayload,
 ): Promise<Task> {

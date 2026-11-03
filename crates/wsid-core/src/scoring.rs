@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn classifies_eisenhower_quadrants_for_undated_sgdb_large_estimates_and_overrides() {
         let mut db = open_in_memory_db().unwrap();
-        let today = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let today = NaiveDate::from_ymd_opt(2099, 11, 1).unwrap();
         let config = ScoringConfig::default();
 
         // 1. Undated important task -> Q2 (Not Urgent & Important)
@@ -718,7 +718,7 @@ mod tests {
             CreateTaskInput {
                 title: "Big task due in 5 days".to_string(),
                 importance: Some(5),
-                due_date: Some("2026-11-06".to_string()),
+                due_date: Some("2099-11-06".to_string()),
                 time_estimate_minutes: Some(1920),
                 ..Default::default()
             },
@@ -743,7 +743,7 @@ mod tests {
     #[test]
     fn filters_blocked_tasks_ranks_overdue_first_and_reorders_by_preset() {
         let mut db = open_in_memory_db().unwrap();
-        let today = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let today = NaiveDate::from_ymd_opt(2099, 11, 1).unwrap();
         let config = ScoringConfig::default();
 
         // Blocked task (should be excluded from actionable Focus queue)
@@ -784,7 +784,7 @@ mod tests {
 
         // Past deadlines are rejected at creation, so backdate the row directly to simulate a task that became overdue.
         db.conn
-            .execute("UPDATE tasks SET due_date = '2026-10-30' WHERE id = ?1", [&overdue.id])
+            .execute("UPDATE tasks SET due_date = '2099-10-30' WHERE id = ?1", [&overdue.id])
             .unwrap();
 
         let due_tomorrow = create_task(
@@ -802,7 +802,7 @@ mod tests {
         )
         .unwrap();
         db.conn
-            .execute("UPDATE tasks SET due_date = '2026-11-02' WHERE id = ?1", [&due_tomorrow.id])
+            .execute("UPDATE tasks SET due_date = '2099-11-02' WHERE id = ?1", [&due_tomorrow.id])
             .unwrap();
 
         let balanced = compute_focus_queue(&db, "alice", FocusPreset::Balanced, None, None, today, config).unwrap();
@@ -855,7 +855,7 @@ mod tests {
     #[test]
     fn summarizes_blocked_tasks_across_reviews_mentions_and_dependencies() {
         let mut db = open_in_memory_db().unwrap();
-        let today = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let today = NaiveDate::from_ymd_opt(2099, 11, 1).unwrap();
 
         // 1. Task in project-a blocked by a @bob mention subtask
         let t_proj_a = create_task(

@@ -4,13 +4,13 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use wsid_core::{
-    AppConfig, AttachmentInput, BulkTaskPatch, CreateTaskInput, Database, FocusPreset, RelationInputKind, SearchQuery, Task, TaskNote,
-    TaskRelation, TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks,
-    compute_focus_queue, create_task, delete_task, delete_task_note, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
-    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
-    list_known_users, list_task_notes, list_task_relations, parse_deadline_datetime, parse_duration_minutes, register_user,
-    remove_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description,
-    update_task,
+    AppConfig, AttachmentInput, BulkTaskPatch, Database, FocusPreset, RelationDraft, RelationInputKind, Scalar, SearchQuery, Task,
+    TaskDraft, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, bulk_delete_tasks,
+    bulk_update_tasks, compute_focus_queue, create_task_from_draft, delete_task, delete_task_note, get_blocked_tasks,
+    get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks,
+    get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_task_relations, parse_deadline_datetime,
+    parse_duration_minutes, register_user, remove_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
+    unlink_tasks, update_attachment_description, update_task,
 };
 
 use crate::protocol::CallToolResult;
@@ -366,57 +366,37 @@ fn parse_args<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|e| format!("invalid tool arguments: {e}"))
 }
 
-fn parse_date_field(field_name: &str, raw: Option<&str>) -> Result<Option<String>, WsidError> {
-    match raw.map(str::trim) {
-        Some(s) if !s.is_empty() => {
-            parse_deadline_datetime(field_name, s)?;
-            Ok(Some(s.to_string()))
-        }
-        _ => Ok(None),
-    }
-}
-
 fn handle_create_task(db: &mut Database, config: &AppConfig, args: CreateTaskArgs) -> Result<CallToolResult, WsidError> {
-    let due_date = parse_date_field("due_date", args.due_date.as_deref())?;
-    let sgdb_date = parse_date_field("sgdb_date", args.sgdb_date.as_deref())?;
+    let draft = TaskDraft {
+        title: args.title,
+        description: args.description,
+        status: args.status,
+        due_date: args.due_date,
+        sgdb_date: args.sgdb_date,
+        time_estimate: args.time_estimate_minutes.map(Scalar::Int),
+        difficulty: args.difficulty.map(|n| Scalar::Int(i64::from(n))),
+        importance: args.importance.map(|n| Scalar::Int(i64::from(n))),
+        manual_priority: args.manual_priority.map(|n| Scalar::Int(i64::from(n))),
+        urgent_override: args.urgent_override.map(Scalar::Bool),
+        tags: args.tags,
+        relations: args
+            .relations
+            .iter()
+            .map(|r| RelationDraft { relation: r.relation.name().to_string(), target: r.target_id.clone() })
+            .collect(),
+        attachments: args.attachments,
+        reporter: args.reporter,
+        assignee: args.assignee,
+        evaluator: args.evaluator,
+    };
 
-    let created = create_task(
-        db,
-        CreateTaskInput {
-            title: args.title,
-            description: args.description,
-            status: args.status,
-            origin_kind: None,
-            origin_note_id: None,
-            due_date,
-            sgdb_date,
-            time_estimate_minutes: args.time_estimate_minutes,
-            difficulty: args.difficulty,
-            importance: args.importance,
-            urgent_override: args.urgent_override,
-            manual_priority: args.manual_priority,
-            tags: args.tags,
-            reporter: args.reporter,
-            assignee: args.assignee,
-            evaluator: args.evaluator,
-        },
-        &config.default_user,
-    )?;
-
-    let mut linked_relations = Vec::with_capacity(args.relations.len());
-    for rel_spec in args.relations {
-        let rel = link_tasks(db, &created.id, rel_spec.relation, &rel_spec.target_id)?;
-        linked_relations.push(rel);
-    }
-
-    for att in &args.attachments {
-        attach_existing_file(db, &created.id, None, &att.path, att.description.as_deref())?;
-    }
-    let refreshed = if args.attachments.is_empty() { created } else { get_task(db, &created.id)? };
+    // Atomic: the task, its relations, and its attachments are created together or not at all.
+    let created = create_task_from_draft(db, &draft, &config.default_user)?;
+    let relations = list_task_relations(db, &created.id)?;
 
     Ok(CallToolResult::ok_json(&json!({
-        "task": refreshed,
-        "relations": linked_relations,
+        "task": created,
+        "relations": relations,
     })))
 }
 

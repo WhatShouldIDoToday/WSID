@@ -884,8 +884,8 @@ mod tests {
     #[test]
     fn enforces_sgdb_and_due_date_combinations() {
         let mut db = open_in_memory_db().unwrap();
-        let d_early = "2026-11-05".to_string();
-        let d_late = "2026-11-10".to_string();
+        let d_early = "2099-11-05".to_string();
+        let d_late = "2099-11-10".to_string();
 
         // Both None is allowed
         let t_none = create_task(&mut db, CreateTaskInput { title: "No dates".to_string(), ..Default::default() }, "david").unwrap();
@@ -908,23 +908,23 @@ mod tests {
             &mut db,
             CreateTaskInput {
                 title: "SGDB before due".to_string(),
-                sgdb_date: Some("2026-11-05T14:30".to_string()),
-                due_date: Some("2026-11-05T20:00".to_string()),
+                sgdb_date: Some("2099-11-05T14:30".to_string()),
+                due_date: Some("2099-11-05T20:00".to_string()),
                 ..Default::default()
             },
             "david",
         )
         .unwrap();
-        assert_eq!(t_both.sgdb_date.as_deref(), Some("2026-11-05T14:30"));
-        assert_eq!(t_both.due_date.as_deref(), Some("2026-11-05T20:00"));
+        assert_eq!(t_both.sgdb_date.as_deref(), Some("2099-11-05T14:30"));
+        assert_eq!(t_both.due_date.as_deref(), Some("2099-11-05T20:00"));
 
         // SGDB > due_date is rejected on create (including same-day 21:00 > default 20:00)
         let err = create_task(
             &mut db,
             CreateTaskInput {
                 title: "Invalid SGDB".to_string(),
-                sgdb_date: Some("2026-11-05T21:00".to_string()),
-                due_date: Some("2026-11-05".to_string()),
+                sgdb_date: Some("2099-11-05T21:00".to_string()),
+                due_date: Some("2099-11-05".to_string()),
                 ..Default::default()
             },
             "david",

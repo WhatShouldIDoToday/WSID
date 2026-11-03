@@ -3,6 +3,7 @@ pub mod attachments;
 pub mod bulk;
 pub mod config;
 pub mod db;
+pub mod draft;
 pub mod error;
 pub mod id;
 pub mod models;
@@ -29,6 +30,10 @@ pub use config::{
     resolve_local_workspace_db_path,
 };
 pub use db::{Database, DbChangeDetector, open_db, open_in_memory_db, run_migrations};
+pub use draft::{
+    FieldIssue, IssueLevel, RelationDraft, Scalar, TaskDraft, TaskField, create_task_from_draft, search_relation_targets, suggest_users,
+    summarize_issues, validate_task_draft,
+};
 pub use error::{Result, WsidError};
 pub use id::{SHORT_ID_LETTERS, ShortId, ShortIdGenerator, is_valid_task_id, normalize_task_id};
 pub use models::{

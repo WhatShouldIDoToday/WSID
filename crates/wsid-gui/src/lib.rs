@@ -9,16 +9,16 @@ use serde::{Deserialize, Serialize};
 use tauri::menu::{HELP_SUBMENU_ID, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, State};
 use wsid_core::{
-    AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, BulkEditOutcome, BulkTaskPatch, CreateTaskInput,
-    Database, DbChangeDetector, EisenhowerClassification, FocusPreset, FocusQueueResponse, RelationInputKind, SearchHit, SearchQuery,
-    StatusTransitionOutcome, Task, TaskAttachment, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, UserDeletionOutcome,
-    UserDeletionPreview, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task,
-    default_config_path, default_global_db_path, delete_task, delete_task_note, delete_user_from_db, get_about_metadata, get_attachment,
-    get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
-    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user,
-    open_file_in_os, parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment, resolve_active_db_path,
-    save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
-    update_attachment_description, update_task,
+    AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, BulkEditOutcome, BulkTaskPatch, Database,
+    DbChangeDetector, EisenhowerClassification, FieldIssue, FocusPreset, FocusQueueResponse, RelationDraft, RelationInputKind, Scalar,
+    SearchHit, SearchQuery, StatusTransitionOutcome, Task, TaskAttachment, TaskDraft, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput,
+    UserDeletionOutcome, UserDeletionPreview, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks,
+    compute_focus_queue, create_task_from_draft, default_config_path, default_global_db_path, delete_task, delete_task_note,
+    delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
+    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
+    list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os, parse_deadline_datetime, preview_user_deletion,
+    register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status,
+    unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task, validate_task_draft,
 };
 
 pub struct GuiAppState {
@@ -170,48 +170,41 @@ fn parse_optional_date(raw: Option<&str>, field_name: &str) -> Result<Option<Str
     }
 }
 
-pub fn create_task_from_payload(state: &GuiAppState, payload: GuiCreateTaskPayload) -> Result<Task, String> {
-    let mut db = state.open_db()?;
+/// Maps the GUI payload onto the shared core draft used for validation and atomic creation.
+pub fn payload_to_draft(payload: GuiCreateTaskPayload) -> Result<TaskDraft, String> {
     let status = match payload.status.as_deref().map(str::trim) {
         Some(s) if !s.is_empty() => Some(TaskStatus::from_str(s).map_err(|e| e.to_string())?),
         _ => None,
     };
-    let due_date = parse_optional_date(payload.due_date.as_deref(), "due_date")?;
-    let sgdb_date = parse_optional_date(payload.sgdb_date.as_deref(), "sgdb_date")?;
+    Ok(TaskDraft {
+        title: payload.title,
+        description: payload.description,
+        status,
+        due_date: payload.due_date,
+        sgdb_date: payload.sgdb_date,
+        time_estimate: payload.time_estimate_minutes.map(Scalar::Int),
+        difficulty: payload.difficulty.map(|n| Scalar::Int(i64::from(n))),
+        importance: payload.importance.map(|n| Scalar::Int(i64::from(n))),
+        manual_priority: payload.manual_priority.map(|n| Scalar::Int(i64::from(n))),
+        urgent_override: payload.urgent_override.map(Scalar::Bool),
+        tags: payload.tags,
+        relations: payload
+            .initial_relations
+            .into_iter()
+            .map(|r| RelationDraft { relation: r.relation, target: r.target_id })
+            .collect(),
+        attachments: payload.attachments,
+        reporter: payload.reporter,
+        assignee: payload.assignee,
+        evaluator: payload.evaluator,
+    })
+}
 
-    let created = create_task(
-        &mut db,
-        CreateTaskInput {
-            title: payload.title,
-            description: payload.description,
-            status,
-            due_date,
-            sgdb_date,
-            time_estimate_minutes: payload.time_estimate_minutes,
-            difficulty: payload.difficulty,
-            importance: payload.importance,
-            urgent_override: payload.urgent_override,
-            manual_priority: payload.manual_priority,
-            tags: payload.tags,
-            reporter: payload.reporter,
-            assignee: payload.assignee,
-            evaluator: payload.evaluator,
-            ..Default::default()
-        },
-        &state.active_user,
-    )
-    .map_err(|e| e.to_string())?;
-
-    for att in payload.attachments {
-        attach_existing_file(&mut db, &created.id, None, &att.path, att.description.as_deref()).map_err(|e| e.to_string())?;
-    }
-
-    for rel in payload.initial_relations {
-        let kind = RelationInputKind::from_str(rel.relation.trim()).map_err(|e| e.to_string())?;
-        link_tasks(&mut db, &created.id, kind, rel.target_id.trim()).map_err(|e| e.to_string())?;
-    }
-
-    get_task(&db, &created.id).map_err(|e| e.to_string())
+pub fn create_task_from_payload(state: &GuiAppState, payload: GuiCreateTaskPayload) -> Result<Task, String> {
+    let mut db = state.open_db()?;
+    let draft = payload_to_draft(payload)?;
+    // Atomic: the task, its relations, and its attachments are created together or not at all.
+    create_task_from_draft(&mut db, &draft, &state.active_user).map_err(|e| e.to_string())
 }
 
 pub fn load_task_full_detail(db: &Database, id: &str) -> Result<TaskFullDetail, String> {
@@ -543,6 +536,16 @@ fn get_task_detail_data(state: State<'_, SharedGuiState>, id: String) -> Result<
         .map_err(|_| "state lock poisoned".to_string())?;
     let db = guard.open_db()?;
     load_task_full_detail(&db, &id)
+}
+
+#[tauri::command]
+fn validate_new_task(state: State<'_, SharedGuiState>, payload: GuiCreateTaskPayload) -> Result<Vec<FieldIssue>, String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let db = guard.open_db()?;
+    let draft = payload_to_draft(payload)?;
+    Ok(validate_task_draft(&db, &draft, &guard.active_user))
 }
 
 #[tauri::command]
@@ -1085,6 +1088,7 @@ pub fn run() {
             search_tasks_data,
             get_task_detail_data,
             create_new_task,
+            validate_new_task,
             update_existing_task,
             transition_status,
             remove_task,
@@ -1138,8 +1142,8 @@ mod tests {
                 description: Some("Support screen readers and image lightbox".to_string()),
                 importance: Some(5),
                 difficulty: Some(3),
-                due_date: Some("2026-11-12".to_string()),
-                sgdb_date: Some("2026-11-10".to_string()),
+                due_date: Some("2099-11-12".to_string()),
+                sgdb_date: Some("2099-11-10".to_string()),
                 tags: vec!["gui".to_string(), "a11y".to_string()],
                 attachments: vec![AttachmentInput {
                     path: sample_img.to_string_lossy().to_string(),

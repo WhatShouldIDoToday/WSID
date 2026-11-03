@@ -13,6 +13,8 @@
     STATUS_ORDER,
     RELATION_LABELS,
     createNewTask,
+    validateNewTask,
+    type FieldIssue,
     pickAttachmentFileDialog,
     saveClipboardBytesForDraft,
     fileToBase64,
@@ -83,9 +85,66 @@
   let dueError = $state<string | null>(null);
   let durationError = $state<string | null>(null);
   let formError = $state<string | null>(null);
+  let draftIssues = $state<FieldIssue[]>([]);
+  let issuesTimer: ReturnType<typeof setTimeout> | null = null;
 
   let durationTimer: ReturnType<typeof setTimeout> | null = null;
   let dateTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const FIELD_LABELS: Record<string, string> = {
+    due_date: "Hard due date",
+    sgdb_date: "SGDB date",
+    time_estimate: "Time estimate",
+    manual_priority: "Manual priority",
+    urgent_override: "Urgent override",
+  };
+
+  function issueLabel(issue: FieldIssue): string {
+    const base =
+      FIELD_LABELS[issue.field] ??
+      issue.field.charAt(0).toUpperCase() + issue.field.slice(1);
+    return issue.index !== null ? `${base} #${issue.index + 1}` : base;
+  }
+
+  // Server-side validation (400ms idle): relation targets, files, dates, new-user notices.
+  $effect(() => {
+    const payload = {
+      title: title.trim(),
+      description: description.trim() || null,
+      status,
+      due_date: dueDate.trim() || null,
+      sgdb_date: sgdbDate.trim() || null,
+      time_estimate_minutes: parseDurationInput(estimateInput).minutes,
+      difficulty: Number(difficulty),
+      importance: Number(importance),
+      urgent_override: urgentOverride,
+      manual_priority: Number(manualPriority),
+      tags: [...tags],
+      reporter: reporter.trim() || activeUser,
+      assignee: assignee.trim() || activeUser,
+      evaluator: evaluator.trim() || activeUser,
+      attachments: pendingAttachments
+        .filter((a) => a.path)
+        .map((a) => ({ path: a.path!, description: a.description })),
+      initial_relations: stagedRelations.map((r) => ({
+        relation: r.relation,
+        target_id: r.target_id,
+      })),
+    };
+    const touched = titleTouched;
+    if (issuesTimer) clearTimeout(issuesTimer);
+    issuesTimer = setTimeout(async () => {
+      try {
+        const issues = await validateNewTask(payload);
+        draftIssues = issues.filter((i) => touched || i.field !== "title");
+      } catch {
+        draftIssues = [];
+      }
+    }, 400);
+    return () => {
+      if (issuesTimer) clearTimeout(issuesTimer);
+    };
+  });
 
   let durationPreview = $derived.by((): string | null => {
     const trimmed = estimateInput.trim();
@@ -517,6 +576,18 @@
         Dismiss
       </button>
     </div>
+  {/if}
+
+  {#if draftIssues.length > 0}
+    <ul class="draft-issues" aria-label="Validation notes">
+      {#each draftIssues as issue}
+        <li class:issue-error={issue.level === "error"}>
+          <span aria-hidden="true">{issue.level === "error" ? "✗" : "+"}</span>
+          <strong>{issueLabel(issue)}:</strong>
+          {issue.message}
+        </li>
+      {/each}
+    </ul>
   {/if}
 
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

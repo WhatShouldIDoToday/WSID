@@ -140,6 +140,21 @@ pub enum RelationInputKind {
 }
 
 impl RelationInputKind {
+    /// Canonical keyword spellings accepted by `from_str`, for suggestions and error messages.
+    pub const NAMES: [&'static str; 6] = ["blocks", "blocked_by", "parent_of", "sub_task_of", "parallel", "related"];
+
+    /// Canonical keyword for this kind (accepted by `from_str`).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Blocks => "blocks",
+            Self::BlockedBy => "blocked_by",
+            Self::ParentTaskOf => "parent_of",
+            Self::SubTaskOf => "sub_task_of",
+            Self::Parallel => "parallel",
+            Self::Related => "related",
+        }
+    }
+
     /// Resolves `(source_id, input_kind, target_id)` into canonical `(canonical_source, canonical_target, RelationType)`.
     pub fn canonicalize<'a>(self, source_id: &'a str, target_id: &'a str) -> (&'a str, &'a str, RelationType) {
         match self {

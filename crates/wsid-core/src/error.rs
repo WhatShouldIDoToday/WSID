@@ -17,6 +17,9 @@ pub enum WsidError {
     #[error("validation error: {0}")]
     Validation(String),
 
+    #[error("validation error: {}", crate::draft::summarize_issues(.0))]
+    DraftRejected(Vec<crate::draft::FieldIssue>),
+
     #[error("failed to generate a unique short task ID after {0} attempts")]
     IdCollisionExhausted(usize),
 

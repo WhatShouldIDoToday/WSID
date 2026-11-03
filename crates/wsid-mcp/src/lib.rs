@@ -25,7 +25,7 @@ mod tests {
     fn test_server() -> McpServer {
         let db = open_in_memory_db().unwrap();
         let config = AppConfig { default_user: "claude".to_string(), ..AppConfig::default() };
-        let today = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let today = NaiveDate::from_ymd_opt(2099, 11, 1).unwrap();
         McpServer::new(db, config).with_today_override(today)
     }
 
@@ -128,8 +128,8 @@ mod tests {
             json!({
                 "title": "Implement MCP stdio server",
                 "description": "Support get_focus_queue and get_blocked_tasks",
-                "due_date": "2026-11-05",
-                "sgdb_date": "2026-11-03",
+                "due_date": "2099-11-05",
+                "sgdb_date": "2099-11-03",
                 "time_estimate_minutes": 90,
                 "difficulty": 3,
                 "importance": 5,
@@ -242,8 +242,8 @@ mod tests {
             "create_task",
             json!({
                 "title": "Task A",
-                "due_date": "2026-11-10",
-                "sgdb_date": "2026-11-08"
+                "due_date": "2099-11-10",
+                "sgdb_date": "2099-11-08"
             }),
         )["task"]["id"]
             .as_str()
@@ -268,7 +268,7 @@ mod tests {
         );
         assert_eq!(updated["title"], "Task A Updated");
         assert!(updated["sgdb_date"].is_null());
-        assert_eq!(updated["due_date"], "2026-11-10");
+        assert_eq!(updated["due_date"], "2099-11-10");
 
         // Link A blocks B, then attempt B blocks A (must return tool error with cycle message)
         call_tool(&mut server, 4, "link_tasks", json!({ "source_id": a, "relation": "blocks", "target_id": b }));
@@ -334,5 +334,30 @@ mod tests {
 
         let del = call_tool(&mut server, 8, "bulk_delete_tasks", json!({ "ids": [a, b] }));
         assert_eq!(del["deleted"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn create_task_with_bad_relation_is_rejected_atomically() {
+        let mut server = test_server();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: Some(json!({
+                "name": "create_task",
+                "arguments": { "title": "Orphan", "relations": [{ "relation": "blocks", "target_id": "AB1333" }] }
+            })),
+        };
+        let res = server.handle_request(req).unwrap().result.unwrap();
+        assert_eq!(res["isError"], true);
+        assert!(
+            res["structuredContent"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("No task AB1333")
+        );
+
+        let search = call_tool(&mut server, 2, "search_tasks", json!({}));
+        assert_eq!(search["count"], 0, "no half-created task left behind");
     }
 }

@@ -5,19 +5,20 @@ use std::process::Command;
 use chrono::Utc;
 use serde_json::json;
 use wsid_core::{
-    AppConfig, BulkEditOutcome, BulkTaskPatch, CreateTaskInput, Database, EisenhowerClassification, EisenhowerQuadrant, FocusQueueResponse,
-    RelationInputKind, SearchQuery, THIRD_PARTY_NOTICES_TEXT, Task, TaskAttachment, add_task_note, attach_existing_file, bulk_delete_tasks,
-    bulk_update_tasks, compute_focus_queue, create_task, delete_task_note, delete_user_from_db, get_about_metadata, get_attachment,
-    get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
-    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, open_file_in_os,
-    preview_user_deletion, register_user, remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status,
-    unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description,
+    AppConfig, AttachmentInput, BulkEditOutcome, BulkTaskPatch, Database, EisenhowerClassification, EisenhowerQuadrant, FocusQueueResponse,
+    RelationDraft, RelationInputKind, Scalar, SearchQuery, THIRD_PARTY_NOTICES_TEXT, Task, TaskAttachment, TaskDraft, add_task_note,
+    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task_from_draft, delete_task_note,
+    delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
+    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
+    list_known_users, list_task_notes, list_tasks, open_file_in_os, preview_user_deletion, register_user, remove_attachment,
+    save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
+    update_attachment_description,
 };
 use wsid_mcp::McpServer;
 
 use crate::args::{
-    AddArgs, AttachArgs, Commands, EditArgs, NextArgs, NoteArgs, SearchArgs, UsersAction, format_duration_estimate, parse_date_arg,
-    parse_duration_estimate, parse_preset_arg, parse_relation_arg, parse_status_arg,
+    AddArgs, AttachArgs, Commands, EditArgs, NextArgs, NoteArgs, SearchArgs, UsersAction, format_duration_estimate, parse_preset_arg,
+    parse_relation_arg, parse_status_arg,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,58 +213,55 @@ fn run_add<W: Write>(db_path: &Path, user: &str, args: &AddArgs, mode: OutputMod
         Some(s) => Some(parse_status_arg(s)?),
         None => None,
     };
-    let due_date = parse_date_arg("due", args.due.as_deref())?;
-    let sgdb_date = parse_date_arg("sgdb", args.sgdb.as_deref())?;
-    let time_estimate_minutes = match args.estimate.as_deref() {
-        Some(raw) => Some(parse_duration_estimate(raw)?),
-        None => None,
+
+    let relation_groups: [(RelationInputKind, &Vec<String>); 6] = [
+        (RelationInputKind::Blocks, &args.blocks),
+        (RelationInputKind::BlockedBy, &args.blocked_by),
+        (RelationInputKind::SubTaskOf, &args.subtask_of),
+        (RelationInputKind::ParentTaskOf, &args.parent_of),
+        (RelationInputKind::Parallel, &args.parallel),
+        (RelationInputKind::Related, &args.related),
+    ];
+    let relations = relation_groups
+        .iter()
+        .flat_map(|(kind, targets)| {
+            targets
+                .iter()
+                .map(|t| RelationDraft { relation: kind.name().to_string(), target: t.clone() })
+        })
+        .collect();
+
+    let attachments = args
+        .attachments
+        .iter()
+        .enumerate()
+        .map(|(idx, path)| AttachmentInput {
+            path: path.to_string_lossy().to_string(),
+            description: args.attachment_descriptions.get(idx).cloned(),
+        })
+        .collect();
+
+    let draft = TaskDraft {
+        title: args.title.clone(),
+        description: args.description.clone(),
+        status,
+        due_date: args.due.clone(),
+        sgdb_date: args.sgdb.clone(),
+        time_estimate: args.estimate.clone().map(Scalar::Text),
+        difficulty: args.difficulty.map(|n| Scalar::Int(i64::from(n))),
+        importance: args.importance.map(|n| Scalar::Int(i64::from(n))),
+        manual_priority: args.priority.map(|n| Scalar::Int(i64::from(n))),
+        urgent_override: if args.urgent { Some(Scalar::Bool(true)) } else { None },
+        tags: args.tags.clone(),
+        relations,
+        attachments,
+        reporter: args.reporter.clone(),
+        assignee: args.assignee.clone(),
+        evaluator: args.evaluator.clone(),
     };
 
-    let created = create_task(
-        &mut db,
-        CreateTaskInput {
-            title: args.title.clone(),
-            description: args.description.clone(),
-            status,
-            due_date,
-            sgdb_date,
-            time_estimate_minutes,
-            difficulty: args.difficulty,
-            importance: args.importance,
-            urgent_override: if args.urgent { Some(true) } else { None },
-            manual_priority: args.priority,
-            tags: args.tags.clone(),
-            reporter: args.reporter.clone(),
-            assignee: args.assignee.clone(),
-            evaluator: args.evaluator.clone(),
-            ..Default::default()
-        },
-        user,
-    )?;
-
-    for target in &args.blocks {
-        link_tasks(&mut db, &created.id, RelationInputKind::Blocks, target)?;
-    }
-    for target in &args.blocked_by {
-        link_tasks(&mut db, &created.id, RelationInputKind::BlockedBy, target)?;
-    }
-    for target in &args.subtask_of {
-        link_tasks(&mut db, &created.id, RelationInputKind::SubTaskOf, target)?;
-    }
-    for target in &args.parent_of {
-        link_tasks(&mut db, &created.id, RelationInputKind::ParentTaskOf, target)?;
-    }
-    for target in &args.parallel {
-        link_tasks(&mut db, &created.id, RelationInputKind::Parallel, target)?;
-    }
-    for target in &args.related {
-        link_tasks(&mut db, &created.id, RelationInputKind::Related, target)?;
-    }
-
-    for (idx, file_path) in args.attachments.iter().enumerate() {
-        let desc = args.attachment_descriptions.get(idx).map(String::as_str);
-        attach_existing_file(&mut db, &created.id, None, file_path, desc)?;
-    }
+    // Atomic: nothing is created if any relation target, attachment, or field is invalid.
+    let created = create_task_from_draft(&mut db, &draft, user)?;
 
     let refreshed = get_task(&db, &created.id)?;
     match mode {

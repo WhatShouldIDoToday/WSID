@@ -1712,3 +1712,34 @@ input[type="text"].tag-compact-input {
     outline: 3px solid Highlight;
   }
 }
+
+/* Draft validation notes (server-side issues) */
+.draft-issues {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  background: var(--bg-surface);
+  border-radius: 0.5rem;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+}
+
+.draft-issues li.issue-error {
+  color: var(--danger, #f87171);
+}
+
+@media (forced-colors: active) {
+  .draft-issues {
+    background-color: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+  }
+
+  .draft-issues li.issue-error {
+    color: CanvasText;
+    font-weight: 700;
+  }
+}
