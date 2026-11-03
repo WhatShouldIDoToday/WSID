@@ -6,7 +6,7 @@ use std::io::{self, IsTerminal};
 
 use chrono::Utc;
 use clap::Parser;
-use wsid_core::{AppConfig, Database, compute_focus_queue, default_config_path, normalize_user, resolve_active_db_path};
+use wsid_core::{AppConfig, Database, compute_focus_queue_in_project, default_config_path, normalize_user, resolve_active_db_path};
 
 use crate::args::{Cli, Commands};
 use crate::cli_runner::{OutputMode, execute_command, render_focus_queue};
@@ -42,7 +42,7 @@ fn try_main() -> wsid_core::Result<()> {
             } else {
                 let db = Database::open(&db_path)?;
                 let today = Utc::now().date_naive();
-                let focus = compute_focus_queue(
+                let focus = compute_focus_queue_in_project(
                     &db,
                     &user,
                     config.focus_preset,
@@ -50,6 +50,7 @@ fn try_main() -> wsid_core::Result<()> {
                     Some(config.focus_limit),
                     today,
                     config.scoring,
+                    Some(wsid_core::ALL_PROJECTS),
                 )?;
                 let mut stdout = io::stdout();
                 render_focus_queue(&focus, output_mode, &mut stdout)
@@ -288,7 +289,7 @@ mod tests {
         // 2. Check `wsid next --accessible` output (linear screen-reader format, no box-drawing chars)
         let mut next_buf = Vec::new();
         execute_command(
-            Commands::Next(NextArgs { preset: None, limit: Some(5) }),
+            Commands::Next(NextArgs { preset: None, limit: Some(5), project: None }),
             &db_path,
             &config,
             "alice",

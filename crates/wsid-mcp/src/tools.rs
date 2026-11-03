@@ -6,7 +6,7 @@ use serde_json::{Map, Value, json};
 use wsid_core::{
     AppConfig, AttachmentInput, BulkTaskPatch, Database, FocusPreset, RelationDraft, RelationInputKind, Scalar, SearchQuery, Task,
     TaskDraft, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, bulk_delete_tasks,
-    bulk_update_tasks, compute_focus_queue, create_task_from_draft, delete_task, delete_task_note, get_blocked_tasks,
+    bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft, delete_task, delete_task_note, get_blocked_tasks,
     get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks,
     get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_task_relations, parse_deadline_datetime,
     parse_duration_minutes, register_user, remove_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
@@ -74,6 +74,7 @@ struct GetFocusQueueArgs {
     pub user: Option<String>,
     pub preset: Option<FocusPreset>,
     pub limit: Option<usize>,
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -223,7 +224,8 @@ pub fn dispatch_tool(
             let custom_weights = if args.preset.is_none() { config.custom_weights } else { None };
             let limit = args.limit.or(Some(config.focus_limit));
 
-            compute_focus_queue(db, user, preset, custom_weights, limit, today, config.scoring).map(|resp| CallToolResult::ok_json(&resp))
+            compute_focus_queue_in_project(db, user, preset, custom_weights, limit, today, config.scoring, args.project.as_deref())
+                .map(|resp| CallToolResult::ok_json(&resp))
         }
         "get_blocked_tasks" => {
             let args: GetBlockedTasksArgs = parse_args(args_val)?;

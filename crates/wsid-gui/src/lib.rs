@@ -13,7 +13,7 @@ use wsid_core::{
     DbChangeDetector, EisenhowerClassification, FieldIssue, FocusPreset, FocusQueueResponse, RelationDraft, RelationInputKind, Scalar,
     SearchHit, SearchQuery, StatusTransitionOutcome, Task, TaskAttachment, TaskDraft, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput,
     UserDeletionOutcome, UserDeletionPreview, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks,
-    compute_focus_queue, create_task_from_draft, default_config_path, default_global_db_path, delete_task, delete_task_note,
+    compute_focus_queue_in_project, create_task_from_draft, default_config_path, default_global_db_path, delete_task, delete_task_note,
     delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
     get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
     list_known_projects, list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os, parse_deadline_datetime,
@@ -455,6 +455,7 @@ fn get_focus_view_data(
     user: Option<String>,
     preset: Option<String>,
     limit: Option<usize>,
+    project: Option<String>,
 ) -> Result<FocusQueueResponse, String> {
     let guard = state
         .lock()
@@ -471,8 +472,17 @@ fn get_focus_view_data(
     let top_k = limit.unwrap_or(guard.config.focus_limit);
     let today = Utc::now().date_naive();
 
-    compute_focus_queue(&db, target_user, target_preset, guard.config.custom_weights, Some(top_k), today, guard.config.scoring)
-        .map_err(|e| e.to_string())
+    compute_focus_queue_in_project(
+        &db,
+        target_user,
+        target_preset,
+        guard.config.custom_weights,
+        Some(top_k),
+        today,
+        guard.config.scoring,
+        project.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

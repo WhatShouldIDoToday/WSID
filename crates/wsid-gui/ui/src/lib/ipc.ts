@@ -821,11 +821,13 @@ export async function getFocusViewData(
   user?: string,
   preset?: FocusPreset,
   limit?: number,
+  project?: string | null,
 ): Promise<FocusQueueResponse> {
   return invoke<FocusQueueResponse>("get_focus_view_data", {
     user: user ?? null,
     preset: preset ?? null,
     limit: limit ?? null,
+    project: project ?? null,
   });
 }
 

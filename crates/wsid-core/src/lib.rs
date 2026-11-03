@@ -53,8 +53,8 @@ pub use relations::{
 pub use scoring::{
     BlockedSummaryGroup, BlockedTaskEntry, BlockerInfo, DEFAULT_FOCUS_LIMIT, DEFAULT_IMPORTANCE_THRESHOLD, DEFAULT_URGENT_HORIZON_DAYS,
     DEFAULT_WORKDAY_MINUTES, EisenhowerClassification, EisenhowerQuadrant, FocusQueueResponse, FocusWeights, ScoreBreakdown, ScoredTask,
-    ScoringConfig, classify_task_eisenhower, compute_effective_slack_days, compute_focus_queue, continuous_urgency_score,
-    get_blocked_tasks, list_eisenhower_matrix, resolve_effective_deadline, summarize_blocked_tasks,
+    ScoringConfig, classify_task_eisenhower, compute_effective_slack_days, compute_focus_queue, compute_focus_queue_in_project,
+    continuous_urgency_score, get_blocked_tasks, list_eisenhower_matrix, resolve_effective_deadline, summarize_blocked_tasks,
 };
 pub use search::{SearchHit, SearchQuery, query_fts_trigram_ids, search_tasks};
 pub use tasks::{

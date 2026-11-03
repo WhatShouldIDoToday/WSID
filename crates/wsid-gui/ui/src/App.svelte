@@ -42,6 +42,8 @@
   let session = $state<AppSessionSnapshot | null>(null);
   let filterMyTasksOnly = $state<boolean>(false);
   let focusQueue = $state<FocusQueueResponse | null>(null);
+  /** Focus queue project scope; unlike Kanban/Eisenhower it starts on all. */
+  let focusProject = $state<string>("all");
   let blockedTasks = $state<BlockedTaskEntry[]>([]);
   let allTasks = $state<Task[]>([]);
   let eisenhowerItems = $state<EisenhowerClassification[]>([]);
@@ -118,6 +120,7 @@
           snap.active_user,
           snap.active_preset,
           snap.focus_limit,
+          focusProject,
         ),
         getBlockedTasksData(snap.active_user),
         getAllTasksData(),
@@ -360,6 +363,13 @@
       <FocusView
         focusData={focusQueue}
         {blockedTasks}
+        knownProjects={session?.known_projects ?? []}
+        projectFilter={focusProject}
+        onProjectChange={async (project) => {
+          focusProject = project;
+          announce(`Focus queue project: ${project}`);
+          await refreshAllData();
+        }}
         onSelectTask={openTaskDetail}
         onPresetChange={handlePresetChange}
         onDataChanged={refreshAllData}

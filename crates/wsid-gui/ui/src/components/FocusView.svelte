@@ -14,6 +14,9 @@
   interface Props {
     focusData: FocusQueueResponse | null;
     blockedTasks: BlockedTaskEntry[];
+    knownProjects: string[];
+    projectFilter: string;
+    onProjectChange: (project: string) => void;
     onSelectTask: (id: string) => void;
     onPresetChange: (preset: FocusPreset) => void;
     onDataChanged: () => void;
@@ -23,6 +26,9 @@
   let {
     focusData,
     blockedTasks,
+    knownProjects,
+    projectFilter,
+    onProjectChange,
     onSelectTask,
     onPresetChange,
     onDataChanged,
@@ -55,6 +61,21 @@
     </h2>
 
     {#if focusData}
+      <div class="control-inline">
+        <label for="focus-project-select">Project:</label>
+        <select
+          id="focus-project-select"
+          value={projectFilter}
+          onchange={(e) =>
+            onProjectChange((e.currentTarget as HTMLSelectElement).value)}
+        >
+          {#each [...new Set( ["default", ...knownProjects] )] as project (project)}
+            <option value={project}>{project}</option>
+          {/each}
+          <option value="all">All projects</option>
+        </select>
+      </div>
+
       <div class="control-inline">
         <label for="focus-preset-select">Preset:</label>
         <select

@@ -7,7 +7,7 @@ use serde_json::json;
 use wsid_core::{
     AppConfig, AttachmentInput, BulkEditOutcome, BulkTaskPatch, Database, EisenhowerClassification, EisenhowerQuadrant, FocusQueueResponse,
     RelationDraft, RelationInputKind, Scalar, SearchQuery, THIRD_PARTY_NOTICES_TEXT, Task, TaskAttachment, TaskDraft, add_task_note,
-    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task_from_draft, delete_task_note,
+    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft, delete_task_note,
     delete_user_from_db, format_deadline_display, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks,
     get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks,
     list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, open_file_in_os, preview_user_deletion, register_user,
@@ -97,7 +97,7 @@ fn run_next<W: Write>(
     let limit = Some(args.limit.unwrap_or(config.focus_limit));
     let today = Utc::now().date_naive();
 
-    let focus = compute_focus_queue(&db, user, preset, custom_weights, limit, today, config.scoring)?;
+    let focus = compute_focus_queue_in_project(&db, user, preset, custom_weights, limit, today, config.scoring, args.project.as_deref())?;
     render_focus_queue(&focus, mode, out)
 }
 

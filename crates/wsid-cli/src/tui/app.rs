@@ -7,11 +7,11 @@ use ratatui::widgets::{ListState, TableState};
 use wsid_core::{
     AppConfig, BulkTaskPatch, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FieldIssue, FocusPreset,
     FocusQueueResponse, SearchHit, SearchQuery, Task, TaskAttachment, TaskNote, TaskStatus, UpdateTaskInput, WsidError, add_task_note,
-    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task_from_draft, delete_task, delete_task_note,
-    get_attachment, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
-    get_related_tasks, get_task, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os,
-    register_user, remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
-    update_attachment_description, update_task,
+    attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft, delete_task,
+    delete_task_note, get_attachment, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks,
+    get_parallel_peers, get_related_tasks, get_task, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user,
+    open_file_in_os, register_user, remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status,
+    unblock_or_dismiss_subtask, update_attachment_description, update_task,
 };
 
 use crate::cli_runner::read_system_clipboard_attachment;
@@ -225,7 +225,16 @@ impl TuiApp {
         let change_detector = DbChangeDetector::new(&db)?;
         let preset = config.focus_preset;
         let today = Utc::now().date_naive();
-        let focus_queue = compute_focus_queue(&db, &user, preset, config.custom_weights, Some(config.focus_limit), today, config.scoring)?;
+        let focus_queue = compute_focus_queue_in_project(
+            &db,
+            &user,
+            preset,
+            config.custom_weights,
+            Some(config.focus_limit),
+            today,
+            config.scoring,
+            Some(wsid_core::ALL_PROJECTS),
+        )?;
         let all_tasks = list_tasks(&db)?;
         let eisenhower_items = list_eisenhower_matrix(&db, Some(&user), today, config.scoring)?;
         let search_hits = search_tasks(&db, &SearchQuery::default())?;
@@ -309,7 +318,7 @@ impl TuiApp {
     pub fn refresh_all(&mut self) -> wsid_core::Result<()> {
         let today = Utc::now().date_naive();
         let custom_weights = if self.preset == self.config.focus_preset { self.config.custom_weights } else { None };
-        self.focus_queue = compute_focus_queue(
+        self.focus_queue = compute_focus_queue_in_project(
             &self.db,
             &self.user,
             self.preset,
@@ -317,6 +326,7 @@ impl TuiApp {
             Some(self.config.focus_limit),
             today,
             self.config.scoring,
+            Some(self.focus_project.as_str()),
         )?;
         if self.focus_queue.actionable_tasks.is_empty() {
             self.focus_selected = 0;
@@ -799,7 +809,10 @@ impl TuiApp {
             .map_or(0, |i| (i + 1) % projects.len());
         let next = projects[idx].clone();
         match self.active_tab {
-            ActiveTab::Focus => self.focus_project = next.clone(),
+            ActiveTab::Focus => {
+                self.focus_project = next.clone();
+                let _ = self.refresh_all();
+            }
             ActiveTab::Kanban => {
                 self.kanban_project = next.clone();
                 self.clamp_kanban_selection();

@@ -323,7 +323,25 @@ pub fn compute_focus_queue(
     today: NaiveDate,
     config: ScoringConfig,
 ) -> Result<FocusQueueResponse> {
+    compute_focus_queue_in_project(db, user, preset, custom_weights, limit, today, config, None)
+}
+
+/// Same as [`compute_focus_queue`], restricted to one project.
+///
+/// `project` of `None` or [`crate::tasks::ALL_PROJECTS`] scores every project.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_focus_queue_in_project(
+    db: &Database,
+    user: &str,
+    preset: FocusPreset,
+    custom_weights: Option<FocusWeights>,
+    limit: Option<usize>,
+    today: NaiveDate,
+    config: ScoringConfig,
+    project: Option<&str>,
+) -> Result<FocusQueueResponse> {
     let norm_user = normalize_user(user)?;
+    let wants_all_projects = project.is_none_or(|p| p.is_empty() || p == crate::tasks::ALL_PROJECTS);
     let weights = custom_weights.unwrap_or_else(|| FocusWeights::for_preset(preset));
     let top_k = limit.unwrap_or(DEFAULT_FOCUS_LIMIT);
 
@@ -338,6 +356,9 @@ pub fn compute_focus_queue(
     let mut scored = Vec::new();
     for task in &all_tasks {
         if task.assignee != norm_user {
+            continue;
+        }
+        if !wants_all_projects && Some(task.project.as_str()) != project {
             continue;
         }
         if !matches!(task.status, TaskStatus::Todo | TaskStatus::InProgress) {

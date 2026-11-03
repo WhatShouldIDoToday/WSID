@@ -244,6 +244,10 @@ pub struct NextArgs {
     /// Maximum number of actionable tasks to return
     #[arg(long, short = 'n')]
     pub limit: Option<usize>,
+
+    /// Restrict the queue to one project (`all` for every project)
+    #[arg(long, short = 'p')]
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Args)]

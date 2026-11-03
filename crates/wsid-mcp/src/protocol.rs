@@ -146,6 +146,10 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                         "minimum": 1,
                         "maximum": 50,
                         "description": "Maximum number of actionable tasks to return."
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Restrict the queue to one project; 'all' (the default) spans every project."
                     }
                 }
             }),
