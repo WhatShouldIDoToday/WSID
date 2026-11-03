@@ -560,6 +560,7 @@ fn run_delete_note<W: Write>(db_path: &Path, note_id: i64, mode: OutputMode, out
 }
 
 fn render_bulk<W: Write>(verb: &str, outcome: &BulkEditOutcome, mode: OutputMode, out: &mut W) -> wsid_core::Result<()> {
+    report_user_notices(&outcome.user_notices, mode);
     match mode {
         OutputMode::Json => writeln!(out, "{}", serde_json::to_string_pretty(outcome).unwrap_or_default())?,
         OutputMode::Accessible | OutputMode::Standard => {

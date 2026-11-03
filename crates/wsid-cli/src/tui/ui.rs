@@ -1165,6 +1165,10 @@ fn footer_line(app: &TuiApp) -> Line<'static> {
     } else {
         let style = if looks_like_error(&app.status_message) {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else if app.status_message.contains("warning:") {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };

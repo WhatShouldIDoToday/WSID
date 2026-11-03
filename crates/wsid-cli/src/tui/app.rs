@@ -19,6 +19,7 @@ use crate::cli_runner::read_system_clipboard_attachment;
 pub use crate::tui::form::DataEntryForm;
 use crate::tui::form::{self, CommentSuggestion, CommentTokenKind, trailing_comment_token};
 use crate::tui::text_edit::{self, EditKind, TextHistory, apply_text_shortcut};
+use crate::tui::user_ref::user_kind_mismatch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
@@ -3480,10 +3481,19 @@ impl TuiApp {
 
     fn update_bulk_prompt_message(&mut self) {
         let n = self.selected_ids.len().max(1);
-        self.status_message = format!(
-            "Bulk edit {n} task(s): status=todo assignee=bob importance=4 difficulty=2 urgent=on +tag -tag delete | {}_",
-            self.bulk_input
-        );
+        let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
+        let warning = self
+            .bulk_input
+            .split_whitespace()
+            .filter_map(|t| t.strip_prefix("assignee=").or_else(|| t.strip_prefix("a=")))
+            .find_map(|v| user_kind_mismatch(v, &kinds));
+        self.status_message = match warning {
+            Some(w) => format!("{w} | Bulk edit {n} task(s): {}_", self.bulk_input),
+            None => format!(
+                "Bulk edit {n} task(s): status=todo assignee=[kind:]bob importance=4 difficulty=2 urgent=on +tag -tag delete | {}_",
+                self.bulk_input
+            ),
+        };
     }
 
     fn handle_bulk_input_key(&mut self, key: KeyEvent) {
@@ -3539,7 +3549,10 @@ impl TuiApp {
                 } else if let Some((k, v)) = token.split_once('=') {
                     match k {
                         "status" | "s" => patch.status = Some(v.parse::<TaskStatus>().map_err(|e| e.to_string())?),
-                        "assignee" | "a" => patch.assignee = Some(v.to_string()),
+                        "assignee" | "a" => {
+                            wsid_core::parse_user_ref(v).map_err(|e| e.to_string())?;
+                            patch.assignee = Some(v.to_string());
+                        }
                         "importance" | "i" => patch.importance = Some(v.parse().map_err(|_| format!("bad importance '{v}'"))?),
                         "difficulty" | "d" => patch.difficulty = Some(v.parse().map_err(|_| format!("bad difficulty '{v}'"))?),
                         "urgent" | "u" => patch.urgent_override = Some(matches!(v, "on" | "true" | "yes" | "1")),
@@ -3576,6 +3589,7 @@ impl TuiApp {
                             .join("; ")
                     )
                 };
+                self.status_message = Self::with_user_notices(std::mem::take(&mut self.status_message), &outcome.user_notices);
                 if failed == 0 {
                     self.selected_ids.clear();
                 }
