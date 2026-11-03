@@ -8,9 +8,12 @@
     STATUS_ORDER,
     bulkEditTasks,
     bulkRemoveTasks,
+    describeUserNotice,
     summarizeBulk,
+    userOptionLabel,
     validateProject,
     validateUserRef,
+    withUserNotices,
   } from "../lib/ipc";
   import ConfirmModal from "./ConfirmModal.svelte";
   import Select from "./ui/Select.svelte";
@@ -20,6 +23,7 @@
     knownTags: string[];
     knownUsers: string[];
     knownProjects: string[];
+    userKinds?: Record<string, string>;
     onClear: () => void;
     onDone: (outcome: BulkEditOutcome) => void;
     announce: (msg: string) => void;
@@ -32,6 +36,7 @@
     knownTags,
     knownUsers,
     knownProjects,
+    userKinds = {},
     onClear,
     onDone,
     announce,
@@ -45,6 +50,8 @@
   let assigneeDraft = $state("");
   let projectDraft = $state("");
   let assigneeError = $state<string | null>(null);
+  /** Typed-reference notices from the last apply (e.g. a kind that was ignored). */
+  let userNotice = $state<{ text: string; warning: boolean } | null>(null);
   let projectError = $state<string | null>(null);
 
   function commitAssignee() {
@@ -96,7 +103,14 @@
     busy = true;
     try {
       const outcome = await bulkEditTasks(ids, patch);
-      announce(summarizeBulk("Updated", outcome));
+      const notices = outcome.user_notices ?? [];
+      userNotice = notices.length
+        ? {
+            text: notices.map(describeUserNotice).join(" "),
+            warning: notices.some((n) => n.type === "kind_mismatch"),
+          }
+        : null;
+      announce(withUserNotices(summarizeBulk("Updated", outcome), notices));
       onDone(outcome);
     } catch (err) {
       announce(`Bulk edit failed: ${String(err)}`);
@@ -173,7 +187,10 @@
       autocomplete="off"
       disabled={busy}
       bind:value={assigneeDraft}
-      oninput={() => (assigneeError = null)}
+      oninput={() => {
+        assigneeError = null;
+        userNotice = null;
+      }}
       onkeydown={(e) =>
         handleTextKeydown(e, commitAssignee, () => {
           assigneeDraft = "";
@@ -182,7 +199,9 @@
     />
     <datalist id="bulk-assignee-options">
       {#each knownUsers as u (u)}
-        <option value={u}></option>
+        <option value={u} label={userOptionLabel(u, userKinds)}>
+          {userOptionLabel(u, userKinds)}
+        </option>
       {/each}
     </datalist>
     {#if assigneeError}
@@ -238,6 +257,16 @@
     onValueChange={(v) =>
       pick(v, (x) => void apply({ urgent_override: x === "on" }))}
   />
+
+  {#if userNotice}
+    <span
+      class="bulk-notice"
+      class:is-warning={userNotice.warning}
+      role="status"
+    >
+      {userNotice.text}
+    </span>
+  {/if}
 
   {#if knownTags.length > 0}
     <Select

@@ -27,6 +27,7 @@
     parseDurationInput,
     validateDeadlines,
     validateUserRef,
+    userOptionLabel,
   } from "../lib/ipc";
   import { subscribeDropzone } from "../lib/filedrop";
 
@@ -958,7 +959,9 @@
 
           <datalist id="user-datalist">
             {#each knownUsers as u}
-              <option value={u}></option>
+              <option value={u} label={userOptionLabel(u, userKinds)}>
+                {userOptionLabel(u, userKinds)}
+              </option>
             {/each}
           </datalist>
 

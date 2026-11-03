@@ -47,6 +47,7 @@
     formatDeadlineDisplay,
     validateUserRef,
     parseCommentMentions,
+    userOptionLabel,
     tokenizeCommentBody,
   } from "../lib/ipc";
   import { subscribeDropzone } from "../lib/filedrop";
@@ -995,14 +996,28 @@
                   <input
                     id="edit-reporter"
                     type="text"
+                    list="edit-user-datalist"
+                    autocomplete="off"
                     bind:value={editReporter}
                   />
+                  <datalist id="edit-user-datalist">
+                    {#each knownUsers as usr (usr)}
+                      <option
+                        value={usr}
+                        label={userOptionLabel(usr, userKinds)}
+                      >
+                        {userOptionLabel(usr, userKinds)}
+                      </option>
+                    {/each}
+                  </datalist>
                 </div>
                 <div class="side-field">
                   <label for="edit-assignee">Assignee</label>
                   <input
                     id="edit-assignee"
                     type="text"
+                    list="edit-user-datalist"
+                    autocomplete="off"
                     bind:value={editAssignee}
                   />
                 </div>
@@ -1011,6 +1026,8 @@
                   <input
                     id="edit-evaluator"
                     type="text"
+                    list="edit-user-datalist"
+                    autocomplete="off"
                     bind:value={editEvaluator}
                   />
                 </div>

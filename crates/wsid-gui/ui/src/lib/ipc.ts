@@ -159,6 +159,14 @@ export interface AppSessionSnapshot {
 export const DEFAULT_USER_KIND = "human";
 
 /** Kind of `user`, falling back to `human` for users without an explicit kind. */
+/** Suggestion label for a user, e.g. `rob (jira)`. */
+export function userOptionLabel(
+  user: string,
+  kinds: Record<string, string>,
+): string {
+  return `${user} (${userKindOf(kinds, user)})`;
+}
+
 export function userKindOf(
   kinds: Record<string, string>,
   user: string,
@@ -1172,6 +1180,7 @@ export interface BulkEditOutcome {
   spawned_review_tasks: Task[];
   auto_completed_parent_tasks: Task[];
   failures: { id: string; error: string }[];
+  user_notices: UserNotice[];
 }
 
 export async function bulkEditTasks(

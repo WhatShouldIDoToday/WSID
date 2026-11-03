@@ -2392,6 +2392,16 @@ input[type="text"].tag-compact-input {
   padding: 0.3rem 0.5rem;
 }
 
+.bulk-notice {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  flex-basis: 100%;
+}
+
+.bulk-notice.is-warning {
+  color: var(--danger);
+}
+
 .bulk-text-field .field-error {
   font-size: 0.75rem;
 }

@@ -250,6 +250,7 @@
       ids={selection.ids}
       {knownTags}
       {knownUsers}
+      {userKinds}
       {knownProjects}
       {announce}
       onClear={() => selection.clear()}
