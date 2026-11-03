@@ -57,6 +57,7 @@ pub enum DatabaseSortColumn {
     Id,
     Title,
     Status,
+    Project,
     DueDate,
     SgdbDate,
     Importance,
@@ -70,7 +71,8 @@ impl DatabaseSortColumn {
             Self::Relevance => Self::Id,
             Self::Id => Self::Title,
             Self::Title => Self::Status,
-            Self::Status => Self::DueDate,
+            Self::Status => Self::Project,
+            Self::Project => Self::DueDate,
             Self::DueDate => Self::SgdbDate,
             Self::SgdbDate => Self::Importance,
             Self::Importance => Self::Difficulty,
@@ -85,6 +87,7 @@ impl DatabaseSortColumn {
             Self::Id => "ID",
             Self::Title => "Title",
             Self::Status => "Status",
+            Self::Project => "Project",
             Self::DueDate => "Due",
             Self::SgdbDate => "SGDB",
             Self::Importance => "Importance",
@@ -154,12 +157,19 @@ pub struct TuiApp {
     pub kanban_col: usize,
     pub kanban_row: usize,
     pub kanban_states: [ListState; 6],
+    /// Project shown by the Kanban board (`all` = every project).
+    pub kanban_project: String,
+
+    // Focus View project scope (`all` by default, unlike Kanban/Eisenhower)
+    pub focus_project: String,
 
     // Eisenhower View state
     pub eisenhower_items: Vec<EisenhowerClassification>,
     pub eisenhower_quadrant: usize,
     pub eisenhower_row: usize,
     pub eisenhower_states: [ListState; 4],
+    /// Project shown by the Eisenhower matrix (`all` = every project).
+    pub eisenhower_project: String,
 
     // Database Search View state
     pub search_query: String,
@@ -168,6 +178,7 @@ pub struct TuiApp {
     pub search_only_mine: bool,
     pub search_tag_filter: Option<String>,
     pub search_assignee_filter: Option<String>,
+    pub search_project_filter: Option<String>,
     pub search_sort_col: DatabaseSortColumn,
     pub search_sort_asc: bool,
     pub search_hits: Vec<SearchHit>,
@@ -239,16 +250,20 @@ impl TuiApp {
             kanban_col: 1, // Todo column by default
             kanban_row: 0,
             kanban_states: std::array::from_fn(|_| ListState::default()),
+            kanban_project: wsid_core::DEFAULT_PROJECT.to_string(),
+            focus_project: wsid_core::ALL_PROJECTS.to_string(),
             eisenhower_items,
             eisenhower_quadrant: 0,
             eisenhower_row: 0,
             eisenhower_states: std::array::from_fn(|_| ListState::default()),
+            eisenhower_project: wsid_core::DEFAULT_PROJECT.to_string(),
             search_query: String::new(),
             search_editing: false,
             search_status_filter: None,
             search_only_mine: false,
             search_tag_filter: None,
             search_assignee_filter: None,
+            search_project_filter: None,
             search_sort_col: DatabaseSortColumn::Relevance,
             search_sort_asc: true,
             search_hits,
@@ -361,6 +376,7 @@ impl TuiApp {
                 assignee,
                 reporter: None,
                 evaluator: None,
+                project: self.search_project_filter.clone(),
                 limit: None,
             },
         )?;
@@ -378,6 +394,7 @@ impl TuiApp {
                     .to_lowercase()
                     .cmp(&b.task.title.to_lowercase()),
                 DatabaseSortColumn::Status => a.task.status.as_str().cmp(b.task.status.as_str()),
+                DatabaseSortColumn::Project => a.task.project.cmp(&b.task.project),
                 DatabaseSortColumn::DueDate => a.task.due_date.cmp(&b.task.due_date),
                 DatabaseSortColumn::SgdbDate => a.task.sgdb_date.cmp(&b.task.sgdb_date),
                 DatabaseSortColumn::Importance => b.task.importance.cmp(&a.task.importance),
@@ -552,6 +569,10 @@ impl TuiApp {
                 }
                 return;
             }
+            KeyCode::Char('P') => {
+                self.cycle_project_filter();
+                return;
+            }
             KeyCode::Char('?') => {
                 self.about_modal_open = true;
                 self.about_scroll = 0;
@@ -648,6 +669,7 @@ impl TuiApp {
         self.all_tasks
             .iter()
             .filter(|t| t.status == status)
+            .filter(|t| self.matches_project(&self.kanban_project, &t.project))
             .collect()
     }
 
@@ -752,7 +774,43 @@ impl TuiApp {
         self.eisenhower_items
             .iter()
             .filter(|i| i.quadrant == quadrant)
+            .filter(|i| self.matches_project(&self.eisenhower_project, &i.task.project))
             .collect()
+    }
+
+    /// Whether a task's project passes the active filter (`all` / empty = every project).
+    pub fn matches_project(&self, filter: &str, project: &str) -> bool {
+        filter.is_empty() || filter == wsid_core::ALL_PROJECTS || filter == project
+    }
+
+    /// Cycles the project of the current view through its known projects (ending on `all`).
+    pub fn cycle_project_filter(&mut self) {
+        let mut projects = wsid_core::list_known_projects(&self.db).unwrap_or_else(|_| vec![wsid_core::DEFAULT_PROJECT.to_string()]);
+        projects.push(wsid_core::ALL_PROJECTS.to_string());
+        let current = match self.active_tab {
+            ActiveTab::Focus => &self.focus_project,
+            ActiveTab::Kanban => &self.kanban_project,
+            ActiveTab::Eisenhower => &self.eisenhower_project,
+            _ => return,
+        };
+        let idx = projects
+            .iter()
+            .position(|p| p == current)
+            .map_or(0, |i| (i + 1) % projects.len());
+        let next = projects[idx].clone();
+        match self.active_tab {
+            ActiveTab::Focus => self.focus_project = next.clone(),
+            ActiveTab::Kanban => {
+                self.kanban_project = next.clone();
+                self.clamp_kanban_selection();
+            }
+            ActiveTab::Eisenhower => {
+                self.eisenhower_project = next.clone();
+                self.clamp_eisenhower_selection();
+            }
+            _ => {}
+        }
+        self.status_message = format!("Project filter: {next}");
     }
 
     pub(crate) fn clamp_eisenhower_selection(&mut self) {

@@ -253,6 +253,7 @@ fn run_add<W: Write>(db_path: &Path, user: &str, args: &AddArgs, mode: OutputMod
         manual_priority: args.priority.map(|n| Scalar::Int(i64::from(n))),
         urgent_override: if args.urgent { Some(Scalar::Bool(true)) } else { None },
         tags: args.tags.clone(),
+        project: args.project.clone(),
         relations,
         attachments,
         reporter: args.reporter.clone(),
@@ -339,6 +340,7 @@ fn run_show<W: Write>(db_path: &Path, raw_id: &str, mode: OutputMode, out: &mut 
                     .map_or_else(|| "none".to_string(), |d| format_deadline_display(&d)),
                 format_duration_estimate(task.time_estimate_minutes)
             )?;
+            writeln!(out, "Project: {}.", task.project)?;
             writeln!(out, "Tags: {}.", if task.tags.is_empty() { "none".to_string() } else { task.tags.join(", ") })?;
             if !task.description.trim().is_empty() {
                 writeln!(out, "Description: {}", task.description)?;
@@ -587,6 +589,7 @@ fn run_edit<W: Write>(db_path: &Path, args: &EditArgs, mode: OutputMode, out: &m
         },
         add_tags: args.add_tags.clone(),
         remove_tags: args.remove_tags.clone(),
+        project: args.project.clone(),
         ..BulkTaskPatch::default()
     };
     let outcome = bulk_update_tasks(&mut db, &args.ids, &patch)?;
@@ -861,6 +864,7 @@ fn run_search<W: Write>(db_path: &Path, args: &SearchArgs, mode: OutputMode, out
             assignee: args.assignee.clone(),
             reporter: args.reporter.clone(),
             evaluator: args.evaluator.clone(),
+            project: args.project.clone(),
             limit: args.limit,
         },
     )?;

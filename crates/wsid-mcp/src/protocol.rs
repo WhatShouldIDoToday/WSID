@@ -258,6 +258,10 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                     "evaluator": {
                         "type": "string"
                     },
+                    "project": {
+                        "type": "string",
+                        "description": "Restrict results to one project; use 'all' for every project."
+                    },
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
@@ -289,6 +293,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                         "type": "array",
                         "items": { "type": "string" }
                     },
+                    "project": { "type": "string", "description": "Project name (letters, digits, '_' or '-'). Defaults to 'default'." },
                     "reporter": { "type": "string" },
                     "assignee": { "type": "string" },
                     "evaluator": { "type": "string" },
@@ -342,6 +347,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                         "type": "array",
                         "items": { "type": "string" }
                     },
+                    "project": { "type": "string", "description": "Move the task into this project." },
                     "reporter": { "type": "string" },
                     "assignee": { "type": "string" },
                     "evaluator": { "type": "string" }

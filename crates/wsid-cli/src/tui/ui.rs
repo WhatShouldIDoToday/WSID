@@ -252,7 +252,14 @@ fn render_kanban_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .into_iter()
             .cloned()
             .collect();
-        let title = format!(" Kanban — Column {}/{}: {} ({}) ", app.kanban_col + 1, TaskStatus::ALL.len(), status, tasks.len());
+        let title = format!(
+            " Kanban — Column {}/{}: {} ({}) · project: {} ",
+            app.kanban_col + 1,
+            TaskStatus::ALL.len(),
+            status,
+            tasks.len(),
+            app.kanban_project
+        );
         let block = panel_block(title, Borders::NONE, true);
 
         if tasks.is_empty() {
@@ -267,13 +274,14 @@ fn render_kanban_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                         .map(format_deadline_date)
                         .unwrap_or_else(|| "-".to_string());
                     ListItem::new(Line::from(format!(
-                        "{}[{}] {} (@{}, Imp:{}/5, Due:{})",
+                        "{}[{}] {} (@{}, Imp:{}/5, Due:{}, Proj:{})",
                         app.mark(&t.id),
                         t.id,
                         t.title,
                         t.assignee,
                         t.importance,
-                        due
+                        due,
+                        t.project
                     )))
                 })
                 .collect();
@@ -349,7 +357,7 @@ fn render_eisenhower_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .into_iter()
             .cloned()
             .collect();
-        let title = format!(" Eisenhower — {} ({}) ", quadrant_title(q), items_in_q.len());
+        let title = format!(" Eisenhower — {} ({}) · project: {} ", quadrant_title(q), items_in_q.len(), app.eisenhower_project);
         let block = panel_block(title, Borders::NONE, true);
 
         if items_in_q.is_empty() {
@@ -364,7 +372,7 @@ fn render_eisenhower_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                         .map(|s| format!("{s:.1}d"))
                         .unwrap_or_else(|| "-".to_string());
                     ListItem::new(Line::from(format!(
-                        "{}[{}] {} ({}) — Imp:{}/5, Diff:{}/5, Urgent:{}, Slack:{}",
+                        "{}[{}] {} ({}) — Imp:{}/5, Diff:{}/5, Urgent:{}, Slack:{}, Proj:{}",
                         app.mark(&t.id),
                         t.id,
                         t.title,
@@ -372,7 +380,8 @@ fn render_eisenhower_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                         t.importance,
                         t.difficulty,
                         c.is_urgent,
-                        slack
+                        slack,
+                        t.project
                     )))
                 })
                 .collect();
@@ -545,7 +554,7 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                     .unwrap_or_else(|| "-".to_string());
                 let tags = if t.tags.is_empty() { "-".to_string() } else { t.tags.join(",") };
                 ListItem::new(Line::from(format!(
-                    "{}[{}] {} ({}) Assignee:@{} Imp:{} Diff:{} Prio:{} SGDB:{} Due:{} Tags:{}",
+                    "{}[{}] {} ({}) Assignee:@{} Imp:{} Diff:{} Prio:{} SGDB:{} Due:{} Proj:{} Tags:{}",
                     app.mark(&t.id),
                     t.id,
                     t.title,
@@ -556,6 +565,7 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                     t.manual_priority,
                     sgdb,
                     due,
+                    t.project,
                     tags
                 )))
             })
@@ -591,6 +601,7 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         col_header(DatabaseSortColumn::Id, "ID"),
         col_header(DatabaseSortColumn::Title, "Title"),
         col_header(DatabaseSortColumn::Status, "Status"),
+        col_header(DatabaseSortColumn::Project, "Project"),
         col_header(DatabaseSortColumn::Assignee, "Assignee"),
         col_header(DatabaseSortColumn::Importance, "Imp"),
         col_header(DatabaseSortColumn::Difficulty, "Diff"),
@@ -624,6 +635,7 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 Cell::from(format!("{}{}", app.mark(&t.id), t.id)),
                 Cell::from(t.title.clone()),
                 Cell::from(t.status.to_string()),
+                Cell::from(t.project.clone()),
                 Cell::from(format!("@{}", t.assignee)),
                 Cell::from(format!("{}/5", t.importance)),
                 Cell::from(format!("{}/5", t.difficulty)),
@@ -869,7 +881,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
             "[1-5] Views | [h/l] Column | [j/k] Task | [</>] Move Status | [Space] Select | [b] Bulk edit | [U] User | [Enter] Inspect | [q] Quit"
         }
         ActiveTab::Eisenhower => {
-            "[1-5] Views | [h/l/Tab/S-Tab] Quadrant | [j/k] Task | [+/-] Imp | [</>] Urgency | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
+            "[1-5] Views | [P] Project | [h/l/Tab/S-Tab] Quadrant | [j/k] Task | [+/-] Imp | [</>] Urgency | [u] Urgent | [Space] Select | [b] Bulk edit | [Enter] Inspect | [?] Help"
         }
         ActiveTab::Database => {
             "[1-5] Views | [/] Search | [f] Status | [t] Tag | [u] User | [m] Mine | [o/O] Sort | [Space] Select | [A] All | [b] Bulk edit | [Enter] Inspect | [q] Quit"
@@ -921,6 +933,7 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         Span::styled(format!("({})", t.status), Style::default().fg(Color::Cyan)),
     ]));
     lines.push(Line::from(format!("Reporter: @{} | Assignee: @{} | Evaluator: @{}", t.reporter, t.assignee, t.evaluator)));
+    lines.push(Line::from(format!("Project: {}", t.project)));
 
     let est = t
         .time_estimate_minutes

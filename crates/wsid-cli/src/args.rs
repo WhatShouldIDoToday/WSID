@@ -229,6 +229,10 @@ pub struct EditArgs {
     /// Tag(s) to remove (can be specified multiple times)
     #[arg(long = "remove-tag")]
     pub remove_tags: Vec<String>,
+
+    /// Move the task(s) into this project
+    #[arg(long)]
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -286,6 +290,10 @@ pub struct AddArgs {
     /// Single-word tag(s) (can be specified multiple times)
     #[arg(long = "tag", short = 't')]
     pub tags: Vec<String>,
+
+    /// Project this task belongs to (defaults to `default`)
+    #[arg(long, short = 'p')]
+    pub project: Option<String>,
 
     /// Reporter user (defaults to active user)
     #[arg(long)]
@@ -404,6 +412,10 @@ pub struct SearchArgs {
     /// Filter by evaluator
     #[arg(long)]
     pub evaluator: Option<String>,
+
+    /// Filter by project (`all` shows every project)
+    #[arg(long, short = 'p')]
+    pub project: Option<String>,
 
     /// Maximum number of search hits
     #[arg(long, short = 'n')]

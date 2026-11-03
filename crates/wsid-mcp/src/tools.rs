@@ -97,6 +97,7 @@ struct SearchTasksArgs {
     pub assignee: Option<String>,
     pub reporter: Option<String>,
     pub evaluator: Option<String>,
+    pub project: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -121,6 +122,7 @@ struct CreateTaskArgs {
     pub manual_priority: Option<i8>,
     #[serde(default)]
     pub tags: Vec<String>,
+    pub project: Option<String>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
@@ -283,6 +285,7 @@ pub fn dispatch_tool(
                 assignee: args.assignee,
                 reporter: args.reporter,
                 evaluator: args.evaluator,
+                project: args.project,
                 limit: args.limit,
             };
             search_tasks(db, &query).map(|hits| {
@@ -379,6 +382,7 @@ fn handle_create_task(db: &mut Database, config: &AppConfig, args: CreateTaskArg
         manual_priority: args.manual_priority.map(|n| Scalar::Int(i64::from(n))),
         urgent_override: args.urgent_override.map(Scalar::Bool),
         tags: args.tags,
+        project: args.project,
         relations: args
             .relations
             .iter()
@@ -426,6 +430,7 @@ fn handle_update_task(db: &mut Database, args_val: Value) -> Result<CallToolResu
     let urgent_override = parse_optional_bool(obj, "urgent_override")?;
     let manual_priority = parse_optional_i8(obj, "manual_priority")?;
     let tags = parse_optional_string_vec(obj, "tags")?;
+    let project = parse_optional_string(obj, "project")?;
     let reporter = parse_optional_string(obj, "reporter")?;
     let assignee = parse_optional_string(obj, "assignee")?;
     let evaluator = parse_optional_string(obj, "evaluator")?;
@@ -445,6 +450,7 @@ fn handle_update_task(db: &mut Database, args_val: Value) -> Result<CallToolResu
             urgent_override,
             manual_priority,
             tags,
+            project,
             reporter,
             assignee,
             evaluator,
