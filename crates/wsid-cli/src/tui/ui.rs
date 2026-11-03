@@ -8,7 +8,9 @@ use ratatui::widgets::{
     Block, BorderType, Borders, Cell, Clear, HighlightSpacing, List, ListItem, Paragraph, Row, Scrollbar, ScrollbarOrientation,
     ScrollbarState, Table, Tabs, Wrap,
 };
-use wsid_core::{EisenhowerQuadrant, TaskStatus, default_global_db_path, get_about_metadata};
+use wsid_core::{
+    EisenhowerQuadrant, TaskStatus, default_global_db_path, format_deadline_display, format_duration_minutes, get_about_metadata,
+};
 
 use crate::tui::app::{ActiveTab, DataEntryForm, DatabaseSortColumn, DetailPromptKind, TuiApp};
 use crate::tui::form;
@@ -24,21 +26,6 @@ fn quadrant_title(q: EisenhowerQuadrant) -> &'static str {
         EisenhowerQuadrant::Q2Schedule => "Q2: Schedule (Important, Not Urgent)",
         EisenhowerQuadrant::Q3DelegateQuick => "Q3: Delegate / Quick (Urgent, Not Important)",
         EisenhowerQuadrant::Q4Later => "Q4: Later (Neither Urgent Nor Important)",
-    }
-}
-
-fn format_minutes(mins: i64) -> String {
-    if mins <= 0 {
-        return "0m".to_string();
-    }
-    let h = mins / 60;
-    let m = mins % 60;
-    if h > 0 && m > 0 {
-        format!("{h}h{m}m")
-    } else if h > 0 {
-        format!("{h}h")
-    } else {
-        format!("{m}m")
     }
 }
 
@@ -168,10 +155,18 @@ fn render_focus_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 let t = &scored.task;
                 let est = t
                     .time_estimate_minutes
-                    .map(format_minutes)
+                    .map(|m| format_duration_minutes(m.max(0) as u32))
                     .unwrap_or_else(|| "-".to_string());
-                let due = t.due_date.as_deref().unwrap_or("-");
-                let sgdb = t.sgdb_date.as_deref().unwrap_or("-");
+                let due = t
+                    .due_date
+                    .as_deref()
+                    .map(format_deadline_display)
+                    .unwrap_or_else(|| "-".to_string());
+                let sgdb = t
+                    .sgdb_date
+                    .as_deref()
+                    .map(format_deadline_display)
+                    .unwrap_or_else(|| "-".to_string());
                 let line1 = format!(
                     "#{rank} [{id}] {title} ({status}) — Score {score:.2} | Q{quadrant}",
                     rank = idx + 1,
@@ -661,7 +656,7 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     let mut items: Vec<ListItem> = Vec::new();
     // Rows each item occupies (label row, list sub-rows, error and note lines), for cursor and dropdown placement.
     let mut heights: Vec<u16> = Vec::new();
-    for (idx, spec) in form::FIELDS.iter().enumerate() {
+    for (idx, _spec) in form::FIELDS.iter().enumerate() {
         let form = &app.entry_form;
         let is_active = form.active_index == idx;
         let val = &form.fields[idx];
@@ -685,7 +680,7 @@ fn render_data_entry_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                     .take(label_width)
                     .collect()
             }
-            _ => spec.label.to_string(),
+            _ => form::field_label(idx),
         };
         let mut lines = vec![Line::from(Span::styled(format!("{label:<label_width$}: {val}"), style))];
         match idx {
@@ -911,10 +906,18 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
 
     let est = t
         .time_estimate_minutes
-        .map(format_minutes)
+        .map(|m| format_duration_minutes(m.max(0) as u32))
         .unwrap_or_else(|| "None".to_string());
-    let sgdb = t.sgdb_date.as_deref().unwrap_or("None");
-    let due = t.due_date.as_deref().unwrap_or("None");
+    let sgdb = t
+        .sgdb_date
+        .as_deref()
+        .map(format_deadline_display)
+        .unwrap_or_else(|| "None".to_string());
+    let due = t
+        .due_date
+        .as_deref()
+        .map(format_deadline_display)
+        .unwrap_or_else(|| "None".to_string());
     lines.push(Line::from(format!(
         "Importance: {}/5 | Difficulty: {}/5 | Priority: {}/5 | Urgent Override: {}",
         t.importance, t.difficulty, t.manual_priority, t.urgent_override

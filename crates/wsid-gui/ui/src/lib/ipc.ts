@@ -529,7 +529,9 @@ export function formatDeadlineDisplay(raw: string | null | undefined): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
     return s;
   }
-  const dt = new Date(s);
+  const withoutBracket = s.replace(/\[.*\]$/, "");
+  const normalized = withoutBracket.replace(/([+-]\d{2}:\d{2}):\d{2}$/, "$1");
+  const dt = new Date(normalized);
   if (Number.isNaN(dt.getTime())) {
     return s;
   }
@@ -538,7 +540,12 @@ export function formatDeadlineDisplay(raw: string | null | undefined): string {
   const dd = String(dt.getDate()).padStart(2, "0");
   const hh = String(dt.getHours()).padStart(2, "0");
   const min = String(dt.getMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+  const tz = Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+    .formatToParts(dt)
+    .find((p) => p.type === "timeZoneName")?.value;
+  return tz
+    ? `${yyyy}-${mm}-${dd} ${hh}:${min} ${tz}`
+    : `${yyyy}-${mm}-${dd} ${hh}:${min}`;
 }
 
 export const USERNAME_REGEX = /^[a-z0-9_-]+$/;

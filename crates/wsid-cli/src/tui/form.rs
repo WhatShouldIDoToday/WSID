@@ -8,13 +8,17 @@ use std::time::{Duration, Instant};
 
 use ratatui::widgets::ListState;
 use wsid_core::{
-    AttachmentInput, Database, FieldIssue, IssueLevel, RelationDraft, RelationInputKind, Scalar, TaskDraft, TaskField, normalize_task_id,
+    AttachmentInput, Database, FieldIssue, IssueLevel, RelationDraft, RelationInputKind, Scalar, TaskDraft, TaskField,
+    format_deadline_display, format_duration_minutes, local_tz_abbr, normalize_task_id, parse_deadline_datetime, parse_duration_minutes,
     search_relation_targets, suggest_users, validate_task_draft,
 };
 
 /// How long the active field must be idle before it is validated.
 pub const VALIDATION_DEBOUNCE: Duration = Duration::from_millis(400);
 
+const DUE_DATE: usize = 2;
+const SGDB_DATE: usize = 3;
+const TIME_ESTIMATE: usize = 4;
 const RELATIONS: usize = 10;
 const ATTACHMENTS: usize = 11;
 const MAX_DROPDOWN_ROWS: usize = 8;
@@ -100,6 +104,17 @@ impl Mask {
     }
 }
 
+/// Normalizes a duration string to its canonical human-readable form (`"200m"` -> `"3h 20m"`).
+pub fn normalize_duration(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    parse_duration_minutes(trimmed)
+        .ok()
+        .map(format_duration_minutes)
+}
+
 pub struct FieldSpec {
     pub label: &'static str,
     pub mask: Mask,
@@ -131,11 +146,20 @@ pub fn field_index(field: TaskField) -> usize {
     FIELDS.iter().position(|f| f.field == field).unwrap_or(0)
 }
 
+/// Row label, including the local short time zone abbreviation on the Due/SGDB rows.
+pub fn field_label(idx: usize) -> String {
+    let tz = local_tz_abbr();
+    match idx {
+        DUE_DATE => format!("3. Due Date (YYYY-MM-DD HH:MM {tz})"),
+        SGDB_DATE => format!("4. SGDB Date (YYYY-MM-DD HH:MM {tz}, <= Due)"),
+        _ => FIELDS[idx].label.to_string(),
+    }
+}
+
 /// Display width of the label column (longest label), so list text and cursor position share one source of truth.
 pub fn label_width() -> usize {
-    FIELDS
-        .iter()
-        .map(|f| f.label.chars().count())
+    (0..FIELD_COUNT)
+        .map(|i| field_label(i).chars().count())
         .max()
         .unwrap_or(0)
 }
@@ -307,6 +331,7 @@ impl DataEntryForm {
     /// Moves focus, validating the field being left.
     pub fn set_active_index(&mut self, db: &Database, user: &str, index: usize) {
         if self.active_index < FIELD_COUNT {
+            self.normalize_field(self.active_index);
             self.validate_field(db, user, self.active_index);
         }
         self.dirty_at = None;
@@ -314,6 +339,15 @@ impl DataEntryForm {
         self.active_index = index;
         self.state.select(Some(index));
         self.refresh_dropdown(db, user);
+        self.refresh_local_hints();
+    }
+
+    fn normalize_field(&mut self, idx: usize) {
+        if idx == TIME_ESTIMATE
+            && let Some(norm) = normalize_duration(&self.fields[TIME_ESTIMATE])
+        {
+            self.fields[TIME_ESTIMATE] = norm;
+        }
     }
 
     pub fn type_char(&mut self, db: &Database, user: &str, ch: char) {
@@ -340,6 +374,7 @@ impl DataEntryForm {
         if (12..=14).contains(&idx) {
             self.refresh_notes(db, user);
         }
+        self.refresh_local_hints();
     }
 
     /// Handles bracketed paste: file paths on the Attachments row, plain text elsewhere.
@@ -549,7 +584,11 @@ impl DataEntryForm {
                     true
                 }
             }
-            _ => true,
+            _ => {
+                self.normalize_field(idx);
+                self.refresh_local_hints();
+                true
+            }
         }
     }
 
@@ -681,6 +720,21 @@ impl DataEntryForm {
 
     // ----- validation -------------------------------------------------------------------------------------------
 
+    fn refresh_local_hints(&mut self) {
+        let tz = local_tz_abbr();
+        for idx in [DUE_DATE, SGDB_DATE] {
+            let trimmed = self.fields[idx].trim();
+            self.notes[idx] = if !trimmed.is_empty() && parse_deadline_datetime("deadline", trimmed).is_ok() {
+                Some(format!("= {}", format_deadline_display(trimmed)))
+            } else if self.active_index == idx {
+                Some(format!("Local time zone: {tz} (date-only defaults to 20:00 {tz})"))
+            } else {
+                None
+            };
+        }
+        self.notes[TIME_ESTIMATE] = normalize_duration(&self.fields[TIME_ESTIMATE]).map(|d| format!("= {d}"));
+    }
+
     fn refresh_notes(&mut self, db: &Database, user: &str) {
         let issues = validate_task_draft(db, &self.to_draft(), user);
         for (i, note) in self.notes.iter_mut().enumerate() {
@@ -689,6 +743,7 @@ impl DataEntryForm {
                 .find(|n| n.level == IssueLevel::Info && field_index(n.field) == i)
                 .map(|n| n.message.clone());
         }
+        self.refresh_local_hints();
     }
 
     fn apply(&mut self, issues: &[FieldIssue], rows: &[usize]) {
@@ -704,6 +759,7 @@ impl DataEntryForm {
                 .find(|n| n.level == IssueLevel::Info && field_index(n.field) == i)
                 .map(|n| n.message.clone());
         }
+        self.refresh_local_hints();
     }
 
     /// Validates the active field if it has been idle past the debounce window. Returns true if state changed.
@@ -733,6 +789,7 @@ impl DataEntryForm {
 
     /// Validates every field, returning `(field index, message)` for each problem.
     pub fn validate_all(&mut self, db: &Database, user: &str) -> Vec<(usize, String)> {
+        self.normalize_field(TIME_ESTIMATE);
         let issues = validate_task_draft(db, &self.to_draft(), user);
         let all: Vec<usize> = (0..FIELD_COUNT).collect();
         self.apply(&issues, &all);
@@ -836,5 +893,20 @@ mod tests {
 
         let errs = form.validate_all(&db, "alice");
         assert!(errs.iter().any(|(i, _)| *i == 0), "title required");
+    }
+
+    #[test]
+    fn normalizes_time_estimate_on_blur_and_shows_live_hint() {
+        let db = Database::open_in_memory().unwrap();
+        let mut form = DataEntryForm::new("alice");
+        form.set_active_index(&db, "alice", 4);
+        for ch in "200m".chars() {
+            form.type_char(&db, "alice", ch);
+        }
+        assert_eq!(form.fields[4], "200m");
+        assert_eq!(form.notes[4].as_deref(), Some("= 3h 20m"));
+
+        form.set_active_index(&db, "alice", 5);
+        assert_eq!(form.fields[4], "3h 20m");
     }
 }

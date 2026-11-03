@@ -742,4 +742,72 @@ mod tests {
             .unwrap();
         assert_eq!(created.assignee, "quebert");
     }
+
+    #[test]
+    fn tui_time_estimate_normalization_and_timezone_display() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("tui_tz.db");
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        let type_str = |app: &mut TuiApp, s: &str| {
+            for ch in s.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        };
+        let screen = |terminal: &Terminal<TestBackend>| -> String {
+            let buf = terminal.backend().buffer();
+            (0..buf.area.height)
+                .map(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let tz = wsid_core::local_tz_abbr();
+        press(&mut app, KeyCode::Char('5'));
+        type_str(&mut app, "Timezone task");
+        app.entry_form.set_active_index(&app.db, "alice", 2);
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let form_screen = screen(&terminal);
+        assert!(form_screen.contains(&format!("YYYY-MM-DD HH:MM {tz}")), "label has tz: {form_screen}");
+        assert!(form_screen.contains(&format!("Local time zone: {tz}")), "due row hint has tz: {form_screen}");
+
+        type_str(&mut app, "20990222");
+        app.entry_form.set_active_index(&app.db, "alice", 4);
+        type_str(&mut app, "200m");
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        assert!(screen(&terminal).contains("= 3h 20m"), "live duration preview drawn");
+
+        // Blurring field 4 normalizes `200m` -> `3h 20m`.
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.entry_form.fields[4], "3h 20m");
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(app.form_errors.is_none(), "{:?}", app.form_errors);
+        let task_id = app.all_tasks[0].id.clone();
+        // Store an explicit RFC3339 deadline (as the GUI does) and verify the detail view renders it without raw offset.
+        wsid_core::update_task(
+            &mut app.db,
+            &task_id,
+            wsid_core::UpdateTaskInput { sgdb_date: Some(Some("2099-02-20T20:00:00-05:00".to_string())), ..Default::default() },
+        )
+        .unwrap();
+
+        app.open_detail_for(&task_id);
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let detail_screen = screen(&terminal);
+        assert!(detail_screen.contains("Time Estimate: 3h 20m"), "detail uses format_duration_minutes: {detail_screen}");
+        assert!(detail_screen.contains("2099-02-22 20:00"), "detail renders human deadline: {detail_screen}");
+        assert!(!detail_screen.contains("T20:00:00-05:00"), "detail has no raw RFC3339 time: {detail_screen}");
+    }
 }

@@ -422,6 +422,30 @@ pub fn parse_deadline_naive_date(raw: &str) -> Option<NaiveDate> {
         .map(|(_, dt)| dt.date())
 }
 
+/// Short abbreviation for the local time zone (for example `"EST"` or `"PDT"`).
+pub fn local_tz_abbr() -> String {
+    Local::now().format("%Z").to_string()
+}
+
+/// Formats a stored deadline (`YYYY-MM-DD` or RFC3339 date-time) for human display in the local time zone
+/// (for example `"2027-02-22 20:00 EST"`).
+pub fn format_deadline_display(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    match parse_deadline_datetime("deadline", trimmed) {
+        Ok((_, dt)) => {
+            let tz = dt
+                .and_local_timezone(Local)
+                .single()
+                .map_or_else(local_tz_abbr, |z| z.format("%Z").to_string());
+            format!("{} {tz}", dt.format("%Y-%m-%d %H:%M"))
+        }
+        Err(_) => trimmed.to_string(),
+    }
+}
+
 pub fn validate_dates(sgdb_date: Option<&str>, due_date: Option<&str>) -> Result<()> {
     let sgdb_parsed = match sgdb_date {
         Some(s) => Some(parse_deadline_datetime("sgdb_date", s)?),
@@ -1060,6 +1084,11 @@ mod tests {
         assert_eq!(format_duration_minutes(10080 + 2880 + 180 + 20), "1w 2d 3h 20m");
         assert_eq!(format_duration_minutes(140), "2h 20m");
         assert_eq!(format_duration_minutes(45), "45m");
+
+        // Format deadlines for human display in the local time zone without RFC3339 offsets
+        let display = format_deadline_display("2099-02-22T20:00:00-05:00");
+        assert!(!display.contains("T20:00:00"), "display: {display}");
+        assert!(format_deadline_display("2099-02-22").starts_with("2099-02-22 20:00 "));
     }
 
     #[test]
