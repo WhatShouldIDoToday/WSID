@@ -63,8 +63,42 @@ impl Mask {
         out
     }
 
-    fn digits(value: &str) -> String {
-        value.chars().filter(char::is_ascii_digit).collect()
+    /// Splits a date-time field into its 12 wall-clock digits and an optional time zone
+    /// designator (`Z`, or a signed `±HH[:MM]` offset).
+    fn split_value(value: &str) -> (String, String) {
+        let mut digits = String::new();
+        let mut suffix = String::new();
+        let mut chars = value.chars();
+        for ch in chars.by_ref() {
+            if digits.len() < 12 {
+                if ch.is_ascii_digit() {
+                    digits.push(ch);
+                }
+                continue;
+            }
+            match ch {
+                'Z' | 'z' => {
+                    suffix = "Z".to_string();
+                    break;
+                }
+                '+' | '-' => {
+                    let offset: String = chars
+                        .by_ref()
+                        .filter(char::is_ascii_digit)
+                        .take(4)
+                        .collect();
+                    suffix = format!("{ch}{}", Self::format_offset(&offset));
+                    break;
+                }
+                _ => {}
+            }
+        }
+        (digits, suffix)
+    }
+
+    /// Renders offset digits as `HH`, `HH:M`, or `HH:MM` while the user is typing.
+    fn format_offset(digits: &str) -> String {
+        if digits.len() <= 2 { digits.to_string() } else { format!("{}:{}", &digits[..2], &digits[2..]) }
     }
 
     /// Applies a typed character; returns false if it was rejected.
@@ -75,17 +109,47 @@ impl Mask {
                 true
             }
             Self::DateTime => {
-                if !ch.is_ascii_digit() {
+                let (mut digits, suffix) = Self::split_value(value);
+                if !suffix.is_empty() {
+                    // A suffix is already present: only digits can extend a signed offset.
+                    let Some(sign) = suffix.chars().next().filter(|c| *c == '+' || *c == '-') else {
+                        return false;
+                    };
+                    if !ch.is_ascii_digit() {
+                        return false;
+                    }
+                    let mut offset: String = suffix[1..].chars().filter(char::is_ascii_digit).collect();
+                    if offset.len() >= 4 {
+                        return false;
+                    }
+                    offset.push(ch);
+                    *value = format!("{}{sign}{}", Self::format_digits(&digits), Self::format_offset(&offset));
+                    return true;
+                }
+                if ch.is_ascii_digit() {
+                    if digits.len() >= 12 {
+                        return false;
+                    }
+                    digits.push(ch);
+                    *value = Self::format_digits(&digits);
+                    return true;
+                }
+                if digits.len() < 12 {
                     // Separators and a pasted ISO `T` are implied by the mask.
                     return matches!(ch, '-' | ':' | ' ' | 'T' | 't' | '/');
                 }
-                let mut digits = Self::digits(value);
-                if digits.len() >= 12 {
-                    return false;
+                // Full wall clock: `Z` or a signed offset may follow.
+                match ch {
+                    'Z' | 'z' => {
+                        *value = format!("{}Z", Self::format_digits(&digits));
+                        true
+                    }
+                    '+' | '-' => {
+                        *value = format!("{}{ch}", Self::format_digits(&digits));
+                        true
+                    }
+                    _ => false,
                 }
-                digits.push(ch);
-                *value = Self::format_digits(&digits);
-                true
             }
         }
     }
@@ -96,7 +160,22 @@ impl Mask {
                 value.pop();
             }
             Self::DateTime => {
-                let mut digits = Self::digits(value);
+                let (mut digits, suffix) = Self::split_value(value);
+                if !suffix.is_empty() {
+                    // Peel the suffix first, then fall back to the wall clock.
+                    let mut offset: String = suffix[1..].chars().filter(char::is_ascii_digit).collect();
+                    if let Some(sign) = suffix.chars().next().filter(|c| *c == '+' || *c == '-') {
+                        offset.pop();
+                        *value = if offset.is_empty() {
+                            Self::format_digits(&digits)
+                        } else {
+                            format!("{}{sign}{}", Self::format_digits(&digits), Self::format_offset(&offset))
+                        };
+                    } else {
+                        *value = Self::format_digits(&digits);
+                    }
+                    return;
+                }
                 digits.pop();
                 *value = Self::format_digits(&digits);
             }
@@ -147,6 +226,7 @@ pub fn field_index(field: TaskField) -> usize {
 }
 
 /// Row label, including the local short time zone abbreviation on the Due/SGDB rows.
+/// The optional `Z` / `±HH:MM` suffix is explained by the hint under those rows.
 pub fn field_label(idx: usize) -> String {
     let tz = local_tz_abbr();
     match idx {
@@ -727,7 +807,7 @@ impl DataEntryForm {
             self.notes[idx] = if !trimmed.is_empty() && parse_deadline_datetime("deadline", trimmed).is_ok() {
                 Some(format!("= {}", format_deadline_display(trimmed)))
             } else if self.active_index == idx {
-                Some(format!("Local time zone: {tz} (date-only defaults to 20:00 {tz})"))
+                Some(format!("Local time zone: {tz} — add Z or ±HH:MM to override (date-only defaults to 20:00 {tz})"))
             } else {
                 None
             };
@@ -857,6 +937,74 @@ mod tests {
         let mut v = typed(Mask::DateTime, "2099");
         Mask::DateTime.backspace(&mut v);
         assert_eq!(v, "209");
+    }
+
+    #[test]
+    fn date_mask_accepts_utc_and_numeric_offset_suffixes() {
+        // `Z` marks the wall clock as UTC.
+        assert_eq!(typed(Mask::DateTime, "2099-01-01 12:00Z"), "2099-01-01 12:00Z");
+
+        // Signed offsets, with progressive formatting while typing.
+        let mut v = typed(Mask::DateTime, "2099-01-01 12:00");
+        assert!(Mask::DateTime.push(&mut v, '-'));
+        assert_eq!(v, "2099-01-01 12:00-");
+        for ch in "05".chars() {
+            assert!(Mask::DateTime.push(&mut v, ch));
+        }
+        assert_eq!(v, "2099-01-01 12:00-05");
+        for ch in "30".chars() {
+            assert!(Mask::DateTime.push(&mut v, ch));
+        }
+        assert_eq!(v, "2099-01-01 12:00-05:30");
+        // No fifth offset digit.
+        assert!(!Mask::DateTime.push(&mut v, '9'));
+        // No second designator.
+        assert!(!Mask::DateTime.push(&mut v, 'Z'));
+
+        // Backspace peels the offset, then the wall clock.
+        Mask::DateTime.backspace(&mut v);
+        assert_eq!(v, "2099-01-01 12:00-05:3");
+        Mask::DateTime.backspace(&mut v);
+        Mask::DateTime.backspace(&mut v);
+        assert_eq!(v, "2099-01-01 12:00-0");
+        Mask::DateTime.backspace(&mut v);
+        assert_eq!(v, "2099-01-01 12:00");
+        Mask::DateTime.backspace(&mut v);
+        assert_eq!(v, "2099-01-01 12:0");
+
+        // A pasted full value keeps its suffix intact.
+        assert_eq!(typed(Mask::DateTime, "2099-01-01T12:00+0530"), "2099-01-01 12:00+05:30");
+    }
+
+    #[test]
+    fn form_shows_local_hint_for_utc_and_offset_deadlines() {
+        let db = Database::open_in_memory().unwrap();
+        let mut form = DataEntryForm::new("alice");
+        form.set_active_index(&db, "alice", DUE_DATE);
+        for ch in "2026-11-03 12:00Z".chars() {
+            form.type_char(&db, "alice", ch);
+        }
+        assert_eq!(form.fields[DUE_DATE], "2026-11-03 12:00Z");
+        assert_eq!(form.notes[DUE_DATE].as_deref(), Some(format!("= {}", format_deadline_display("2026-11-03T12:00:00Z")).as_str()));
+
+        // A numeric offset also round-trips through core validation, and stores as UTC.
+        let mut form = DataEntryForm::new("alice");
+        form.set_active_index(&db, "alice", DUE_DATE);
+        for ch in "2099-11-03 12:00-05:00".chars() {
+            form.type_char(&db, "alice", ch);
+        }
+        assert_eq!(form.fields[DUE_DATE], "2099-11-03 12:00-05:00");
+        assert!(
+            form.validate_all(&db, "alice")
+                .iter()
+                .all(|(i, _)| *i != DUE_DATE)
+        );
+        assert_eq!(
+            wsid_core::parse_deadline_datetime("due_date", &form.fields[DUE_DATE])
+                .unwrap()
+                .0,
+            "2099-11-03T17:00:00Z"
+        );
     }
 
     #[test]
