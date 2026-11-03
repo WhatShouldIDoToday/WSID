@@ -48,7 +48,7 @@ pub use notes::{
 pub use relations::{
     get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_parent_chain,
     get_related_tasks, get_transitive_blocked_tasks, get_transitive_blockers, get_transitive_subtasks, link_tasks, list_task_relations,
-    unlink_tasks, would_create_cycle,
+    unlink_tasks, update_task_relation, would_create_cycle,
 };
 pub use scoring::{
     BlockedSummaryGroup, BlockedTaskEntry, BlockerInfo, DEFAULT_FOCUS_LIMIT, DEFAULT_IMPORTANCE_THRESHOLD, DEFAULT_URGENT_HORIZON_DAYS,

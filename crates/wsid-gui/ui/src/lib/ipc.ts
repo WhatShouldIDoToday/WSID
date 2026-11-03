@@ -285,6 +285,11 @@ export const RELATION_LABELS: Record<RelationInputKind, string> = {
   parallel: "Parallel with",
 };
 
+/** Every relation kind in display order (the key order of `RELATION_LABELS`). */
+export const RELATION_INPUT_KINDS = Object.keys(
+  RELATION_LABELS,
+) as RelationInputKind[];
+
 export const QUADRANT_META: Record<
   EisenhowerQuadrant,
   { title: string; subtitle: string; badge: string }
@@ -1001,6 +1006,21 @@ export async function removeRelation(
   return invoke<boolean>("remove_relation", {
     sourceId,
     relation,
+    targetId,
+  });
+}
+
+/** Replaces an existing relation's type in place (atomic; keeps the pair linked if it rolls back). */
+export async function updateRelation(
+  sourceId: string,
+  oldRelation: RelationInputKind,
+  newRelation: RelationInputKind,
+  targetId: string,
+): Promise<TaskRelation> {
+  return invoke<TaskRelation>("update_relation", {
+    sourceId,
+    oldRelation,
+    newRelation,
     targetId,
   });
 }

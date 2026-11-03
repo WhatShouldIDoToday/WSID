@@ -71,19 +71,23 @@ pub(crate) fn link_tasks_in_tx(
 
 /// Removes a relation between `raw_source_id` and `raw_target_id` after canonicalizing `input_kind`.
 pub fn unlink_tasks(db: &mut Database, raw_source_id: &str, input_kind: RelationInputKind, raw_target_id: &str) -> Result<bool> {
+    unlink_tasks_conn(&db.conn, raw_source_id, input_kind, raw_target_id)
+}
+
+fn unlink_tasks_conn(conn: &Connection, raw_source_id: &str, input_kind: RelationInputKind, raw_target_id: &str) -> Result<bool> {
     let source_norm = normalize_task_id(raw_source_id)?;
     let target_norm = normalize_task_id(raw_target_id)?;
     let (canon_src, canon_dst, rel_type) = input_kind.canonicalize(&source_norm, &target_norm);
 
     let affected = if rel_type.is_symmetric() {
-        db.conn.execute(
+        conn.execute(
             "DELETE FROM task_relations
              WHERE relation_type = ?1
                AND ((source_id = ?2 AND target_id = ?3) OR (source_id = ?3 AND target_id = ?2))",
             params![rel_type.as_str(), canon_src, canon_dst],
         )?
     } else {
-        db.conn.execute(
+        conn.execute(
             "DELETE FROM task_relations
              WHERE source_id = ?1 AND target_id = ?2 AND relation_type = ?3",
             params![canon_src, canon_dst, rel_type.as_str()],
@@ -91,6 +95,29 @@ pub fn unlink_tasks(db: &mut Database, raw_source_id: &str, input_kind: Relation
     };
 
     Ok(affected > 0)
+}
+
+/// Replaces the relation between `raw_source_id` and `raw_target_id` from `old_kind` to `new_kind`.
+///
+/// Both steps run in one transaction so inverse rewrites (`blocks` <-> `blocked_by`,
+/// `parent_task_of` <-> `sub_task_of`) on the same task pair do not trip the DAG cycle guard,
+/// and a genuine cycle elsewhere rolls back without losing the original relation.
+pub fn update_task_relation(
+    db: &mut Database,
+    raw_source_id: &str,
+    old_kind: RelationInputKind,
+    new_kind: RelationInputKind,
+    raw_target_id: &str,
+) -> Result<TaskRelation> {
+    if old_kind == new_kind {
+        return link_tasks(db, raw_source_id, new_kind, raw_target_id);
+    }
+
+    let tx = db.conn.transaction()?;
+    unlink_tasks_conn(&tx, raw_source_id, old_kind, raw_target_id)?;
+    let rel = link_tasks_in_tx(&tx, raw_source_id, new_kind, raw_target_id)?;
+    tx.commit()?;
+    Ok(rel)
 }
 
 /// Lists all canonical relations where `raw_task_id` is either `source_id` or `target_id`.
@@ -454,5 +481,53 @@ mod tests {
         let parent_chain_c = get_parent_chain(&db, &c.id).unwrap();
         let parent_ids: Vec<&str> = parent_chain_c.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(parent_ids, vec![b.id.as_str(), a.id.as_str()]);
+    }
+
+    #[test]
+    fn updates_relation_type_atomically() {
+        let mut db = open_in_memory_db().unwrap();
+        let a = make_task(&mut db, "Task A");
+        let b = make_task(&mut db, "Task B");
+        let c = make_task(&mut db, "Task C");
+
+        // Flip the orientation of an existing edge: A blocks B -> A blocked_by B (B blocks A).
+        link_tasks(&mut db, &a.id, RelationInputKind::Blocks, &b.id).unwrap();
+        let flipped = update_task_relation(&mut db, &a.id, RelationInputKind::Blocks, RelationInputKind::BlockedBy, &b.id).unwrap();
+        assert_eq!(flipped.relation_type, RelationType::Blocks);
+        assert_eq!(flipped.source_id, b.id);
+        assert_eq!(flipped.target_id, a.id);
+        assert!(get_direct_blockers(&db, &b.id).unwrap().is_empty());
+        let blockers_a = get_direct_blockers(&db, &a.id).unwrap();
+        assert_eq!(blockers_a.len(), 1);
+        assert_eq!(blockers_a[0].id, b.id);
+
+        // Parent <-> child rewrite on the same pair is allowed (no self-cycle false positive).
+        link_tasks(&mut db, &a.id, RelationInputKind::ParentTaskOf, &c.id).unwrap();
+        let reparented =
+            update_task_relation(&mut db, &a.id, RelationInputKind::ParentTaskOf, RelationInputKind::SubTaskOf, &c.id).unwrap();
+        assert_eq!(reparented.source_id, c.id);
+        assert_eq!(reparented.target_id, a.id);
+        assert_eq!(get_direct_subtasks(&db, &a.id).unwrap().len(), 0);
+        assert_eq!(get_direct_parents(&db, &a.id).unwrap()[0].id, c.id);
+
+        // A genuine cycle rolls back and keeps the original relation intact.
+        // After the flip B blocks A; add A blocks C so B -> A -> C is a chain.
+        link_tasks(&mut db, &a.id, RelationInputKind::Blocks, &c.id).unwrap();
+        link_tasks(&mut db, &c.id, RelationInputKind::Related, &b.id).unwrap();
+        let cycle_err = update_task_relation(&mut db, &c.id, RelationInputKind::Related, RelationInputKind::Blocks, &b.id).unwrap_err();
+        assert!(matches!(cycle_err, WsidError::CycleDetected { .. }));
+        assert!(
+            get_related_tasks(&db, &c.id)
+                .unwrap()
+                .iter()
+                .any(|t| t.id == b.id)
+        );
+        assert!(
+            !get_direct_blocked_tasks(&db, &c.id)
+                .unwrap()
+                .iter()
+                .any(|t| t.id == b.id)
+        );
+        assert_eq!(get_direct_blockers(&db, &a.id).unwrap()[0].id, b.id);
     }
 }

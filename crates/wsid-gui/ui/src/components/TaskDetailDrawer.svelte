@@ -9,6 +9,7 @@
   import RelationPicker, {
     type SelectedRelationEntry,
   } from "./RelationPicker.svelte";
+  import RelationTypeSelect from "./RelationTypeSelect.svelte";
   import ConfirmModal from "./ConfirmModal.svelte";
   import {
     type TaskFullDetail,
@@ -26,6 +27,7 @@
     removeCommentNote,
     addRelation,
     removeRelation,
+    updateRelation,
     dismissSubtaskBlocker,
     pickAttachmentFileDialog,
     attachFileFromDisk,
@@ -569,6 +571,25 @@
       await addRelation(detail.task.id, entry.relation, entry.target_id);
       announce(
         `Linked ${detail.task.id} (${RELATION_LABELS[entry.relation]}) to ${entry.target_id}`,
+      );
+      await refreshDetail(detail.task.id);
+      onDataChanged();
+    } catch (err) {
+      errorMsg = String(err);
+      announce(`Relation error: ${String(err)}`);
+    }
+  }
+
+  async function handleChangeRelation(
+    oldKind: RelationInputKind,
+    newKind: RelationInputKind,
+    targetId: string,
+  ) {
+    if (!detail || oldKind === newKind) return;
+    try {
+      await updateRelation(detail.task.id, oldKind, newKind, targetId);
+      announce(
+        `Changed ${targetId} relation from ${RELATION_LABELS[oldKind]} to ${RELATION_LABELS[newKind]}`,
       );
       await refreshDetail(detail.task.id);
       onDataChanged();
@@ -1151,9 +1172,9 @@
           {#if detail.blockers.length > 0}
             <div>
               <strong>Blocked By ({detail.blockers.length}):</strong>
-              <ul style="margin: 0.35rem 0 0 1.1rem; padding: 0;">
+              <ul class="relation-group-list">
                 {#each detail.blockers as b}
-                  <li style="margin-bottom: 0.35rem;">
+                  <li class="relation-row">
                     <button
                       type="button"
                       class="btn-sm"
@@ -1177,12 +1198,19 @@
                         Convert to Non-Blocking Related
                       </button>
                     {:else}
+                      <RelationTypeSelect
+                        value="blocked_by"
+                        label={`Relation type for ${b.id}`}
+                        onChange={(kind) =>
+                          handleChangeRelation("blocked_by", kind, b.id)}
+                      />
                       <button
                         type="button"
                         class="btn-sm btn-danger"
+                        aria-label={`Unlink blocked by relation to ${b.id}`}
                         onclick={() => handleUnlink("blocked_by", b.id)}
                       >
-                        Unlink
+                        ×
                       </button>
                     {/if}
                   </li>
@@ -1194,114 +1222,165 @@
           {#if detail.blocking.length > 0}
             <div>
               <strong>Blocks ({detail.blocking.length}):</strong>
-              <div class="actions-row">
+              <ul class="relation-group-list">
                 {#each detail.blocking as t}
-                  <button
-                    type="button"
-                    class="btn-sm"
-                    onclick={() => onSelectTask(t.id)}
-                  >
-                    {t.id}: {t.title}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-sm btn-danger"
-                    aria-label={`Unlink blocks relation to ${t.id}`}
-                    onclick={() => handleUnlink("blocks", t.id)}
-                  >
-                    ×
-                  </button>
+                  <li class="relation-row">
+                    <button
+                      type="button"
+                      class="btn-sm"
+                      onclick={() => onSelectTask(t.id)}
+                    >
+                      {t.id}: {t.title}
+                    </button>
+                    <RelationTypeSelect
+                      value="blocks"
+                      label={`Relation type for ${t.id}`}
+                      onChange={(kind) =>
+                        handleChangeRelation("blocks", kind, t.id)}
+                    />
+                    <button
+                      type="button"
+                      class="btn-sm btn-danger"
+                      aria-label={`Unlink blocks relation to ${t.id}`}
+                      onclick={() => handleUnlink("blocks", t.id)}
+                    >
+                      ×
+                    </button>
+                  </li>
                 {/each}
-              </div>
+              </ul>
             </div>
           {/if}
 
           {#if detail.parents.length > 0}
             <div>
               <strong>Sub-task Of ({detail.parents.length}):</strong>
-              <div class="actions-row">
+              <ul class="relation-group-list">
                 {#each detail.parents as t}
-                  <button
-                    type="button"
-                    class="btn-sm"
-                    onclick={() => onSelectTask(t.id)}
-                  >
-                    {t.id}: {t.title}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-sm btn-danger"
-                    onclick={() => handleUnlink("sub_task_of", t.id)}
-                  >
-                    ×
-                  </button>
+                  <li class="relation-row">
+                    <button
+                      type="button"
+                      class="btn-sm"
+                      onclick={() => onSelectTask(t.id)}
+                    >
+                      {t.id}: {t.title}
+                    </button>
+                    <RelationTypeSelect
+                      value="sub_task_of"
+                      label={`Relation type for ${t.id}`}
+                      onChange={(kind) =>
+                        handleChangeRelation("sub_task_of", kind, t.id)}
+                    />
+                    <button
+                      type="button"
+                      class="btn-sm btn-danger"
+                      aria-label={`Unlink sub-task relation to ${t.id}`}
+                      onclick={() => handleUnlink("sub_task_of", t.id)}
+                    >
+                      ×
+                    </button>
+                  </li>
                 {/each}
-              </div>
+              </ul>
             </div>
           {/if}
 
           {#if detail.subtasks.length > 0}
             <div>
               <strong>Subtasks ({detail.subtasks.length}):</strong>
-              <div class="actions-row">
+              <ul class="relation-group-list">
                 {#each detail.subtasks as t}
-                  <button
-                    type="button"
-                    class="btn-sm"
-                    onclick={() => onSelectTask(t.id)}
-                  >
-                    {t.id}: {t.title} ({STATUS_LABELS[t.status]})
-                  </button>
+                  <li class="relation-row">
+                    <button
+                      type="button"
+                      class="btn-sm"
+                      onclick={() => onSelectTask(t.id)}
+                    >
+                      {t.id}: {t.title} ({STATUS_LABELS[t.status]})
+                    </button>
+                    <RelationTypeSelect
+                      value="parent_task_of"
+                      label={`Relation type for subtask ${t.id}`}
+                      onChange={(kind) =>
+                        handleChangeRelation("parent_task_of", kind, t.id)}
+                    />
+                    <button
+                      type="button"
+                      class="btn-sm btn-danger"
+                      aria-label={`Unlink subtask relation to ${t.id}`}
+                      onclick={() => handleUnlink("parent_task_of", t.id)}
+                    >
+                      ×
+                    </button>
+                  </li>
                 {/each}
-              </div>
+              </ul>
             </div>
           {/if}
 
           {#if detail.parallel.length > 0}
             <div>
               <strong>Parallel Tasks ({detail.parallel.length}):</strong>
-              <div class="actions-row">
+              <ul class="relation-group-list">
                 {#each detail.parallel as t}
-                  <button
-                    type="button"
-                    class="btn-sm"
-                    onclick={() => onSelectTask(t.id)}
-                  >
-                    {t.id}: {t.title}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-sm btn-danger"
-                    onclick={() => handleUnlink("parallel", t.id)}
-                  >
-                    ×
-                  </button>
+                  <li class="relation-row">
+                    <button
+                      type="button"
+                      class="btn-sm"
+                      onclick={() => onSelectTask(t.id)}
+                    >
+                      {t.id}: {t.title}
+                    </button>
+                    <RelationTypeSelect
+                      value="parallel"
+                      label={`Relation type for ${t.id}`}
+                      onChange={(kind) =>
+                        handleChangeRelation("parallel", kind, t.id)}
+                    />
+                    <button
+                      type="button"
+                      class="btn-sm btn-danger"
+                      aria-label={`Unlink parallel relation to ${t.id}`}
+                      onclick={() => handleUnlink("parallel", t.id)}
+                    >
+                      ×
+                    </button>
+                  </li>
                 {/each}
-              </div>
+              </ul>
             </div>
           {/if}
 
           {#if detail.related.length > 0}
             <div>
               <strong>Related Tasks ({detail.related.length}):</strong>
-              <div class="actions-row">
+              <ul class="relation-group-list">
                 {#each detail.related as t}
-                  <button
-                    type="button"
-                    class="btn-sm"
-                    onclick={() => onSelectTask(t.id)}
-                  >
-                    {t.id}: {t.title}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-sm btn-danger"
-                    onclick={() => handleUnlink("related", t.id)}
-                  >
-                    ×
-                  </button>
+                  <li class="relation-row">
+                    <button
+                      type="button"
+                      class="btn-sm"
+                      onclick={() => onSelectTask(t.id)}
+                    >
+                      {t.id}: {t.title}
+                    </button>
+                    <RelationTypeSelect
+                      value="related"
+                      label={`Relation type for ${t.id}`}
+                      onChange={(kind) =>
+                        handleChangeRelation("related", kind, t.id)}
+                    />
+                    <button
+                      type="button"
+                      class="btn-sm btn-danger"
+                      aria-label={`Unlink related relation to ${t.id}`}
+                      onclick={() => handleUnlink("related", t.id)}
+                    >
+                      ×
+                    </button>
+                  </li>
                 {/each}
-              </div>
+              </ul>
             </div>
           {/if}
         </div>

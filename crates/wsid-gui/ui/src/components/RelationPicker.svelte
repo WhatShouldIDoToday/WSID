@@ -3,6 +3,8 @@
   import {
     type RelationInputKind,
     type SearchHit,
+    RELATION_INPUT_KINDS,
+    RELATION_LABELS,
     STATUS_LABELS,
     searchTasksData,
   } from "../lib/ipc";
@@ -32,14 +34,11 @@
   let results = $state<SearchHit[]>([]);
   let relationKind = $state<RelationInputKind>("related");
 
-  const RELATION_OPTIONS: { value: RelationInputKind; label: string }[] = [
-    { value: "related", label: "Related to" },
-    { value: "blocks", label: "Blocks" },
-    { value: "blocked_by", label: "Is blocked by" },
-    { value: "sub_task_of", label: "Sub-task of" },
-    { value: "parent_task_of", label: "Parent task of" },
-    { value: "parallel", label: "Parallel with" },
-  ];
+  const RELATION_OPTIONS: { value: RelationInputKind; label: string }[] =
+    RELATION_INPUT_KINDS.map((value) => ({
+      value,
+      label: RELATION_LABELS[value],
+    }));
 
   async function runLookup(q: string) {
     try {

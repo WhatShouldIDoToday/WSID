@@ -5,7 +5,6 @@
     STATUS_LABELS,
     STATUS_ORDER,
     bulkEditTasks,
-    formatDurationMinutes,
   } from "../lib/ipc";
   import { Selection } from "../lib/selection.svelte";
   import {
@@ -13,6 +12,7 @@
     beginPointerDrag,
     type PointerDragState,
   } from "../lib/pointerdrag";
+  import BoardTaskCard from "./BoardTaskCard.svelte";
   import BulkActions from "./BulkActions.svelte";
   import DragGhost from "./DragGhost.svelte";
 
@@ -54,6 +54,11 @@
   const selection = new Selection();
   /** Ids being dragged (the whole selection when the grabbed card is selected). */
   let dragIds = $state<string[]>([]);
+
+  const STATUS_OPTIONS = STATUS_ORDER.map((status) => ({
+    value: status,
+    label: STATUS_LABELS[status],
+  }));
 
   $effect(() => {
     selection.prune(tasks.map((t) => t.id));
@@ -257,107 +262,27 @@
           <ul class="kanban-column-list">
             {#each colTasks as task (task.id)}
               <li>
-                <article
-                  class="task-card draggable-card"
-                  class:is-dragging={dragIds.includes(task.id)}
-                  class:is-selected={selection.has(task.id)}
-                  style="padding: 0.75rem;"
-                  aria-labelledby={`kanban-card-${task.id}`}
-                  onpointerdown={(e) => handlePointerDown(e, task)}
-                >
-                  <!-- HTML5 dragstart/dragend removed: Tauri's file-drop interceptor prevents them from firing. -->
-                  <div class="meta-row" style="justify-content: space-between;">
-                    <span
-                      style="display: inline-flex; align-items: center; gap: 0.5rem;"
-                    >
-                      <input
-                        type="checkbox"
-                        class="select-check"
-                        aria-label={`Select ${task.id}`}
-                        checked={selection.has(task.id)}
-                        onclick={(e) =>
-                          selection.click(
-                            e,
-                            task.id,
-                            colTasks.map((t) => t.id),
-                          )}
-                      />
-                      <span class="task-id-badge">{task.id}</span>
-                      {#if projectFilter === PROJECT_ALL}
-                        <span class="project-badge">{task.project}</span>
-                      {/if}
-                    </span>
-                    <span style="font-size: 0.78rem;">@{task.assignee}</span>
-                  </div>
-
-                  <h4
-                    id={`kanban-card-${task.id}`}
-                    style="margin: 0; font-size: 0.96rem;"
-                  >
-                    {task.title}
-                  </h4>
-
-                  <div class="meta-row" style="font-size: 0.78rem;">
-                    <span>Imp {task.importance}/5</span>
-                    <span>· Diff {task.difficulty}/5</span>
-                    {#if task.time_estimate_minutes !== null}
-                      <span>
-                        · {formatDurationMinutes(task.time_estimate_minutes)}
-                      </span>
-                    {/if}
-                    {#if task.urgent_override}
-                      <span class="badge badge-urgent">Urgent</span>
-                    {/if}
-                    {#if task.attachments.length > 0}
-                      <span class="badge"
-                        >{task.attachments.length} file(s)</span
-                      >
-                    {/if}
-                  </div>
-
-                  {#if task.tags.length > 0}
-                    <div class="meta-row">
-                      {#each task.tags as tag}
-                        <span class="badge badge-tag">#{tag}</span>
-                      {/each}
-                    </div>
-                  {/if}
-
-                  <div
-                    style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.25rem;"
-                  >
-                    <label
-                      for={`move-select-${task.id}`}
-                      style="font-size: 0.76rem; color: var(--text-secondary);"
-                    >
-                      Move {task.id} to column:
-                    </label>
-                    <select
-                      id={`move-select-${task.id}`}
-                      value={task.status}
-                      onchange={(e) =>
-                        moveTasksToStatus(
-                          [task.id],
-                          (e.currentTarget as HTMLSelectElement)
-                            .value as TaskStatus,
-                        )}
-                    >
-                      {#each STATUS_ORDER as targetStatus}
-                        <option value={targetStatus}>
-                          {STATUS_LABELS[targetStatus]}
-                        </option>
-                      {/each}
-                    </select>
-
-                    <button
-                      type="button"
-                      class="btn-sm"
-                      onclick={() => onSelectTask(task.id)}
-                    >
-                      Open Details ({task.id})
-                    </button>
-                  </div>
-                </article>
+                <BoardTaskCard
+                  {task}
+                  titleId={`kanban-card-${task.id}`}
+                  selected={selection.has(task.id)}
+                  dragging={dragIds.includes(task.id)}
+                  showProject={projectFilter === PROJECT_ALL}
+                  urgentLabel={task.urgent_override ? "Urgent" : ""}
+                  moveLabel={`Move ${task.id} to column:`}
+                  moveOptions={STATUS_OPTIONS}
+                  moveValue={task.status}
+                  onMove={(status) =>
+                    void moveTasksToStatus([task.id], status as TaskStatus)}
+                  onOpen={() => onSelectTask(task.id)}
+                  onPointerDown={(e) => handlePointerDown(e, task)}
+                  onSelectClick={(e) =>
+                    selection.click(
+                      e,
+                      task.id,
+                      colTasks.map((t) => t.id),
+                    )}
+                />
               </li>
             {/each}
           </ul>

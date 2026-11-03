@@ -7,9 +7,11 @@
   import RelationPicker, {
     type SelectedRelationEntry,
   } from "./RelationPicker.svelte";
+  import RelationTypeSelect from "./RelationTypeSelect.svelte";
   import {
     type TaskStatus,
     type AttachmentInput,
+    type RelationInputKind,
     STATUS_LABELS,
     STATUS_ORDER,
     RELATION_LABELS,
@@ -316,6 +318,29 @@
 
   function removeStagedRelation(index: number) {
     stagedRelations = stagedRelations.filter((_, idx) => idx !== index);
+  }
+
+  function changeStagedRelation(index: number, kind: RelationInputKind) {
+    const entry = stagedRelations[index];
+    if (!entry || entry.relation === kind) return;
+    const duplicate = stagedRelations.some(
+      (r, idx) =>
+        idx !== index &&
+        r.relation === kind &&
+        r.target_id.toUpperCase() === entry.target_id.toUpperCase(),
+    );
+    if (duplicate) {
+      announce(
+        `Already staged a ${RELATION_LABELS[kind]} relation to ${entry.target_id}`,
+      );
+      return;
+    }
+    stagedRelations = stagedRelations.map((r, idx) =>
+      idx === index ? { ...r, relation: kind } : r,
+    );
+    announce(
+      `Changed relation to ${entry.target_id} to ${RELATION_LABELS[kind]}`,
+    );
   }
 
   async function handlePickAttachment() {
@@ -837,11 +862,16 @@
         {#if stagedRelations.length > 0}
           <div class="staged-relations-list">
             {#each stagedRelations as rel, idx (`${rel.relation}-${rel.target_id}`)}
-              <span class="tag-chip">
-                <span>
-                  <strong>{RELATION_LABELS[rel.relation]}</strong>: #{rel.target_id}
+              <div class="staged-relation-row">
+                <RelationTypeSelect
+                  value={rel.relation}
+                  label={`Relation type for ${rel.target_id}`}
+                  onChange={(kind) => changeStagedRelation(idx, kind)}
+                />
+                <span class="staged-relation-target">
+                  #{rel.target_id}
                   {#if rel.target_title}
-                    ({rel.target_title})
+                    — {rel.target_title}
                   {/if}
                 </span>
                 <button
@@ -852,7 +882,7 @@
                 >
                   ×
                 </button>
-              </span>
+              </div>
             {/each}
           </div>
         {/if}

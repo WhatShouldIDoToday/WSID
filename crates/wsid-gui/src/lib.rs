@@ -18,7 +18,8 @@ use wsid_core::{
     get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
     list_known_projects, list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os, parse_deadline_datetime,
     preview_user_deletion, register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment, search_tasks,
-    transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task, validate_task_draft,
+    transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task, update_task_relation,
+    validate_task_draft,
 };
 
 pub struct GuiAppState {
@@ -749,6 +750,23 @@ fn remove_relation(state: State<'_, SharedGuiState>, source_id: String, relation
 }
 
 #[tauri::command]
+fn update_relation(
+    state: State<'_, SharedGuiState>,
+    source_id: String,
+    old_relation: String,
+    new_relation: String,
+    target_id: String,
+) -> Result<TaskRelation, String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let mut db = guard.open_db()?;
+    let old_kind = RelationInputKind::from_str(old_relation.trim()).map_err(|e| e.to_string())?;
+    let new_kind = RelationInputKind::from_str(new_relation.trim()).map_err(|e| e.to_string())?;
+    update_task_relation(&mut db, &source_id, old_kind, new_kind, &target_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn dismiss_subtask_blocker(state: State<'_, SharedGuiState>, subtask_id: String, dismiss: bool) -> Result<Task, String> {
     let guard = state
         .lock()
@@ -1118,6 +1136,7 @@ pub fn run() {
             remove_comment_note,
             add_relation,
             remove_relation,
+            update_relation,
             dismiss_subtask_blocker,
             attach_file_from_disk,
             attach_clipboard_bytes,

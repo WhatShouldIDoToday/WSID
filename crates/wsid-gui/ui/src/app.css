@@ -5,6 +5,12 @@
   --bg-app: #0f172a;
   --bg-surface: #1e293b;
   --bg-elevated: #283548;
+  /* Board containers (Kanban columns, Eisenhower quadrants) vs. the cards inside
+     them: cards sit one elevation step above their container so they read as
+     distinct objects rather than blending into it. */
+  --bg-column: var(--bg-surface);
+  --bg-card: var(--bg-elevated);
+  --card-shadow: none;
   --bg-input: #0b1120;
   --bg-header-sub: #152033;
   --text-primary: #f8fafc;
@@ -44,6 +50,10 @@
     --bg-app: #f8fafc;
     --bg-surface: #ffffff;
     --bg-elevated: #f1f5f9;
+    --bg-column: #eaeff7;
+    --bg-card: #ffffff;
+    --card-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.06);
     --bg-input: #ffffff;
     --bg-header-sub: #f1f5f9;
     --text-primary: #0f172a;
@@ -72,6 +82,10 @@
   --bg-app: #f8fafc;
   --bg-surface: #ffffff;
   --bg-elevated: #f1f5f9;
+  --bg-column: #eaeff7;
+  --bg-card: #ffffff;
+  --card-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.06);
   --bg-input: #ffffff;
   --bg-header-sub: #f1f5f9;
   --text-primary: #0f172a;
@@ -105,6 +119,9 @@
   --bg-app: #000000;
   --bg-surface: #0a0a0a;
   --bg-elevated: #141414;
+  --bg-column: #0a0a0a;
+  --bg-card: #181818;
+  --card-shadow: none;
   --bg-input: #000000;
   --bg-header-sub: #050505;
   --text-primary: #f8fafc;
@@ -509,10 +526,11 @@ select[aria-invalid="true"] {
 }
 
 .task-card {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 0.5rem;
   padding: 0.9rem;
+  box-shadow: var(--card-shadow);
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
@@ -601,7 +619,7 @@ select[aria-invalid="true"] {
 
 .kanban-column {
   flex: 0 0 clamp(17.5rem, 22vw, 22rem);
-  background: var(--bg-surface);
+  background: var(--bg-column);
   border: 1px solid var(--border-subtle);
   border-radius: 0.5rem;
   padding: 0.75rem;
@@ -660,7 +678,7 @@ select[aria-invalid="true"] {
   border-color: var(--accent-primary);
   background: color-mix(
     in srgb,
-    var(--bg-surface) 90%,
+    var(--bg-column) 90%,
     var(--accent-primary) 10%
   );
   box-shadow: inset 0 0 0 1px var(--accent-primary);
@@ -680,7 +698,7 @@ select[aria-invalid="true"] {
 }
 
 .quadrant-panel {
-  background: var(--bg-surface);
+  background: var(--bg-column);
   border: 1px solid var(--border-subtle);
   border-radius: 0.5rem;
   padding: 1rem;
@@ -1250,6 +1268,41 @@ input[type="text"].tag-compact-input {
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.35rem;
+}
+
+/* Editable relation rows (detail drawer + staged draft relations) */
+.relation-group-list {
+  list-style: none;
+  margin: 0.35rem 0 0 0;
+  padding: 0;
+}
+
+.relation-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.relation-type-select {
+  min-width: 9.5rem;
+  flex: 0 0 auto;
+}
+
+.staged-relation-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.5rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.375rem;
+}
+
+.staged-relation-target {
+  font-size: 0.86rem;
+  color: var(--text-secondary);
 }
 
 /* Relation Picker (bits-ui Combobox + Native Select) */

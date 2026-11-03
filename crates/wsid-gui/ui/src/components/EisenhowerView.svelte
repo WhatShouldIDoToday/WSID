@@ -3,9 +3,7 @@
     type EisenhowerClassification,
     type EisenhowerQuadrant,
     QUADRANT_META,
-    STATUS_LABELS,
     bulkEditTasks,
-    formatDurationMinutes,
   } from "../lib/ipc";
   import { Selection } from "../lib/selection.svelte";
   import {
@@ -13,6 +11,7 @@
     beginPointerDrag,
     type PointerDragState,
   } from "../lib/pointerdrag";
+  import BoardTaskCard from "./BoardTaskCard.svelte";
   import BulkActions from "./BulkActions.svelte";
   import DragGhost from "./DragGhost.svelte";
 
@@ -348,95 +347,38 @@
           >
             {#each qItems as entry (entry.task.id)}
               <li>
-                <article
-                  class="task-card draggable-card"
-                  class:is-dragging={dragIds.includes(entry.task.id)}
-                  class:is-selected={selection.has(entry.task.id)}
-                  style="padding: 0.75rem;"
-                  onpointerdown={(e) => handlePointerDown(e, entry)}
-                >
-                  <!-- HTML5 dragstart/dragend removed: Tauri's file-drop interceptor prevents them from firing. -->
-                  <div class="task-card-header">
-                    <div>
-                      <div class="meta-row" style="margin-bottom: 0.25rem;">
-                        <input
-                          type="checkbox"
-                          class="select-check"
-                          aria-label={`Select ${entry.task.id}`}
-                          checked={selection.has(entry.task.id)}
-                          onclick={(e) =>
-                            selection.click(
-                              e,
-                              entry.task.id,
-                              qItems.map((i) => i.task.id),
-                            )}
-                        />
-                        <span class="task-id-badge">{entry.task.id}</span>
-                        <span class="badge">
-                          {STATUS_LABELS[entry.task.status]}
-                        </span>
-                        <span>@{entry.task.assignee}</span>
-                        {#if entry.task.urgent_override}
-                          <span class="badge badge-urgent">Override</span>
-                        {/if}
-                      </div>
-                      <h4 style="margin: 0; font-size: 0.98rem;">
-                        {entry.task.title}
-                      </h4>
-                    </div>
-
-                    <div
-                      style="display: flex; flex-direction: column; gap: 0.35rem; align-items: stretch;"
-                    >
-                      <button
-                        type="button"
-                        class="btn-sm"
-                        onclick={() => onSelectTask(entry.task.id)}
-                      >
-                        Inspect
-                      </button>
-                      <select
-                        aria-label={`Move ${entry.task.id} to quadrant`}
-                        onchange={(e) => {
-                          const el = e.currentTarget as HTMLSelectElement;
-                          const q = el.value as EisenhowerQuadrant;
-                          el.value = "";
-                          if (q) void moveIdsToQuadrant([entry.task.id], q);
-                        }}
-                      >
-                        <option value="">Move…</option>
-                        {#each QUADRANTS.filter((x) => x !== entry.quadrant) as q}
-                          <option value={q}>{QUADRANT_META[q].title}</option>
-                        {/each}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div class="meta-row" style="font-size: 0.8rem;">
-                    <span>Imp: <strong>{entry.task.importance}/5</strong></span>
-                    <span
-                      >· Diff: <strong>{entry.task.difficulty}/5</strong></span
-                    >
-                    <span>
-                      · Est:
-                      <strong>
-                        {formatDurationMinutes(
-                          entry.task.time_estimate_minutes,
-                        )}
-                      </strong>
-                    </span>
-                    {#if entry.effective_deadline}
-                      <span>
-                        · Deadline: <strong>{entry.effective_deadline}</strong>
-                        {#if entry.slack_days !== null}
-                          ({entry.slack_days.toFixed(1)}d slack)
-                        {/if}
-                      </span>
-                    {:else}
-                      <span>· Undated</span>
-                    {/if}
-                  </div>
-                </article>
+                <BoardTaskCard
+                  task={entry.task}
+                  selected={selection.has(entry.task.id)}
+                  dragging={dragIds.includes(entry.task.id)}
+                  showStatus
+                  showProject={projectFilter === PROJECT_ALL}
+                  urgentLabel={entry.task.urgent_override ? "Override" : ""}
+                  deadline={entry.effective_deadline}
+                  slackDays={entry.slack_days}
+                  estimatePlaceholder
+                  moveLabel={`Move ${entry.task.id} to quadrant:`}
+                  movePlaceholder="Move…"
+                  moveOptions={QUADRANTS.filter(
+                    (x) => x !== entry.quadrant,
+                  ).map((quadrant) => ({
+                    value: quadrant,
+                    label: QUADRANT_META[quadrant].title,
+                  }))}
+                  onMove={(quadrant) =>
+                    void moveIdsToQuadrant(
+                      [entry.task.id],
+                      quadrant as EisenhowerQuadrant,
+                    )}
+                  onOpen={() => onSelectTask(entry.task.id)}
+                  onPointerDown={(e) => handlePointerDown(e, entry)}
+                  onSelectClick={(e) =>
+                    selection.click(
+                      e,
+                      entry.task.id,
+                      qItems.map((i) => i.task.id),
+                    )}
+                />
               </li>
             {/each}
           </ul>
