@@ -936,28 +936,89 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     }
     lines.push(Line::from(""));
 
+    let all_atts = detail.all_attachments();
+    let att_cursor = app.attachment_cursor.min(all_atts.len().saturating_sub(1));
+    let att_header = if app.attachment_focused {
+        format!("Attachments ({}) [FOCUSED — Up/Down:move Space:mark o:open O:all e:alt x:remove Esc:leave]:", all_atts.len())
+    } else if all_atts.is_empty() {
+        "Attachments (0):".to_string()
+    } else {
+        format!("Attachments ({}) — press [a] to focus list, [o] to open, [O] to open all:", all_atts.len())
+    };
     lines.push(Line::from(Span::styled(
-        format!("Attachments ({}):", t.attachments.len()),
+        att_header,
         Style::default()
             .fg(Color::LightCyan)
             .add_modifier(Modifier::BOLD),
     )));
-    if t.attachments.is_empty() {
+    if all_atts.is_empty() {
         lines.push(Line::from("  (None — press [f] to attach a file or [v] to paste from clipboard)"));
     } else {
-        for att in &t.attachments {
-            let kind_badge = if att.is_image() { "IMG" } else { "FILE" };
-            let note_tag = att
-                .note_id
-                .map(|nid| format!(" (Comment #{nid})"))
-                .unwrap_or_default();
-            let alt = if att.description.is_empty() { "(no alt text)" } else { att.description.as_str() };
-            lines.push(Line::from(format!(
-                "  • #{id} [{kind_badge}] {name} ({mime}){note_tag} — Alt: {alt}",
-                id = att.id,
-                name = att.file_name,
-                mime = att.media_type,
-            )));
+        for (idx, att) in all_atts.iter().enumerate() {
+            let selected = idx == att_cursor;
+            let marked = app.attachment_marked.contains(&att.id);
+            let exists = std::path::Path::new(&att.file_path).exists();
+            let missing_suffix = if exists { "" } else { " (missing)" };
+            if app.accessible_mode {
+                let prefix = if selected { "> " } else { "  " };
+                let mark_tag = if marked { "[*] " } else { "" };
+                let kind_short = if att.is_managed { "managed" } else { "linked" };
+                let note_tag = att
+                    .note_id
+                    .map(|nid| format!(" (Comment #{nid})"))
+                    .unwrap_or_default();
+                lines.push(Line::from(format!(
+                    "{prefix}{mark_tag}{num}. {name} ({kind_short}){note_tag} {path}{missing_suffix}",
+                    num = idx + 1,
+                    name = att.file_name,
+                    path = att.file_path,
+                )));
+            } else {
+                let cursor_glyph = if selected { "▶ " } else { "  " };
+                let mark_box = if marked { "[x] " } else { "[ ] " };
+                let kind_badge = if att.is_image() { "IMG" } else { "FILE" };
+                let storage_badge = if att.is_managed { "managed" } else { "linked" };
+                let note_tag = att
+                    .note_id
+                    .map(|nid| format!(" (Comment #{nid})"))
+                    .unwrap_or_default();
+                let alt = if att.description.is_empty() { "(no alt text)" } else { att.description.as_str() };
+                let row_style = if selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "  {cursor_glyph}{mark_box}{num}. #{id} [{kind_badge}/{storage_badge}] {name} ({mime}){note_tag}{missing_suffix} — Alt: {alt}",
+                        num = idx + 1,
+                        id = att.id,
+                        name = att.file_name,
+                        mime = att.media_type,
+                    ),
+                    row_style,
+                )));
+            }
+            if selected {
+                let storage_label = if att.is_managed { "Managed copy" } else { "Linked file" };
+                let meta_size = std::fs::metadata(&att.file_path)
+                    .ok()
+                    .map(|m| format_file_size(m.len()))
+                    .unwrap_or_else(|| "missing".to_string());
+                let added = att
+                    .created_at
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string();
+                let detail_style = Style::default().fg(Color::Gray);
+                lines.push(Line::from(Span::styled(format!("      Path: {}{missing_suffix}", att.file_path), detail_style)));
+                lines.push(Line::from(Span::styled(
+                    format!("      {storage_label} | {} | {meta_size} | Added {added} | Alt: {}", att.media_type, att.alt_text()),
+                    detail_style,
+                )));
+            }
         }
     }
     lines.push(Line::from(""));
@@ -1001,7 +1062,7 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     let inner_area = modal_block.inner(popup_area);
     frame.render_widget(modal_block, popup_area);
 
-    let [body_area, prompt_area] = Layout::vertical([Constraint::Fill(1), Constraint::Length(2)]).areas(inner_area);
+    let [body_area, prompt_area] = Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(inner_area);
 
     let max_scroll = (lines.len() as u16).saturating_sub(body_area.height);
     detail.scroll = detail.scroll.min(max_scroll);
@@ -1018,13 +1079,14 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
     }
 
     let (prompt_line, prompt_prefix_len) = match app.detail_prompt_kind {
-        DetailPromptKind::None => (
-            Line::from(Span::styled(
-                "[E] Edit | [D] Delete | [c] Comment | [N/X] Select/Delete Comment | [f] Attach | [v] Clipboard | [e] Alt | [o] Open | [g] Jump | [u] Unblock | [s/r/d/x] Status | [Esc] Close",
-                Style::default().fg(Color::Cyan),
-            )),
-            None,
-        ),
+        DetailPromptKind::None => {
+            let footer_hint = if app.attachment_focused {
+                "[Up/Down] Move | [Space] Mark | [o] Open | [O] Open All | [e] Edit Alt | [x] Remove | [f] Attach | [v] Clipboard | [Esc] Leave Attachments"
+            } else {
+                "[a] Attachments | [o/O] Open/All | [e] Alt | [f/v] Attach/Clip | [E] Edit | [D] Delete | [c] Comment | [N/X] Note | [g] Jump | [u] Unblock | [s/r/d/x] Status | [Esc] Close"
+            };
+            (Line::from(Span::styled(footer_hint, Style::default().fg(Color::Cyan))), None)
+        }
         DetailPromptKind::AddComment => {
             let prefix = "New Comment (@user, @takenote:user, #ID): ";
             (
@@ -1062,7 +1124,7 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             )
         }
         DetailPromptKind::EditAttachmentDesc => {
-            let prefix = "Edit Attachment Alt (attachment_id | new alt description): ";
+            let prefix = "Edit Attachment Alt Text: ";
             (
                 Line::from(Span::styled(
                     format!("{prefix}{}", app.detail_prompt_input),
@@ -1107,7 +1169,10 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         .borders(panel_borders(Borders::TOP, app.accessible_mode))
         .border_style(Style::default().fg(Color::DarkGray));
     let prompt_inner = prompt_block.inner(prompt_area);
-    let prompt_widget = Paragraph::new(prompt_line).block(prompt_block);
+    let mut prompt_widget = Paragraph::new(prompt_line).block(prompt_block);
+    if prompt_prefix_len.is_none() {
+        prompt_widget = prompt_widget.wrap(Wrap { trim: false });
+    }
     frame.render_widget(prompt_widget, prompt_area);
 
     if let Some(prefix_len) = prompt_prefix_len
@@ -1222,6 +1287,16 @@ fn render_about_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         let mut scrollbar_state = ScrollbarState::new(lines.len()).position(app.about_scroll as usize);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         frame.render_stateful_widget(scrollbar, inner_area, &mut scrollbar_state);
+    }
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 

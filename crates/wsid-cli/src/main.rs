@@ -810,4 +810,123 @@ mod tests {
         assert!(detail_screen.contains("2099-02-22 20:00"), "detail renders human deadline: {detail_screen}");
         assert!(!detail_screen.contains("T20:00:00-05:00"), "detail has no raw RFC3339 time: {detail_screen}");
     }
+
+    #[test]
+    fn tui_detail_modal_attachments_cursor_mark_inspect_edit_and_remove() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("tui_atts.db");
+        let managed_dir = dir.path().join("managed");
+        let linked_file = dir.path().join("spec.txt");
+        let missing_file = dir.path().join("gone.txt");
+        std::fs::write(&linked_file, b"hello world").unwrap();
+        std::fs::write(&missing_file, b"soon gone").unwrap();
+
+        let task_id = {
+            let mut db = Database::open(&db_path).unwrap();
+            let t = wsid_core::create_task(
+                &mut db,
+                wsid_core::CreateTaskInput { title: "Attachment task".to_string(), ..Default::default() },
+                "alice",
+            )
+            .unwrap();
+            wsid_core::attach_existing_file_with_dir(&mut db, &t.id, None, &linked_file, Some("Initial spec"), Some(&managed_dir)).unwrap();
+            wsid_core::save_clipboard_attachment_with_dir(
+                &mut db,
+                &t.id,
+                None,
+                b"PNGDATA",
+                Some("clip.png"),
+                Some("Pasted shot"),
+                Some(&managed_dir),
+            )
+            .unwrap();
+            let note = wsid_core::add_task_note(&mut db, &t.id, "alice", "See attached", false)
+                .unwrap()
+                .note;
+            wsid_core::attach_existing_file_with_dir(&mut db, &t.id, Some(note.id), &missing_file, None, Some(&managed_dir)).unwrap();
+            t.id
+        };
+        std::fs::remove_file(&missing_file).unwrap();
+
+        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(140, 42)).unwrap();
+        let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        let type_str = |app: &mut TuiApp, s: &str| {
+            for ch in s.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        };
+        let screen = |terminal: &Terminal<TestBackend>| -> String {
+            let buf = terminal.backend().buffer();
+            (0..buf.area.height)
+                .map(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        app.open_detail_for(&task_id);
+        assert_eq!(app.detail_modal.as_ref().unwrap().all_attachments().len(), 3);
+
+        // Focus attachments list with 'a'
+        press(&mut app, KeyCode::Char('a'));
+        assert!(app.attachment_focused);
+        assert_eq!(app.attachment_cursor, 0);
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let s0 = screen(&terminal);
+        assert!(s0.contains("Attachments (3) [FOCUSED"), "focused header: {s0}");
+        assert!(s0.contains("Linked file | text/plain | 11 B"), "first attachment details block: {s0}");
+
+        // Move down to managed copy, mark it with Space, then edit alt text with 'e'
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.attachment_cursor, 1);
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.attachment_marked.len(), 1);
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        assert!(screen(&terminal).contains("Managed copy | image/png"), "second attachment details block");
+
+        press(&mut app, KeyCode::Char('e'));
+        for _ in 0.."Pasted shot".len() {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_str(&mut app, "Updated shot: v2");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.detail_modal.as_ref().unwrap().all_attachments()[1].description, "Updated shot: v2");
+
+        // Move down to note attachment whose file was deleted -> shows (missing), and remove it with 'x'
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.attachment_cursor, 2);
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        assert!(screen(&terminal).contains("(missing)"), "missing indicator shown");
+
+        // Accessible mode renders `> 1. name (linked) /path` lines
+        let first_path = app.detail_modal.as_ref().unwrap().all_attachments()[0]
+            .file_path
+            .clone();
+        app.accessible_mode = true;
+        app.attachment_cursor = 0;
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let acc = screen(&terminal);
+        assert!(acc.contains(&format!("> 1. spec.txt (linked) {first_path}")), "accessible attachment line: {acc}");
+        app.accessible_mode = false;
+
+        // Remove the third attachment with 'x', then Esc leaves the list (detail modal stays open)
+        app.attachment_cursor = 2;
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(app.detail_modal.as_ref().unwrap().all_attachments().len(), 2);
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.attachment_focused);
+        assert!(app.detail_modal.is_some());
+    }
 }

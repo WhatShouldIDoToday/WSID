@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -5,11 +6,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
 use wsid_core::{
     AppConfig, BulkTaskPatch, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FieldIssue, FocusPreset,
-    FocusQueueResponse, SearchHit, SearchQuery, Task, TaskNote, TaskStatus, UpdateTaskInput, WsidError, add_task_note,
+    FocusQueueResponse, SearchHit, SearchQuery, Task, TaskAttachment, TaskNote, TaskStatus, UpdateTaskInput, WsidError, add_task_note,
     attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue, create_task_from_draft, delete_task, delete_task_note,
     get_attachment, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
     get_related_tasks, get_task, list_eisenhower_matrix, list_known_users, list_task_notes, list_tasks, normalize_user, open_file_in_os,
-    register_user, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
+    register_user, remove_attachment, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
     update_attachment_description, update_task,
 };
 
@@ -107,6 +108,17 @@ pub struct TaskDetailSnapshot {
     pub scroll: u16,
 }
 
+impl TaskDetailSnapshot {
+    pub fn all_attachments(&self) -> Vec<TaskAttachment> {
+        self.task
+            .attachments
+            .iter()
+            .chain(self.notes.iter().flat_map(|n| n.attachments.iter()))
+            .cloned()
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetailPromptKind {
     None,
@@ -178,6 +190,9 @@ pub struct TuiApp {
     pub detail_prompt_kind: DetailPromptKind,
     pub detail_prompt_input: String,
     pub detail_note_cursor: usize,
+    pub attachment_focused: bool,
+    pub attachment_cursor: usize,
+    pub attachment_marked: BTreeSet<i64>,
 
     /// Validation problems shown in a modal after a failed submit: `(field index, message)`.
     pub form_errors: Option<Vec<(Option<usize>, String)>>,
@@ -246,6 +261,9 @@ impl TuiApp {
             detail_prompt_kind: DetailPromptKind::None,
             detail_prompt_input: String::new(),
             detail_note_cursor: 0,
+            attachment_focused: false,
+            attachment_cursor: 0,
+            attachment_marked: BTreeSet::new(),
             form_errors: None,
             user_switching: false,
             user_input: String::new(),
@@ -306,9 +324,21 @@ impl TuiApp {
 
         if let Some(ref current_detail) = self.detail_modal.clone() {
             if let Ok(updated_snapshot) = self.load_detail_snapshot(&current_detail.task.id, current_detail.scroll) {
+                let atts = updated_snapshot.all_attachments();
+                let valid_ids: BTreeSet<i64> = atts.iter().map(|a| a.id).collect();
+                self.attachment_marked.retain(|id| valid_ids.contains(id));
+                if atts.is_empty() {
+                    self.attachment_cursor = 0;
+                    self.attachment_focused = false;
+                } else {
+                    self.attachment_cursor = self.attachment_cursor.min(atts.len() - 1);
+                }
                 self.detail_modal = Some(updated_snapshot);
             } else {
                 self.detail_modal = None;
+                self.attachment_focused = false;
+                self.attachment_cursor = 0;
+                self.attachment_marked.clear();
             }
         }
 
@@ -385,11 +415,14 @@ impl TuiApp {
         match self.load_detail_snapshot(task_id, 0) {
             Ok(snapshot) => {
                 self.status_message = format!(
-                    "Inspecting [{}] — c:comment, E:edit, D:delete, N/X:select/delete comment, f:attach, o:open, u:unblock, Esc:close",
+                    "Inspecting [{}] — a:attachments, c:comment, E:edit, D:delete, N/X:note, f:attach, o:open, u:unblock, Esc:close",
                     snapshot.task.id
                 );
                 self.detail_modal = Some(snapshot);
                 self.detail_note_cursor = 0;
+                self.attachment_focused = false;
+                self.attachment_cursor = 0;
+                self.attachment_marked.clear();
                 self.detail_prompt_kind = DetailPromptKind::None;
                 self.detail_prompt_input.clear();
             }
@@ -1095,10 +1128,71 @@ impl TuiApp {
         let Some(snapshot) = self.detail_modal.clone() else {
             return;
         };
+        let atts = snapshot.all_attachments();
+
+        if self.attachment_focused {
+            match key.code {
+                KeyCode::Esc => {
+                    self.attachment_focused = false;
+                    self.status_message = "Left attachments list".to_string();
+                    return;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !atts.is_empty() {
+                        if self.attachment_cursor + 1 < atts.len() {
+                            self.attachment_cursor += 1;
+                        }
+                        let att = &atts[self.attachment_cursor];
+                        self.status_message =
+                            format!("Attachment {}/{}: {} ({})", self.attachment_cursor + 1, atts.len(), att.file_name, att.file_path);
+                    }
+                    return;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if !atts.is_empty() {
+                        self.attachment_cursor = self.attachment_cursor.saturating_sub(1);
+                        let att = &atts[self.attachment_cursor.min(atts.len() - 1)];
+                        self.status_message =
+                            format!("Attachment {}/{}: {} ({})", self.attachment_cursor + 1, atts.len(), att.file_name, att.file_path);
+                    }
+                    return;
+                }
+                KeyCode::Char(' ') => {
+                    if let Some(att) = atts.get(self.attachment_cursor.min(atts.len().saturating_sub(1))) {
+                        if !self.attachment_marked.remove(&att.id) {
+                            self.attachment_marked.insert(att.id);
+                            self.status_message = format!("Marked attachment #{} ({})", att.id, att.file_name);
+                        } else {
+                            self.status_message = format!("Unmarked attachment #{} ({})", att.id, att.file_name);
+                        }
+                    }
+                    return;
+                }
+                KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
+                    if let Some(att) = atts.get(self.attachment_cursor.min(atts.len().saturating_sub(1))) {
+                        match remove_attachment(&mut self.db, att.id) {
+                            Ok(_) => {
+                                self.attachment_marked.remove(&att.id);
+                                let _ = self.refresh_all();
+                                self.status_message = format!("Removed attachment #{} ({})", att.id, att.file_name);
+                            }
+                            Err(err) => {
+                                self.status_message = format!("Failed to remove attachment: {err}");
+                            }
+                        }
+                    } else {
+                        self.status_message = "No attachments to remove".to_string();
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
 
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.detail_modal = None;
+                self.attachment_focused = false;
                 self.status_message = "Closed task detail drawer".to_string();
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -1109,6 +1203,21 @@ impl TuiApp {
             KeyCode::Up | KeyCode::Char('k') => {
                 if let Some(ref mut modal) = self.detail_modal {
                     modal.scroll = modal.scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::Char('a') => {
+                if atts.is_empty() {
+                    self.status_message = "No attachments on this task or its notes".to_string();
+                } else {
+                    self.attachment_focused = true;
+                    self.attachment_cursor = self.attachment_cursor.min(atts.len() - 1);
+                    let att = &atts[self.attachment_cursor];
+                    self.status_message = format!(
+                        "Attachments focused ({}/{}) — {} (Up/Down:move, Space:mark, o:open, O:all, e:alt, x:remove, Esc:leave)",
+                        self.attachment_cursor + 1,
+                        atts.len(),
+                        att.file_name
+                    );
                 }
             }
             KeyCode::Char('c') => {
@@ -1129,33 +1238,34 @@ impl TuiApp {
                         .to_string();
             }
             KeyCode::Char('e') => {
-                self.detail_prompt_kind = DetailPromptKind::EditAttachmentDesc;
-                if let Some(first_att) = snapshot.task.attachments.first() {
-                    self.detail_prompt_input = format!("{}: {}", first_att.id, first_att.alt_text());
-                } else {
-                    self.detail_prompt_input.clear();
-                }
-                self.status_message = "Edit attachment alt text: `<attachment_id>: <new description>` — Enter to save".to_string();
-            }
-            KeyCode::Char('o') => {
-                let first_att = snapshot.task.attachments.first().or_else(|| {
-                    snapshot
-                        .notes
-                        .iter()
-                        .flat_map(|n| n.attachments.iter())
-                        .next()
-                });
-                if let Some(att) = first_att {
-                    match open_file_in_os(Path::new(&att.file_path)) {
-                        Ok(()) => {
-                            self.status_message = format!("Opened attachment #{} ({}) at {}", att.id, att.alt_text(), att.file_path);
-                        }
-                        Err(err) => {
-                            self.status_message = format!("Failed to open {}: {err}", att.file_path);
-                        }
-                    }
+                if let Some(att) = atts.get(self.attachment_cursor.min(atts.len().saturating_sub(1))) {
+                    self.detail_prompt_kind = DetailPromptKind::EditAttachmentDesc;
+                    self.detail_prompt_input = att.description.clone();
+                    self.status_message = format!("Edit alt text for {} (#{}) — Enter to save, Esc to cancel", att.file_name, att.id);
                 } else {
                     self.status_message = "No attachments on this task or its notes".to_string();
+                }
+            }
+            KeyCode::Char('o') => {
+                if atts.is_empty() {
+                    self.status_message = "No attachments on this task or its notes".to_string();
+                } else {
+                    let targets: Vec<&TaskAttachment> = if !self.attachment_marked.is_empty() {
+                        atts.iter()
+                            .filter(|a| self.attachment_marked.contains(&a.id))
+                            .collect()
+                    } else {
+                        vec![&atts[self.attachment_cursor.min(atts.len() - 1)]]
+                    };
+                    self.open_attachment_targets(&targets);
+                }
+            }
+            KeyCode::Char('O') => {
+                if atts.is_empty() {
+                    self.status_message = "No attachments on this task or its notes".to_string();
+                } else {
+                    let targets: Vec<&TaskAttachment> = atts.iter().collect();
+                    self.open_attachment_targets(&targets);
                 }
             }
             KeyCode::Char('u') => {
@@ -1298,15 +1408,12 @@ impl TuiApp {
                 }
             }
             DetailPromptKind::EditAttachmentDesc => {
-                let Some((id_str, new_desc)) = input.split_once(':') else {
-                    self.status_message = "Expected format `<attachment_id>: <new description>`".to_string();
+                let atts = snapshot.all_attachments();
+                let Some(att) = atts.get(self.attachment_cursor.min(atts.len().saturating_sub(1))) else {
+                    self.status_message = "No attachments on this task or its notes".to_string();
                     return;
                 };
-                let Ok(att_id) = id_str.trim().parse::<i64>() else {
-                    self.status_message = format!("Invalid attachment ID '{}'", id_str.trim());
-                    return;
-                };
-                match update_attachment_description(&mut self.db, att_id, new_desc.trim()) {
+                match update_attachment_description(&mut self.db, att.id, &input) {
                     Ok(updated) => {
                         let _ = self.refresh_all();
                         let _ = get_attachment(&self.db, updated.id);
@@ -1357,6 +1464,26 @@ impl TuiApp {
                     Err(err) => self.status_message = format!("Failed to delete comment: {err}"),
                 }
             }
+        }
+    }
+
+    fn open_attachment_targets(&mut self, targets: &[&TaskAttachment]) {
+        let mut opened = Vec::new();
+        let mut errors = Vec::new();
+        for att in targets {
+            match open_file_in_os(Path::new(&att.file_path)) {
+                Ok(()) => opened.push(format!("#{} ({})", att.id, att.file_name)),
+                Err(err) => errors.push(format!("{}: {err}", att.file_path)),
+            }
+        }
+        if errors.is_empty() {
+            if let [att] = targets {
+                self.status_message = format!("Opened attachment #{} ({}) at {}", att.id, att.alt_text(), att.file_path);
+            } else {
+                self.status_message = format!("Opened {} attachments: {}", opened.len(), opened.join(", "));
+            }
+        } else {
+            self.status_message = format!("Failed to open: {}", errors.join("; "));
         }
     }
 
