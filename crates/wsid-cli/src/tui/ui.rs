@@ -69,6 +69,10 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp) {
         render_user_modal(frame, frame.area(), app);
     }
 
+    if app.settings.kind_modal_open {
+        render_kind_modal(frame, frame.area(), app);
+    }
+
     if app.form_errors.is_some() {
         render_form_error_modal(frame, frame.area(), app);
     }
@@ -900,7 +904,6 @@ fn render_settings_prompt(frame: &mut Frame, area: Rect, app: &TuiApp) {
     let (label, value) = match app.settings.mode {
         SettingsMode::EditFocusLimit => ("Focus queue size (1-50): ", app.settings.focus_limit_input.as_str()),
         SettingsMode::EditDatabasePath => ("Database path or folder: ", app.settings.database_path_input.as_str()),
-        SettingsMode::EditUserKind => ("User kind: ", app.settings.user_kind_input.as_str()),
         SettingsMode::Browse => return,
     };
     let line = Line::from(vec![
@@ -1097,6 +1100,7 @@ fn focus_hints(app: &TuiApp) -> String {
             PickerMode::Filter => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Ctrl+P] Switch project | [Esc] Cancel".to_string(),
             PickerMode::Switch => "[type] Search or new name | [Up/Down] Select | [Enter] Switch | [Esc] Cancel".to_string(),
         },
+        FocusContext::KindModal => "[type] Search or new kind | [Up/Down] Select | [Enter] Apply | [Esc] Cancel".to_string(),
         FocusContext::UserModal => match app.user_modal_mode {
             PickerMode::Filter => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Ctrl+U] Switch user | [Esc] Cancel".to_string(),
             PickerMode::Switch => "[type] Search or new name | [Up/Down] Select | [Enter] Switch | [Esc] Cancel".to_string(),
@@ -1142,7 +1146,6 @@ fn focus_hints(app: &TuiApp) -> String {
             }
             SettingsMode::EditFocusLimit => "[0-9] Size | [Enter] Save | [Esc] Cancel".to_string(),
             SettingsMode::EditDatabasePath => "[type] Path | [Enter] Open | [Esc] Cancel".to_string(),
-            SettingsMode::EditUserKind => "[type] Kind | [Enter] Save | [Esc] Cancel".to_string(),
         },
     }
 }
@@ -1636,6 +1639,23 @@ fn render_user_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
             options: app.filtered_user_options(),
             current: app.user_modal_current(),
             empty: "  No matching users",
+        },
+    );
+}
+
+fn render_kind_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    let title = format!(" Kind for @{} ", app.settings.user_kind_target);
+    render_filter_modal(
+        frame,
+        area,
+        app.accessible_mode,
+        &FilterModal {
+            title: &title,
+            query: &app.settings.user_kind_input,
+            selected: app.settings.kind_selected,
+            options: app.filtered_kind_options(),
+            current: app.kind_modal_current(),
+            empty: "  No matching kinds",
         },
     );
 }

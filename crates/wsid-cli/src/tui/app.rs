@@ -167,6 +167,8 @@ pub enum FocusContext {
     FormErrorModal,
     AboutModal,
     ProjectModal,
+    /// The Settings user-kind picker.
+    KindModal,
     /// The user filter modal (per-view user scope) owns input while it is open.
     UserModal,
     /// A prompt inside the task detail modal (comment, attach, jump, delete...).
@@ -219,7 +221,6 @@ pub enum SettingsMode {
     Browse,
     EditFocusLimit,
     EditDatabasePath,
-    EditUserKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,7 +258,10 @@ pub struct SettingsState {
     pub focus_limit_input: String,
     pub database_path_input: String,
     pub user_kind_target: String,
+    /// Search text of the kind picker.
     pub user_kind_input: String,
+    pub kind_modal_open: bool,
+    pub kind_selected: usize,
     pub delete_confirm: Option<UserDeleteConfirm>,
     focus_limit_history: TextHistory,
     database_path_history: TextHistory,
@@ -669,6 +673,8 @@ impl TuiApp {
             FocusContext::AboutModal
         } else if self.project_modal_open {
             FocusContext::ProjectModal
+        } else if self.settings.kind_modal_open {
+            FocusContext::KindModal
         } else if self.user_modal_open {
             FocusContext::UserModal
         } else if self.detail_modal.is_some() {
@@ -708,6 +714,7 @@ impl TuiApp {
             FocusContext::FormErrorModal => self.dismiss_form_errors(key),
             FocusContext::AboutModal => self.handle_about_modal_key(key),
             FocusContext::ProjectModal => self.handle_project_modal_key(key),
+            FocusContext::KindModal => self.handle_kind_modal_key(key),
             FocusContext::UserModal => self.handle_user_modal_key(key),
             FocusContext::DetailPrompt(_) | FocusContext::DetailAttachments | FocusContext::DetailModal => {
                 self.handle_detail_modal_key(key);
@@ -2125,6 +2132,16 @@ impl TuiApp {
                     .record(&before, EditKind::Discrete);
                 self.project_modal_selected = 0;
             }
+            FocusContext::KindModal => {
+                let before = self.settings.user_kind_input.clone();
+                self.settings
+                    .user_kind_input
+                    .push_str(&text_edit::flatten_paste(text));
+                self.settings
+                    .user_kind_history
+                    .record(&before, EditKind::Discrete);
+                self.settings.kind_selected = 0;
+            }
             FocusContext::UserModal => {
                 let before = self.user_modal_query.clone();
                 self.user_modal_query
@@ -2177,14 +2194,6 @@ impl TuiApp {
                             .database_path_history
                             .record(&before, EditKind::Discrete);
                         self.update_database_path_prompt();
-                    }
-                    SettingsMode::EditUserKind => {
-                        let before = self.settings.user_kind_input.clone();
-                        self.settings.user_kind_input.push_str(&flat);
-                        self.settings
-                            .user_kind_history
-                            .record(&before, EditKind::Discrete);
-                        self.update_user_kind_prompt();
                     }
                     SettingsMode::Browse => {}
                 }
@@ -3043,10 +3052,6 @@ impl TuiApp {
                 self.handle_settings_database_path_key(key);
                 return;
             }
-            SettingsMode::EditUserKind => {
-                self.handle_settings_user_kind_key(key);
-                return;
-            }
             SettingsMode::Browse => {}
         }
 
@@ -3107,25 +3112,62 @@ impl TuiApp {
         else {
             return;
         };
-        let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
-        self.settings.user_kind_input = kinds
-            .get(user)
-            .cloned()
-            .unwrap_or_else(|| wsid_core::DEFAULT_USER_KIND.to_string());
         self.settings.user_kind_target = user.to_string();
+        self.settings.kind_modal_open = false;
+        self.settings.kind_selected = 0;
+        self.settings.user_kind_input.clear();
         self.settings.user_kind_history.clear();
-        self.settings.mode = SettingsMode::EditUserKind;
-        self.update_user_kind_prompt();
+        self.settings.kind_modal_open = true;
+        let current = self.kind_modal_current();
+        self.settings.kind_selected = self
+            .filtered_kind_options()
+            .iter()
+            .position(|(value, _)| *value == current)
+            .unwrap_or(0);
+        self.status_message = format!("Kind for @{user} — type to search or add a kind, Enter to apply, Esc to cancel");
     }
 
-    fn update_user_kind_prompt(&mut self) {
-        self.status_message = format!("Kind for @{}: {}_", self.settings.user_kind_target, self.settings.user_kind_input);
+    /// The target user's current kind.
+    pub fn kind_modal_current(&self) -> String {
+        self.user_kinds
+            .get(&self.settings.user_kind_target)
+            .cloned()
+            .unwrap_or_else(|| wsid_core::DEFAULT_USER_KIND.to_string())
     }
 
-    fn handle_settings_user_kind_key(&mut self, key: KeyEvent) {
+    /// Known kinds (always including `human`) narrowed by the search text, plus the typed text as a new kind when valid.
+    pub(crate) fn filtered_kind_options(&self) -> Vec<(String, String)> {
+        let mut kinds: Vec<String> = self.user_kinds.values().cloned().collect();
+        kinds.push(wsid_core::DEFAULT_USER_KIND.to_string());
+        kinds.sort();
+        kinds.dedup();
+        let typed = self.settings.user_kind_input.trim().to_ascii_lowercase();
+        let mut options: Vec<(String, String)> = kinds
+            .into_iter()
+            .filter(|kind| typed.is_empty() || kind.contains(&typed))
+            .map(|kind| {
+                let count = self.user_kinds.values().filter(|k| **k == kind).count();
+                let label = match count {
+                    0 => kind.clone(),
+                    1 => format!("{kind} · 1 user"),
+                    n => format!("{kind} · {n} users"),
+                };
+                (kind, label)
+            })
+            .collect();
+        if !typed.is_empty()
+            && let Ok(normalized) = wsid_core::normalize_user_kind(&typed)
+            && !options.iter().any(|(value, _)| *value == normalized)
+        {
+            options.push((normalized.clone(), format!("{normalized} · new kind")));
+        }
+        options
+    }
+
+    fn handle_kind_modal_key(&mut self, key: KeyEvent) {
         if let Some(changed) = apply_text_shortcut(&key, &mut self.settings.user_kind_input, &mut self.settings.user_kind_history) {
             if changed {
-                self.update_user_kind_prompt();
+                self.settings.kind_selected = 0;
             }
             return;
         }
@@ -3134,35 +3176,64 @@ impl TuiApp {
         }
         match key.code {
             KeyCode::Esc => {
-                self.settings.mode = SettingsMode::Browse;
-                self.settings.user_kind_input.clear();
+                self.close_kind_modal();
                 self.status_message = "Cancelled kind change".to_string();
+            }
+            KeyCode::Enter => {
+                if let Some((kind, _)) = self
+                    .filtered_kind_options()
+                    .get(self.settings.kind_selected)
+                    .cloned()
+                {
+                    self.submit_user_kind(&kind);
+                } else {
+                    self.status_message = "No matching kind — type a name to add one".to_string();
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let len = self.filtered_kind_options().len();
+                if len > 0 {
+                    self.settings.kind_selected = (self.settings.kind_selected + 1) % len;
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                let len = self.filtered_kind_options().len();
+                if len > 0 {
+                    self.settings.kind_selected = self
+                        .settings
+                        .kind_selected
+                        .checked_sub(1)
+                        .unwrap_or(len - 1);
+                }
             }
             KeyCode::Backspace => {
                 self.settings.user_kind_input.pop();
-                self.update_user_kind_prompt();
+                self.settings.kind_selected = 0;
             }
-            KeyCode::Enter => self.submit_user_kind(),
             KeyCode::Char(ch) => {
                 self.settings.user_kind_input.push(ch);
-                self.update_user_kind_prompt();
+                self.settings.kind_selected = 0;
             }
             _ => {}
         }
     }
 
-    fn submit_user_kind(&mut self) {
+    fn close_kind_modal(&mut self) {
+        self.settings.kind_modal_open = false;
+        self.settings.user_kind_input.clear();
+        self.settings.kind_selected = 0;
+        self.settings.user_kind_history.clear();
+    }
+
+    fn submit_user_kind(&mut self, kind: &str) {
         let user = self.settings.user_kind_target.clone();
-        let kind = self.settings.user_kind_input.clone();
-        // Users known only from task fields have no row yet; validate the kind first, then register.
-        let result = wsid_core::normalize_user_kind(&kind)
-            .and_then(|_| wsid_core::register_user(&mut self.db, &user))
-            .and_then(|_| wsid_core::set_user_kind(&mut self.db, &user, &kind));
+        // Users known only from task fields have no row yet; register them first.
+        let result = wsid_core::register_user(&mut self.db, &user).and_then(|_| wsid_core::set_user_kind(&mut self.db, &user, kind));
         match result {
             Ok(()) => {
-                self.settings.mode = SettingsMode::Browse;
-                self.settings.user_kind_input.clear();
-                self.status_message = format!("Set @{user} kind");
+                self.close_kind_modal();
+                let _ = self.refresh_all();
+                self.status_message = format!("Set @{user} kind to {kind}");
             }
             Err(err) => self.status_message = format!("Cannot set kind: {err}"),
         }

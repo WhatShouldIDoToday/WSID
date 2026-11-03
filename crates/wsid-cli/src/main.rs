@@ -1571,15 +1571,13 @@ mod tests {
             .position(|row| row.label == "@bob")
             .unwrap();
         press(&mut app, KeyCode::Char('t'));
-        assert_eq!(app.settings.mode, SettingsMode::EditUserKind);
-        for _ in 0..5 {
-            press(&mut app, KeyCode::Backspace);
-        }
+        assert!(app.settings.kind_modal_open);
         for ch in "jira".chars() {
             press(&mut app, KeyCode::Char(ch));
         }
+        assert_eq!(app.filtered_kind_options(), vec![("jira".to_string(), "jira · new kind".to_string())]);
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.settings.mode, SettingsMode::Browse, "{}", app.status_message);
+        assert!(!app.settings.kind_modal_open, "{}", app.status_message);
         assert_eq!(
             wsid_core::list_user_kinds(&app.db)
                 .unwrap()
