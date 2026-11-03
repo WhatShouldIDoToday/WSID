@@ -333,6 +333,10 @@ pub struct StatusTransitionOutcome {
     pub auto_completed_parent_tasks: Vec<Task>,
 }
 
+fn default_project() -> String {
+    crate::tasks::DEFAULT_PROJECT.to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
@@ -349,6 +353,8 @@ pub struct Task {
     pub urgent_override: bool,
     pub manual_priority: i8,
     pub tags: Vec<String>,
+    #[serde(default = "default_project")]
+    pub project: String,
     #[serde(default)]
     pub attachments: Vec<TaskAttachment>,
     pub reporter: String,
@@ -388,6 +394,7 @@ pub struct CreateTaskInput {
     pub urgent_override: Option<bool>,
     pub manual_priority: Option<i8>,
     pub tags: Vec<String>,
+    pub project: Option<String>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
@@ -409,6 +416,7 @@ pub struct UpdateTaskInput {
     pub urgent_override: Option<bool>,
     pub manual_priority: Option<i8>,
     pub tags: Option<Vec<String>>,
+    pub project: Option<String>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,

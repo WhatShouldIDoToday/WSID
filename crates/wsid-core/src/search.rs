@@ -9,7 +9,7 @@ use crate::attachments::load_task_description_attachments;
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
-use crate::tasks::{load_task_tags, map_task_row, normalize_tag, normalize_user};
+use crate::tasks::{ALL_PROJECTS, load_task_tags, map_task_row, normalize_project, normalize_tag, normalize_user};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchQuery {
@@ -19,6 +19,8 @@ pub struct SearchQuery {
     pub assignee: Option<String>,
     pub reporter: Option<String>,
     pub evaluator: Option<String>,
+    /// Restricts results to one project. [`crate::tasks::ALL_PROJECTS`] (or `None`) means every project.
+    pub project: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -121,11 +123,19 @@ fn load_filtered_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Ta
             t.id, t.title, t.description, t.status, t.origin_kind, t.origin_note_id,
             t.due_date, t.sgdb_date, t.time_estimate_minutes, t.difficulty, t.importance,
             t.urgent_override, t.manual_priority, t.reporter, t.assignee, t.evaluator,
-            t.created_at, t.updated_at, t.completed_at
+            t.created_at, t.updated_at, t.completed_at, t.project
          FROM tasks t
          WHERE 1 = 1",
     );
     let mut bind_values: Vec<String> = Vec::new();
+
+    if let Some(ref raw_project) = search.project
+        && !raw_project.trim().is_empty()
+        && raw_project.trim() != ALL_PROJECTS
+    {
+        bind_values.push(normalize_project(raw_project)?);
+        sql.push_str(&format!(" AND t.project = ?{}", bind_values.len()));
+    }
 
     if let Some(status) = search.status {
         bind_values.push(status.as_str().to_string());

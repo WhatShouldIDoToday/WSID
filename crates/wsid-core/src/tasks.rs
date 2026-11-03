@@ -43,6 +43,48 @@ pub fn normalize_tags(raw_tags: &[String]) -> Result<Vec<String>> {
     Ok(normalized.into_iter().collect())
 }
 
+/// The project every task belongs to unless another is chosen.
+pub const DEFAULT_PROJECT: &str = "default";
+
+/// Sentinel accepted by filters and selectors meaning "every project". Never stored on a task.
+pub const ALL_PROJECTS: &str = "all";
+
+/// Normalizes a project name into a lowercase token matching `^[a-z0-9_-]+$`.
+///
+/// An empty name means [`DEFAULT_PROJECT`]. `"all"` is reserved for filters and is
+/// rejected so it can never end up as a real project.
+pub fn normalize_project(raw: &str) -> Result<String> {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    if trimmed.is_empty() {
+        return Ok(DEFAULT_PROJECT.to_string());
+    }
+    if !trimmed
+        .bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+    {
+        return Err(WsidError::Validation(format!(
+            "invalid project '{raw}': projects must be single-word tokens containing only letters, digits, '-', or '_'"
+        )));
+    }
+    if trimmed == ALL_PROJECTS {
+        return Err(WsidError::Validation(format!("'{ALL_PROJECTS}' is reserved and cannot be used as a project name")));
+    }
+    Ok(trimmed)
+}
+
+/// Lists the projects that currently hold tasks, with [`DEFAULT_PROJECT`] always first.
+pub fn list_known_projects(db: &Database) -> Result<Vec<String>> {
+    let mut projects = vec![DEFAULT_PROJECT.to_string()];
+    let mut stmt = db
+        .conn
+        .prepare("SELECT DISTINCT project FROM tasks WHERE project != ?1 ORDER BY project ASC")?;
+    let rows = stmt.query_map([DEFAULT_PROJECT], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        projects.push(row?);
+    }
+    Ok(projects)
+}
+
 /// Normalizes a user identifier into a lowercase token matching `^[a-z0-9_-]+$`
 /// (stripping an optional leading `@` and trimming whitespace).
 pub fn normalize_user(raw: &str) -> Result<String> {
@@ -602,6 +644,7 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     };
 
     let tags = normalize_tags(&input.tags)?;
+    let project = normalize_project(input.project.as_deref().unwrap_or_default())?;
 
     let now_dt = Utc::now();
     let now_str = format_utc(now_dt);
@@ -614,12 +657,12 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
             id, title, description, status, origin_kind, origin_note_id,
             due_date, sgdb_date, time_estimate_minutes, difficulty, importance,
             urgent_override, manual_priority, reporter, assignee, evaluator,
-            created_at, updated_at, completed_at
+            created_at, updated_at, completed_at, project
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6,
             ?7, ?8, ?9, ?10, ?11,
             ?12, ?13, ?14, ?15, ?16,
-            ?17, ?18, ?19
+            ?17, ?18, ?19, ?20
         )",
         params![
             id,
@@ -641,6 +684,7 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
             now_str,
             now_str,
             completed_at_str,
+            project,
         ],
     )?;
 
@@ -648,6 +692,7 @@ pub(crate) fn create_task_in_tx(conn: &Connection, input: CreateTaskInput, defau
     let _ = register_user_conn(conn, &reporter);
     let _ = register_user_conn(conn, &assignee);
     let _ = register_user_conn(conn, &evaluator);
+    crate::notes::apply_rich_text_references(conn, &id, &description)?;
     Ok(id)
 }
 
@@ -664,7 +709,7 @@ pub(crate) fn get_task_conn(conn: &Connection, raw_id: &str) -> Result<Task> {
                 id, title, description, status, origin_kind, origin_note_id,
                 due_date, sgdb_date, time_estimate_minutes, difficulty, importance,
                 urgent_override, manual_priority, reporter, assignee, evaluator,
-                created_at, updated_at, completed_at
+                created_at, updated_at, completed_at, project
              FROM tasks
              WHERE id = ?1",
             [&id],
@@ -688,7 +733,7 @@ pub(crate) fn list_tasks_conn(conn: &Connection) -> Result<Vec<Task>> {
             id, title, description, status, origin_kind, origin_note_id,
             due_date, sgdb_date, time_estimate_minutes, difficulty, importance,
             urgent_override, manual_priority, reporter, assignee, evaluator,
-            created_at, updated_at, completed_at
+            created_at, updated_at, completed_at, project
          FROM tasks
          ORDER BY created_at ASC, rowid ASC",
     )?;
@@ -737,6 +782,10 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
     let importance = input.importance.unwrap_or(current.importance);
     let urgent_override = input.urgent_override.unwrap_or(current.urgent_override);
     let manual_priority = input.manual_priority.unwrap_or(current.manual_priority);
+    let project = match input.project {
+        Some(p) => normalize_project(&p)?,
+        None => current.project.clone(),
+    };
 
     let reporter = match input.reporter {
         Some(r) => normalize_user(&r)?,
@@ -804,8 +853,9 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
             assignee = ?12,
             evaluator = ?13,
             updated_at = ?14,
-            completed_at = ?15
-         WHERE id = ?16",
+            completed_at = ?15,
+            project = ?16
+         WHERE id = ?17",
         params![
             title,
             description,
@@ -822,6 +872,7 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
             evaluator,
             now_str,
             completed_at_str,
+            project,
             current.id,
         ],
     )?;
@@ -833,6 +884,7 @@ pub fn update_task(db: &mut Database, raw_id: &str, input: UpdateTaskInput) -> R
     let _ = register_user_conn(&tx, &reporter);
     let _ = register_user_conn(&tx, &assignee);
     let _ = register_user_conn(&tx, &evaluator);
+    crate::notes::apply_rich_text_references(&tx, &current.id, &description)?;
 
     tx.commit()?;
     get_task(db, &current.id)
@@ -918,6 +970,7 @@ pub(crate) fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         urgent_override: urgent_i64 != 0,
         manual_priority: i8::try_from(manual_priority_i64).unwrap_or(3).clamp(1, 5),
         tags: Vec::new(),
+        project: row.get(19)?,
         attachments: Vec::new(),
         reporter: row.get(13)?,
         assignee: row.get(14)?,
@@ -1321,5 +1374,88 @@ mod tests {
             let value = c["value"].as_str().unwrap();
             assert_eq!(validate_not_past("due_date", value).is_err(), c["past"].as_bool().unwrap(), "past {value:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod project_tests {
+    use super::*;
+    use crate::db::open_in_memory_db;
+    use crate::relations::get_related_tasks;
+
+    #[test]
+    fn projects_default_normalize_and_reject_reserved_all() {
+        assert_eq!(normalize_project("").unwrap(), DEFAULT_PROJECT);
+        assert_eq!(normalize_project("  Backend ").unwrap(), "backend");
+        assert_eq!(normalize_project("q3_2026").unwrap(), "q3_2026");
+        assert!(normalize_project("two words").is_err());
+        assert!(normalize_project("all").is_err(), "'all' is the filter sentinel");
+        assert!(normalize_project("ALL").is_err());
+    }
+
+    #[test]
+    fn tasks_default_to_default_project_and_list_known_projects() {
+        let mut db = open_in_memory_db().unwrap();
+        let a = create_task(&mut db, CreateTaskInput { title: "A".to_string(), ..Default::default() }, "alice").unwrap();
+        assert_eq!(a.project, DEFAULT_PROJECT);
+        create_task(
+            &mut db,
+            CreateTaskInput { title: "B".to_string(), project: Some("Backend".to_string()), ..Default::default() },
+            "alice",
+        )
+        .unwrap();
+
+        assert_eq!(list_known_projects(&db).unwrap(), vec!["default".to_string(), "backend".to_string()]);
+
+        let updated = update_task(&mut db, &a.id, UpdateTaskInput { project: Some("ops".to_string()), ..Default::default() }).unwrap();
+        assert_eq!(updated.project, "ops");
+        assert_eq!(get_task(&db, &a.id).unwrap().project, "ops");
+    }
+
+    #[test]
+    fn search_filters_by_project_and_all_means_every_project() {
+        use crate::search::{SearchQuery, search_tasks};
+        let mut db = open_in_memory_db().unwrap();
+        create_task(&mut db, CreateTaskInput { title: "In default".to_string(), ..Default::default() }, "alice").unwrap();
+        create_task(
+            &mut db,
+            CreateTaskInput { title: "In backend".to_string(), project: Some("backend".to_string()), ..Default::default() },
+            "alice",
+        )
+        .unwrap();
+
+        let default_only = search_tasks(&db, &SearchQuery { project: Some("default".to_string()), ..Default::default() }).unwrap();
+        assert_eq!(default_only.len(), 1);
+        assert_eq!(default_only[0].task.title, "In default");
+
+        let every = search_tasks(&db, &SearchQuery { project: Some(ALL_PROJECTS.to_string()), ..Default::default() }).unwrap();
+        assert_eq!(every.len(), 2);
+    }
+
+    #[test]
+    fn description_mentions_register_users_and_link_existing_task_refs() {
+        let mut db = open_in_memory_db().unwrap();
+        let target = create_task(&mut db, CreateTaskInput { title: "Target".to_string(), ..Default::default() }, "alice").unwrap();
+        let source = create_task(
+            &mut db,
+            CreateTaskInput {
+                title: "Source".to_string(),
+                description: Some(format!("Ping @Brand_New about #{} and #ZZ9999", target.id)),
+                ..Default::default()
+            },
+            "alice",
+        )
+        .unwrap();
+
+        // A mentioned user becomes real, so the pickers find them afterwards.
+        assert!(
+            list_known_users(&db, &[])
+                .unwrap()
+                .contains(&"brand_new".to_string())
+        );
+
+        // Existing references link as `related`; unknown ones are ignored rather than failing creation.
+        let related = get_related_tasks(&db, &source.id).unwrap();
+        assert_eq!(related.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec![target.id.as_str()]);
     }
 }

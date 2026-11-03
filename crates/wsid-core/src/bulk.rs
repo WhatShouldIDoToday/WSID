@@ -21,6 +21,7 @@ pub struct BulkTaskPatch {
     pub importance_at_most: Option<u8>,
     pub difficulty: Option<u8>,
     pub urgent_override: Option<bool>,
+    pub project: Option<String>,
     pub add_tags: Vec<String>,
     pub remove_tags: Vec<String>,
 }
@@ -105,6 +106,7 @@ fn apply_patch(
         || importance != current.importance
         || patch.difficulty.is_some()
         || patch.urgent_override.is_some()
+        || patch.project.is_some()
         || tags.is_some();
 
     let mut task = current;
@@ -117,6 +119,7 @@ fn apply_patch(
                 importance: Some(importance),
                 difficulty: patch.difficulty,
                 urgent_override: patch.urgent_override,
+                project: patch.project.clone(),
                 tags,
                 ..Default::default()
             },

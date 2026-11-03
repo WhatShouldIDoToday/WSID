@@ -19,8 +19,8 @@ use crate::models::{AttachmentInput, CreateTaskInput, RelationInputKind, Task, T
 use crate::relations::{link_tasks, link_tasks_in_tx};
 use crate::search::{SearchQuery, search_tasks};
 use crate::tasks::{
-    create_task_in_tx, get_task, get_task_conn, list_known_users, normalize_tags, normalize_user, parse_deadline_datetime,
-    parse_duration_minutes, update_task, validate_dates, validate_not_past, validate_time_estimate,
+    create_task_in_tx, get_task, get_task_conn, list_known_users, normalize_project, normalize_tags, normalize_user,
+    parse_deadline_datetime, parse_duration_minutes, update_task, validate_dates, validate_not_past, validate_time_estimate,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -35,6 +35,7 @@ pub enum TaskField {
     Importance,
     ManualPriority,
     UrgentOverride,
+    Project,
     Tags,
     Relations,
     Attachments,
@@ -145,6 +146,7 @@ pub struct TaskDraft {
     pub importance: Option<Scalar>,
     pub manual_priority: Option<Scalar>,
     pub urgent_override: Option<Scalar>,
+    pub project: Option<String>,
     pub tags: Vec<String>,
     pub relations: Vec<RelationDraft>,
     pub attachments: Vec<AttachmentInput>,
@@ -313,6 +315,17 @@ fn resolve(conn: &Connection, draft: &TaskDraft, default_user: &str) -> (Option<
     let assignee = user(TaskField::Assignee, &draft.assignee);
     let evaluator = user(TaskField::Evaluator, &draft.evaluator);
 
+    let project = match blank(&draft.project) {
+        Some(raw) => match normalize_project(raw) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                issues.push(FieldIssue::error(TaskField::Project, strip_prefix(&e)));
+                None
+            }
+        },
+        None => None,
+    };
+
     if issues.iter().any(FieldIssue::is_error) {
         return (None, issues);
     }
@@ -331,6 +344,7 @@ fn resolve(conn: &Connection, draft: &TaskDraft, default_user: &str) -> (Option<
         urgent_override,
         manual_priority: manual_priority.map(|n| n as i8),
         tags,
+        project,
         reporter,
         assignee,
         evaluator,
@@ -422,6 +436,7 @@ pub fn update_task_from_draft(db: &mut Database, raw_id: &str, draft: &TaskDraft
         urgent_override: resolved.input.urgent_override,
         manual_priority: resolved.input.manual_priority,
         tags: Some(resolved.input.tags),
+        project: resolved.input.project,
         reporter: resolved.input.reporter,
         assignee: resolved.input.assignee,
         evaluator: resolved.input.evaluator,

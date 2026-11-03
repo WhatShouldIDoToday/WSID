@@ -110,6 +110,35 @@ const fn is_trailing_punct(b: u8) -> bool {
     matches!(b, b'.' | b',' | b';' | b':' | b'!' | b'?' | b')' | b']' | b'}' | b'"')
 }
 
+/// Applies the rich-text part of a task *description*: mentioned users are registered
+/// (so `@someone` in a description makes that user pickable) and existing `#AB1234`
+/// references are linked as `related`.
+///
+/// Comments use the same token parser but additionally spawn subtasks; descriptions
+/// deliberately never spawn anything.
+pub(crate) fn apply_rich_text_references(conn: &Connection, task_id: &str, body: &str) -> Result<()> {
+    if body.trim().is_empty() {
+        return Ok(());
+    }
+    let tokens = parse_note_tokens(body);
+    for user in tokens
+        .blocking_mentions
+        .iter()
+        .chain(tokens.takenote_mentions.iter())
+    {
+        let _ = register_user_conn(conn, user);
+    }
+    for ref_id in &tokens.task_references {
+        if ref_id == task_id {
+            continue;
+        }
+        if get_task_conn(conn, ref_id).is_ok() {
+            let _ = link_tasks_in_tx(conn, task_id, RelationInputKind::Related, ref_id);
+        }
+    }
+    Ok(())
+}
+
 /// Appends a note to `raw_task_id` and optionally spawns `@user` blocking subtasks,
 /// `@takenote:<user>` non-blocking related tasks, and `#<task_id>` cross-links.
 pub fn add_task_note(
@@ -208,6 +237,7 @@ pub fn add_task_note(
                         importance: Some(effective_parent.importance),
                         urgent_override: Some(true),
                         tags: effective_parent.tags.clone(),
+                        project: Some(effective_parent.project.clone()),
                         reporter: Some(author.clone()),
                         assignee: Some(mentioned_user.clone()),
                         evaluator: Some(mentioned_user.clone()),
@@ -260,6 +290,7 @@ pub fn add_task_note(
                     importance: Some(commented_task.importance),
                     urgent_override: Some(true),
                     tags: commented_task.tags.clone(),
+                    project: Some(commented_task.project.clone()),
                     reporter: Some(author.clone()),
                     assignee: Some(mentioned_user.clone()),
                     evaluator: Some(mentioned_user.clone()),
@@ -436,6 +467,7 @@ pub fn transition_task_status(db: &mut Database, raw_task_id: &str, new_status: 
                     importance: Some(task.importance),
                     urgent_override: Some(true),
                     tags: task.tags.clone(),
+                    project: Some(task.project.clone()),
                     reporter: Some(task.assignee.clone()),
                     assignee: Some(task.evaluator.clone()),
                     evaluator: Some(task.evaluator.clone()),
