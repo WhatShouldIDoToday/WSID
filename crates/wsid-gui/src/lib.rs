@@ -12,14 +12,14 @@ use wsid_core::{
     AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, BulkEditOutcome, BulkTaskPatch, Database,
     DbChangeDetector, EisenhowerClassification, FieldIssue, FocusPreset, FocusQueueResponse, RelationDraft, RelationInputKind, Scalar,
     SearchHit, SearchQuery, StatusTransitionOutcome, Task, TaskAttachment, TaskDraft, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput,
-    UserDeletionOutcome, UserDeletionPreview, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks,
-    compute_focus_queue_in_project, create_task_from_draft, default_config_path, default_global_db_path, delete_task, delete_task_note,
-    delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers,
-    get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks, list_eisenhower_matrix,
-    list_known_projects, list_known_users, list_task_notes, list_tasks, normalize_project, normalize_user, open_file_in_os,
-    parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment, resolve_active_db_path, save_clipboard_attachment,
-    search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task,
-    update_task_relation, validate_focus_limit, validate_task_draft,
+    UserDeletionOutcome, UserDeletionPreview, UserNotice, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks,
+    compute_focus_queue_in_project, create_task_from_draft_with_notices, default_config_path, default_global_db_path, delete_task,
+    delete_task_note, delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks,
+    get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks,
+    list_eisenhower_matrix, list_known_projects, list_known_users, list_task_notes, list_tasks, list_user_kinds, normalize_project,
+    normalize_user, open_file_in_os, parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment,
+    resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
+    update_attachment_description, update_task_relation, update_task_with_notices, validate_focus_limit, validate_task_draft,
 };
 
 pub struct GuiAppState {
@@ -66,6 +66,8 @@ pub struct AppSessionSnapshot {
     pub focus_limit: usize,
     pub recent_workspaces: Vec<String>,
     pub known_users: Vec<String>,
+    /// Kind per known user (`human` unless set, e.g. `claude`). Keys match `known_users`.
+    pub user_kinds: std::collections::BTreeMap<String, String>,
     pub known_tags: Vec<String>,
     pub known_projects: Vec<String>,
 }
@@ -165,6 +167,7 @@ fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, Str
             .map(|p| p.to_string_lossy().to_string())
             .collect(),
         known_users,
+        user_kinds: list_user_kinds(&db).map_err(|e| e.to_string())?,
         known_tags: tags.into_iter().collect(),
         known_projects: list_known_projects(&db).map_err(|e| e.to_string())?,
     })
@@ -223,11 +226,20 @@ fn default_project_to_active(mut payload: GuiCreateTaskPayload, active_project: 
     payload
 }
 
-pub fn create_task_from_payload(state: &GuiAppState, payload: GuiCreateTaskPayload) -> Result<Task, String> {
+/// A saved task plus notices about typed user references (`@kind:user`) in its fields.
+#[derive(Debug, Serialize)]
+pub struct TaskSaveOutcome {
+    pub task: Task,
+    pub user_notices: Vec<UserNotice>,
+}
+
+pub fn create_task_from_payload(state: &GuiAppState, payload: GuiCreateTaskPayload) -> Result<TaskSaveOutcome, String> {
     let mut db = state.open_db()?;
     let draft = payload_to_draft(default_project_to_active(payload, &state.active_project))?;
     // Atomic: the task, its relations, and its attachments are created together or not at all.
-    create_task_from_draft(&mut db, &draft, &state.active_user).map_err(|e| e.to_string())
+    create_task_from_draft_with_notices(&mut db, &draft, &state.active_user)
+        .map(|(task, user_notices)| TaskSaveOutcome { task, user_notices })
+        .map_err(|e| e.to_string())
 }
 
 pub fn load_task_full_detail(db: &Database, id: &str) -> Result<TaskFullDetail, String> {
@@ -312,6 +324,16 @@ fn get_session_state(state: State<'_, SharedGuiState>) -> Result<AppSessionSnaps
     let guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
+    build_session_snapshot(&guard)
+}
+
+#[tauri::command]
+fn set_user_kind(state: State<'_, SharedGuiState>, user: String, kind: String) -> Result<AppSessionSnapshot, String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let mut db = guard.open_db()?;
+    wsid_core::set_user_kind(&mut db, &user, &kind).map_err(|e| e.to_string())?;
     build_session_snapshot(&guard)
 }
 
@@ -592,7 +614,7 @@ fn validate_new_task(state: State<'_, SharedGuiState>, payload: GuiCreateTaskPay
 }
 
 #[tauri::command]
-fn create_new_task(state: State<'_, SharedGuiState>, payload: GuiCreateTaskPayload) -> Result<Task, String> {
+fn create_new_task(state: State<'_, SharedGuiState>, payload: GuiCreateTaskPayload) -> Result<TaskSaveOutcome, String> {
     let guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
@@ -600,7 +622,7 @@ fn create_new_task(state: State<'_, SharedGuiState>, payload: GuiCreateTaskPaylo
 }
 
 #[tauri::command]
-fn update_existing_task(state: State<'_, SharedGuiState>, payload: GuiUpdateTaskPayload) -> Result<Task, String> {
+fn update_existing_task(state: State<'_, SharedGuiState>, payload: GuiUpdateTaskPayload) -> Result<TaskSaveOutcome, String> {
     let guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
@@ -623,7 +645,7 @@ fn update_existing_task(state: State<'_, SharedGuiState>, payload: GuiUpdateTask
         None => None,
     };
 
-    update_task(
+    update_task_with_notices(
         &mut db,
         &payload.id,
         UpdateTaskInput {
@@ -644,6 +666,7 @@ fn update_existing_task(state: State<'_, SharedGuiState>, payload: GuiUpdateTask
             evaluator: payload.evaluator,
         },
     )
+    .map(|(task, user_notices)| TaskSaveOutcome { task, user_notices })
     .map_err(|e| e.to_string())
 }
 
@@ -1146,6 +1169,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_session_state,
             set_active_user,
+            set_user_kind,
             set_active_project,
             preview_delete_user,
             delete_user,
@@ -1239,7 +1263,8 @@ mod tests {
                 ..Default::default()
             },
         )
-        .unwrap();
+        .unwrap()
+        .task;
 
         assert_eq!(created.attachments.len(), 1);
         assert_eq!(created.attachments[0].alt_text(), "Drawer wireframe screenshot");

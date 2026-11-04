@@ -33,8 +33,7 @@
   import SettingsView from "./components/SettingsView.svelte";
   import TaskDetailDrawer from "./components/TaskDetailDrawer.svelte";
   import AboutModal from "./components/AboutModal.svelte";
-  import UserSwitcherModal from "./components/UserSwitcherModal.svelte";
-  import ProjectSwitcherModal from "./components/ProjectSwitcherModal.svelte";
+  import CommandPalette from "./components/CommandPalette.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
 
   type ViewTab =
@@ -52,8 +51,14 @@
   let eisenhowerItems = $state<EisenhowerClassification[]>([]);
   let selectedTaskId = $state<string | null>(null);
   let aboutModalOpen = $state<boolean>(false);
-  let userSwitcherOpen = $state<boolean>(false);
-  let projectSwitcherOpen = $state<boolean>(false);
+  let paletteOpen = $state<boolean>(false);
+  /** Prefix the palette opens with: "@" for users, "#" for projects, "" for everything. */
+  let paletteQuery = $state<string>("");
+
+  function openPalette(prefix: string) {
+    paletteQuery = prefix;
+    paletteOpen = true;
+  }
   /** Bumped on database switch so mounted views drop their temporary filter scope. */
   let viewEpoch = $state<number>(0);
   let statusAnnouncement = $state<string>("Ready.");
@@ -169,7 +174,6 @@
       session = await setActiveUser(trimmed);
       // An Eisenhower user filter that named the previous active user follows the switch.
       if (eisenhowerUser === previousUser) eisenhowerUser = session.active_user;
-      userSwitcherOpen = false;
       announce(`Switched active user to @${session.active_user}.`);
       await refreshAllData();
     } catch (err) {
@@ -182,7 +186,6 @@
     if (!trimmed) return;
     try {
       session = await setActiveProject(trimmed);
-      projectSwitcherOpen = false;
       announce(`Switched active project to #${session.active_project}.`);
       await refreshAllData();
     } catch (err) {
@@ -262,9 +265,9 @@
     } else if (action === "open_settings") {
       switchTab("settings", "Opened Settings.");
     } else if (action === "switch_user") {
-      userSwitcherOpen = true;
+      openPalette("@");
     } else if (action === "switch_project") {
-      projectSwitcherOpen = true;
+      openPalette("#");
     } else if (action === "open_about") {
       aboutModalOpen = true;
       announce("Opened About and Third-Party Licenses dialog.");
@@ -322,26 +325,24 @@
     }
 
     // Ctrl+U / Ctrl+P switch the active user / project from any view, including text inputs.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "k") {
+      if (selectedTaskId || aboutModalOpen || confirmLeaveOpen || paletteOpen)
+        return;
+      e.preventDefault();
+      openPalette("");
+      return;
+    }
+
     if (
       e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
       (e.key === "u" || e.key === "p")
     ) {
-      if (
-        selectedTaskId ||
-        aboutModalOpen ||
-        confirmLeaveOpen ||
-        userSwitcherOpen ||
-        projectSwitcherOpen
-      )
+      if (selectedTaskId || aboutModalOpen || confirmLeaveOpen || paletteOpen)
         return;
       e.preventDefault();
-      if (e.key === "u") {
-        userSwitcherOpen = true;
-      } else {
-        projectSwitcherOpen = true;
-      }
+      openPalette(e.key === "u" ? "@" : "#");
       return;
     }
 
@@ -351,14 +352,14 @@
       (target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
         target.tagName === "SELECT" ||
+        target.closest("[data-select-trigger], [data-select-content]") ||
         target.isContentEditable);
 
     if (
       isInput ||
       selectedTaskId ||
       aboutModalOpen ||
-      userSwitcherOpen ||
-      projectSwitcherOpen ||
+      paletteOpen ||
       confirmLeaveOpen
     )
       return;
@@ -445,6 +446,7 @@
       {#key viewEpoch}
         <FocusView
           focusData={focusQueue}
+          userKinds={session?.user_kinds ?? {}}
           {blockedTasks}
           knownProjects={session?.known_projects ?? []}
           projectFilter={focusProject}
@@ -467,6 +469,7 @@
           {activeProject}
           knownTags={session?.known_tags ?? []}
           knownUsers={session?.known_users ?? []}
+          userKinds={session?.user_kinds ?? {}}
           knownProjects={session?.known_projects ?? []}
           onSelectTask={openTaskDetail}
           onDataChanged={refreshAllData}
@@ -490,6 +493,7 @@
           }}
           knownTags={session?.known_tags ?? []}
           knownUsers={session?.known_users ?? []}
+          userKinds={session?.user_kinds ?? {}}
           knownProjects={session?.known_projects ?? []}
           onSelectTask={openTaskDetail}
           onDataChanged={refreshAllData}
@@ -501,6 +505,7 @@
         <DatabaseView
           knownTags={session?.known_tags ?? []}
           knownUsers={session?.known_users ?? []}
+          userKinds={session?.user_kinds ?? {}}
           knownProjects={session?.known_projects ?? []}
           {refreshTrigger}
           onSelectTask={openTaskDetail}
@@ -513,6 +518,7 @@
         activeUser={session?.active_user ?? "human"}
         {activeProject}
         knownUsers={session?.known_users ?? []}
+        userKinds={session?.user_kinds ?? {}}
         knownTags={session?.known_tags ?? []}
         knownProjects={session?.known_projects ?? []}
         bind:isDirty={entryFormDirty}
@@ -529,8 +535,8 @@
         {session}
         uiPrefs={uiPreferences}
         onUpdateUiPrefs={handleUpdateUiPreferences}
-        onOpenUserModal={() => (userSwitcherOpen = true)}
-        onOpenProjectModal={() => (projectSwitcherOpen = true)}
+        onOpenUserModal={() => openPalette("@")}
+        onOpenProjectModal={() => openPalette("#")}
         onPresetChange={handlePresetChange}
         onFocusLimitChange={handleFocusLimitChange}
         onPickWorkspaceDb={handlePickWorkspaceDb}
@@ -541,6 +547,7 @@
           announce("Opened About and Third-Party Licenses dialog.");
         }}
         onUserDeleted={refreshAllData}
+        onUserKindChanged={refreshAllData}
         onSelectTask={openTaskDetail}
         {announce}
       />
@@ -554,7 +561,7 @@
       <button
         type="button"
         class="status-user-btn"
-        onclick={() => (userSwitcherOpen = true)}
+        onclick={() => openPalette("@")}
         title="Switch active user (Ctrl+U)"
         aria-keyshortcuts="Control+U"
         aria-label={`Active user @${session?.active_user ?? "human"}. Click to switch user.`}
@@ -564,7 +571,7 @@
       <button
         type="button"
         class="status-user-btn"
-        onclick={() => (projectSwitcherOpen = true)}
+        onclick={() => openPalette("#")}
         title="Switch active project (Ctrl+P)"
         aria-keyshortcuts="Control+P"
         aria-label={`Active project #${activeProject}. Click to switch project.`}
@@ -581,6 +588,7 @@
     activeUser={session.active_user}
     knownTags={session.known_tags}
     knownUsers={session.known_users}
+    userKinds={session.user_kinds}
     knownProjects={session.known_projects}
     onClose={closeTaskDetail}
     onSelectTask={openTaskDetail}
@@ -589,21 +597,15 @@
   />
 {/if}
 
-{#if userSwitcherOpen && session}
-  <UserSwitcherModal
-    activeUser={session.active_user}
-    knownUsers={session.known_users}
+{#if session}
+  <CommandPalette
+    bind:open={paletteOpen}
+    initialQuery={paletteQuery}
+    {session}
     onSelectUser={handleSelectUser}
-    onClose={() => (userSwitcherOpen = false)}
-  />
-{/if}
-
-{#if projectSwitcherOpen && session}
-  <ProjectSwitcherModal
-    activeProject={session.active_project}
-    knownProjects={session.known_projects}
     onSelectProject={handleSelectProject}
-    onClose={() => (projectSwitcherOpen = false)}
+    onSwitchView={(view) => switchTab(view, `Switched to ${view} view.`)}
+    onAction={(action) => handleMenuAction(action)}
   />
 {/if}
 

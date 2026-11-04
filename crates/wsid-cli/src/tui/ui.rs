@@ -15,6 +15,7 @@ use wsid_core::{
 
 use crate::tui::app::{ActiveTab, DataEntryForm, DatabaseSortColumn, DetailPromptKind, FocusContext, PickerMode, SettingsMode, TuiApp};
 use crate::tui::form;
+use crate::tui::user_ref::user_label;
 
 const SELECTED_STYLE: Style = Style::new()
     .fg(Color::Black)
@@ -66,6 +67,10 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp) {
 
     if app.user_modal_open {
         render_user_modal(frame, frame.area(), app);
+    }
+
+    if app.settings.kind_modal_open {
+        render_kind_modal(frame, frame.area(), app);
     }
 
     if app.form_errors.is_some() {
@@ -376,7 +381,7 @@ fn render_kanban_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .iter()
             .map(|t| {
                 let line1 = format!("{}[{}] {}", app.mark(&t.id), t.id, t.title);
-                let line2 = format!("  @{} I:{} D:{}", t.assignee, t.importance, t.difficulty);
+                let line2 = format!("  {} I:{} D:{}", app.user_label(&t.assignee), t.importance, t.difficulty);
                 ListItem::new(vec![Line::from(line1), Line::from(line2)])
             })
             .collect();
@@ -690,7 +695,7 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 Cell::from(t.title.clone()),
                 Cell::from(t.status.to_string()),
                 Cell::from(t.project.clone()),
-                Cell::from(format!("@{}", t.assignee)),
+                Cell::from(app.user_label(&t.assignee)),
                 Cell::from(format!("{}/5", t.importance)),
                 Cell::from(format!("{}/5", t.difficulty)),
                 Cell::from(sgdb.to_string()),
@@ -1095,6 +1100,7 @@ fn focus_hints(app: &TuiApp) -> String {
             PickerMode::Filter => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Ctrl+P] Switch project | [Esc] Cancel".to_string(),
             PickerMode::Switch => "[type] Search or new name | [Up/Down] Select | [Enter] Switch | [Esc] Cancel".to_string(),
         },
+        FocusContext::KindModal => "[type] Search or new kind | [Up/Down] Select | [Enter] Apply | [Esc] Cancel".to_string(),
         FocusContext::UserModal => match app.user_modal_mode {
             PickerMode::Filter => "[type] Filter | [Up/Down] Select | [Enter] Apply | [Ctrl+U] Switch user | [Esc] Cancel".to_string(),
             PickerMode::Switch => "[type] Search or new name | [Up/Down] Select | [Enter] Switch | [Esc] Cancel".to_string(),
@@ -1136,7 +1142,7 @@ fn focus_hints(app: &TuiApp) -> String {
         FocusContext::Tab(ActiveTab::DataEntry) => app.entry_form.hint().to_string(),
         FocusContext::Tab(ActiveTab::Settings) => match app.settings.mode {
             SettingsMode::Browse => {
-                "[1-6] Views | [j/k] Move | [Enter] Change | [a] Accessible | [?] Help | [q] Quit".to_string()
+                "[1-6] Views | [j/k] Move | [Enter] Change | [t] User kind | [a] Accessible | [?] Help | [q] Quit".to_string()
             }
             SettingsMode::EditFocusLimit => "[0-9] Size | [Enter] Save | [Esc] Cancel".to_string(),
             SettingsMode::EditDatabasePath => "[type] Path | [Enter] Open | [Esc] Cancel".to_string(),
@@ -1165,6 +1171,10 @@ fn footer_line(app: &TuiApp) -> Line<'static> {
     } else {
         let style = if looks_like_error(&app.status_message) {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else if app.status_message.contains("warning:") {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -1204,7 +1214,12 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         ),
         Span::styled(format!("({})", t.status), Style::default().fg(Color::Cyan)),
     ]));
-    lines.push(Line::from(format!("Reporter: @{} | Assignee: @{} | Evaluator: @{}", t.reporter, t.assignee, t.evaluator)));
+    lines.push(Line::from(format!(
+        "Reporter: {} | Assignee: {} | Evaluator: {}",
+        user_label(&app.user_kinds, &t.reporter),
+        user_label(&app.user_kinds, &t.assignee),
+        user_label(&app.user_kinds, &t.evaluator)
+    )));
     lines.push(Line::from(format!("Project: {}", t.project)));
 
     let est = t
@@ -1624,6 +1639,23 @@ fn render_user_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
             options: app.filtered_user_options(),
             current: app.user_modal_current(),
             empty: "  No matching users",
+        },
+    );
+}
+
+fn render_kind_modal(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    let title = format!(" Kind for @{} ", app.settings.user_kind_target);
+    render_filter_modal(
+        frame,
+        area,
+        app.accessible_mode,
+        &FilterModal {
+            title: &title,
+            query: &app.settings.user_kind_input,
+            selected: app.settings.kind_selected,
+            options: app.filtered_kind_options(),
+            current: app.kind_modal_current(),
+            empty: "  No matching kinds",
         },
     );
 }

@@ -8,6 +8,8 @@
   interface Props {
     value?: string;
     knownUsers: string[];
+    /** Account kind per user (`human` unless set); drives typed-mention hints. */
+    userKinds?: Record<string, string>;
     /** `comment` also offers `@takenote:` and notes that mentions spawn tasks. */
     mode?: "comment" | "description";
     id?: string;
@@ -20,6 +22,7 @@
   let {
     value = $bindable(""),
     knownUsers,
+    userKinds = {},
     mode = "description",
     id,
     rows = 4,
@@ -174,7 +177,7 @@
 
   let previewSegments = $derived(
     value.trim()
-      ? tokenizeCommentBody(value, knownUsers, mode).filter(
+      ? tokenizeCommentBody(value, knownUsers, mode, userKinds).filter(
           (s) => s.type !== "text",
         )
       : [],

@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::Database;
 use crate::error::Result;
-use crate::models::{Task, TaskStatus, UpdateTaskInput};
+use crate::models::{Task, TaskStatus, UpdateTaskInput, UserNotice};
 use crate::notes::transition_task_status;
-use crate::tasks::{delete_task, get_task, normalize_tags, update_task};
+use crate::tasks::{delete_task, get_task, normalize_tags, update_task_with_notices};
 
 /// Field changes applied to every selected task. `None` leaves a field unchanged.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -41,6 +41,9 @@ pub struct BulkEditOutcome {
     pub spawned_review_tasks: Vec<Task>,
     pub auto_completed_parent_tasks: Vec<Task>,
     pub failures: Vec<BulkTaskFailure>,
+    /// Typed user reference notices (`@kind:user`), deduplicated across tasks.
+    #[serde(default)]
+    pub user_notices: Vec<UserNotice>,
 }
 
 fn dedupe(ids: &[String]) -> Vec<&String> {
@@ -111,7 +114,7 @@ fn apply_patch(
 
     let mut task = current;
     if has_field_change {
-        task = update_task(
+        let (updated, notices) = update_task_with_notices(
             db,
             id,
             UpdateTaskInput {
@@ -124,6 +127,12 @@ fn apply_patch(
                 ..Default::default()
             },
         )?;
+        task = updated;
+        for notice in notices {
+            if !outcome.user_notices.contains(&notice) {
+                outcome.user_notices.push(notice);
+            }
+        }
     }
 
     // Status goes through the transition so review handoffs and parent auto-complete fire.
@@ -203,5 +212,34 @@ mod tests {
         let deleted = bulk_delete_tasks(&mut db, &[a.id.clone(), b.id.clone()]).expect("delete");
         assert_eq!(deleted.deleted.len(), 2);
         assert!(get_task(&db, &a.id).is_err());
+    }
+
+    #[test]
+    fn bulk_assignment_reports_typed_user_notices_once() {
+        use crate::models::UserNotice;
+        use crate::tasks::set_user_kind;
+
+        let mut db = open_in_memory_db().expect("db");
+        let a = make(&mut db, "A", 1);
+        let b = make(&mut db, "B", 1);
+        // `rob` already exists as a jira user, so `claude:` must not change the stored kind.
+        create_task(
+            &mut db,
+            CreateTaskInput { title: "Seed".to_string(), assignee: Some("rob".to_string()), ..Default::default() },
+            "tester",
+        )
+        .expect("seed");
+        set_user_kind(&mut db, "rob", "jira").expect("kind");
+
+        let patch = BulkTaskPatch { assignee: Some("claude:rob".to_string()), ..Default::default() };
+        let outcome = bulk_update_tasks(&mut db, &[a.id.clone(), b.id.clone()], &patch).expect("bulk");
+
+        assert!(outcome.failures.is_empty());
+        assert_eq!(outcome.updated.len(), 2);
+        assert!(outcome.updated.iter().all(|t| t.assignee == "rob"));
+        assert_eq!(
+            outcome.user_notices,
+            vec![UserNotice::KindMismatch { user: "rob".to_string(), requested: "claude".to_string(), actual: "jira".to_string() }]
+        );
     }
 }

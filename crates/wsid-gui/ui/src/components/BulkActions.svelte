@@ -8,15 +8,23 @@
     STATUS_ORDER,
     bulkEditTasks,
     bulkRemoveTasks,
+    describeUserNotice,
     summarizeBulk,
+    userKindMismatch,
+    validateProject,
+    validateUserRef,
+    withUserNotices,
   } from "../lib/ipc";
   import ConfirmModal from "./ConfirmModal.svelte";
+  import Select from "./ui/Select.svelte";
+  import UserRefInput from "./UserRefInput.svelte";
 
   interface Props {
     ids: string[];
     knownTags: string[];
     knownUsers: string[];
     knownProjects: string[];
+    userKinds?: Record<string, string>;
     onClear: () => void;
     onDone: (outcome: BulkEditOutcome) => void;
     announce: (msg: string) => void;
@@ -29,6 +37,7 @@
     knownTags,
     knownUsers,
     knownProjects,
+    userKinds = {},
     onClear,
     onDone,
     announce,
@@ -38,12 +47,82 @@
   let busy = $state(false);
   let confirmDelete = $state(false);
 
+  // Assignee and project accept new names: typed text, suggestions from the datalists.
+  let assigneeDraft = $state("");
+  let projectDraft = $state("");
+  let assigneeError = $state<string | null>(null);
+  /** Typed-reference notices from the last apply (e.g. a kind that was ignored). */
+  let userNotice = $state<{ text: string; warning: boolean } | null>(null);
+  let projectError = $state<string | null>(null);
+
+  /** The mismatched text the user has already confirmed with a second Enter. */
+  let confirmedMismatch = $state<string | null>(null);
+
+  function commitAssignee() {
+    const raw = assigneeDraft.trim();
+    if (!raw || busy) return;
+    const check = validateUserRef(raw);
+    if (check.error || !check.normalized) {
+      assigneeError = check.error;
+      announce(`Assignee: ${check.error ?? "invalid"}`);
+      return;
+    }
+    const mismatch = userKindMismatch(raw, knownUsers, userKinds);
+    if (mismatch && confirmedMismatch !== raw) {
+      confirmedMismatch = raw;
+      assigneeError = `${mismatch} Press Enter again to assign anyway.`;
+      announce(assigneeError);
+      return;
+    }
+    assigneeError = null;
+    confirmedMismatch = null;
+    assigneeDraft = "";
+    void apply({ assignee: check.normalized });
+  }
+
+  function commitProject() {
+    const raw = projectDraft.trim();
+    if (!raw || busy) return;
+    const check = validateProject(raw);
+    if (check.error || !check.normalized) {
+      projectError = check.error;
+      announce(`Project: ${check.error ?? "invalid"}`);
+      return;
+    }
+    projectError = null;
+    projectDraft = "";
+    void apply({ project: check.normalized });
+  }
+
+  /** Enter applies; Escape clears the draft without clearing the selection. */
+  function handleTextKeydown(
+    e: KeyboardEvent,
+    commit: () => void,
+    clear: () => void,
+  ) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      clear();
+    }
+  }
+
   async function apply(patch: BulkTaskPatch) {
     if (busy || ids.length === 0) return;
     busy = true;
     try {
       const outcome = await bulkEditTasks(ids, patch);
-      announce(summarizeBulk("Updated", outcome));
+      const notices = outcome.user_notices ?? [];
+      userNotice = notices.length
+        ? {
+            text: notices.map(describeUserNotice).join(" "),
+            warning: notices.some((n) => n.type === "kind_mismatch"),
+          }
+        : null;
+      announce(withUserNotices(summarizeBulk("Updated", outcome), notices));
       onDone(outcome);
     } catch (err) {
       announce(`Bulk edit failed: ${String(err)}`);
@@ -66,13 +145,25 @@
     }
   }
 
-  /** Runs `fn` with the chosen value, then resets the select to its placeholder. */
-  function pick(e: Event, fn: (value: string) => void) {
-    const el = e.currentTarget as HTMLSelectElement;
-    const value = el.value;
-    el.value = "";
+  /** Runs `fn` with the chosen value. The action selects stay controlled at "" so they reset to their placeholder. */
+  function pick(value: string, fn: (value: string) => void) {
     if (value) fn(value);
   }
+
+  let statusOptions = $derived(
+    STATUS_ORDER.map((st) => ({ value: st, label: STATUS_LABELS[st] })),
+  );
+  let importanceOptions = [1, 2, 3, 4, 5].map((n) => ({
+    value: String(n),
+    label: `${n}/5`,
+  }));
+  let urgentOptions = [
+    { value: "on", label: "Urgent on" },
+    { value: "off", label: "Urgent off" },
+  ];
+  let tagOptions = $derived(
+    knownTags.map((t) => ({ value: t, label: `#${t}` })),
+  );
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key !== "Escape" || e.defaultPrevented || confirmDelete) return;
@@ -87,83 +178,122 @@
 <div class="bulk-bar" role="region" aria-label="Bulk actions">
   <strong class="bulk-count" aria-live="polite">{ids.length} selected</strong>
 
-  <select
-    aria-label="Set status"
+  <Select
+    size="sm"
+    ariaLabel="Set status"
+    placeholder="Status…"
+    value=""
     disabled={busy}
-    onchange={(e) => pick(e, (v) => void apply({ status: v as TaskStatus }))}
-  >
-    <option value="">Status…</option>
-    {#each STATUS_ORDER as st}
-      <option value={st}>{STATUS_LABELS[st]}</option>
-    {/each}
-  </select>
+    options={statusOptions}
+    onValueChange={(v) =>
+      pick(v, (x) => void apply({ status: x as TaskStatus }))}
+  />
 
-  <select
-    aria-label="Set assignee"
-    disabled={busy}
-    onchange={(e) => pick(e, (v) => void apply({ assignee: v }))}
-  >
-    <option value="">Assignee…</option>
-    {#each knownUsers as u}
-      <option value={u}>@{u}</option>
-    {/each}
-  </select>
+  <div class="bulk-text-field">
+    <UserRefInput
+      id="bulk-assignee"
+      className="bulk-text-input"
+      placeholder="Assignee…"
+      ariaLabel="Set assignee (type a new name, or claude:name)"
+      disabled={busy}
+      {knownUsers}
+      {userKinds}
+      error={assigneeError}
+      bind:value={assigneeDraft}
+      onInput={() => {
+        assigneeError = null;
+        confirmedMismatch = null;
+        userNotice = null;
+      }}
+      onEnter={() => commitAssignee()}
+      onEscape={() => {
+        assigneeDraft = "";
+        assigneeError = null;
+      }}
+    />
+  </div>
 
-  <select
-    aria-label="Set project"
-    disabled={busy}
-    onchange={(e) => pick(e, (v) => void apply({ project: v }))}
-  >
-    <option value="">Project…</option>
-    {#each knownProjects as p}
-      <option value={p}>{p}</option>
-    {/each}
-  </select>
+  <div class="bulk-text-field">
+    <input
+      autocorrect="off"
+      autocapitalize="off"
+      type="text"
+      class="bulk-text-input"
+      list="bulk-project-options"
+      placeholder="Project…"
+      aria-label="Set project (type a new name)"
+      autocomplete="off"
+      spellcheck="false"
+      disabled={busy}
+      bind:value={projectDraft}
+      oninput={() => (projectError = null)}
+      onkeydown={(e) =>
+        handleTextKeydown(e, commitProject, () => {
+          projectDraft = "";
+          projectError = null;
+        })}
+    />
+    <datalist id="bulk-project-options">
+      {#each knownProjects as p (p)}
+        <option value={p}></option>
+      {/each}
+    </datalist>
+    {#if projectError}
+      <span class="field-error" role="alert">{projectError}</span>
+    {/if}
+  </div>
 
-  <select
-    aria-label="Set importance"
+  <Select
+    size="sm"
+    ariaLabel="Set importance"
+    placeholder="Importance…"
+    value=""
     disabled={busy}
-    onchange={(e) => pick(e, (v) => void apply({ importance: Number(v) }))}
-  >
-    <option value="">Importance…</option>
-    {#each [1, 2, 3, 4, 5] as n}
-      <option value={n}>{n}/5</option>
-    {/each}
-  </select>
+    options={importanceOptions}
+    onValueChange={(v) => pick(v, (x) => void apply({ importance: Number(x) }))}
+  />
 
-  <select
-    aria-label="Set urgent override"
+  <Select
+    size="sm"
+    ariaLabel="Set urgent override"
+    placeholder="Urgent…"
+    value=""
     disabled={busy}
-    onchange={(e) =>
-      pick(e, (v) => void apply({ urgent_override: v === "on" }))}
-  >
-    <option value="">Urgent…</option>
-    <option value="on">Urgent on</option>
-    <option value="off">Urgent off</option>
-  </select>
+    options={urgentOptions}
+    onValueChange={(v) =>
+      pick(v, (x) => void apply({ urgent_override: x === "on" }))}
+  />
+
+  {#if userNotice}
+    <span
+      class="bulk-notice"
+      class:is-warning={userNotice.warning}
+      role="status"
+    >
+      {userNotice.text}
+    </span>
+  {/if}
 
   {#if knownTags.length > 0}
-    <select
-      aria-label="Add tag"
+    <Select
+      size="sm"
+      ariaLabel="Add tag"
+      placeholder="Add tag…"
+      value=""
       disabled={busy}
-      onchange={(e) => pick(e, (v) => void apply({ add_tags: [v] }))}
-    >
-      <option value="">Add tag…</option>
-      {#each knownTags as t}
-        <option value={t}>#{t}</option>
-      {/each}
-    </select>
+      options={tagOptions}
+      onValueChange={(v) => pick(v, (x) => void apply({ add_tags: [x] }))}
+    />
 
-    <select
-      aria-label="Remove tag"
+    <Select
+      size="sm"
+      ariaLabel="Remove tag"
+      placeholder="Remove tag…"
+      value=""
       disabled={busy}
-      onchange={(e) => pick(e, (v) => void apply({ remove_tags: [v] }))}
-    >
-      <option value="">Remove tag…</option>
-      {#each knownTags as t}
-        <option value={t}>#{t}</option>
-      {/each}
-    </select>
+      options={tagOptions}
+      onValueChange={(v) => pick(v, (x) => void apply({ remove_tags: [x] }))}
+    />
   {/if}
 
   {@render children?.()}

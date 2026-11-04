@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { Combobox } from "bits-ui";
   import {
     type RelationInputKind,
@@ -114,13 +115,6 @@
     selectedTaskId = "";
     open = false;
   }
-
-  function handleSelectKeyDown(e: KeyboardEvent) {
-    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
-      e.preventDefault();
-      void submitRelation();
-    }
-  }
 </script>
 
 <div class="relation-picker-row">
@@ -177,16 +171,13 @@
     </Combobox.Root>
   </div>
 
-  <select
+  <Select
     class="relation-kind-select"
-    aria-label="Relation type"
-    bind:value={relationKind}
-    onkeydown={handleSelectKeyDown}
-  >
-    {#each RELATION_OPTIONS as opt}
-      <option value={opt.value}>{opt.label}</option>
-    {/each}
-  </select>
+    ariaLabel="Relation type"
+    value={relationKind}
+    options={RELATION_OPTIONS}
+    onValueChange={(v) => (relationKind = v as RelationInputKind)}
+  />
 
   <button
     type="button"

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { onMount } from "svelte";
   import {
     type SearchHit,
@@ -15,6 +16,8 @@
   interface Props {
     knownTags: string[];
     knownUsers: string[];
+    /** Account kind per user (`human` unless set); drives typed-mention hints. */
+    userKinds?: Record<string, string>;
     knownProjects: string[];
     refreshTrigger: number;
     onSelectTask: (id: string) => void;
@@ -25,6 +28,7 @@
   let {
     knownTags,
     knownUsers,
+    userKinds = {},
     knownProjects,
     refreshTrigger,
     onSelectTask,
@@ -43,7 +47,8 @@
     | "assignee"
     | "importance"
     | "difficulty"
-    | "due_date";
+    | "due_date"
+    | "urgent";
 
   let query = $state<string>("");
   let statusFilter = $state<string>("");
@@ -127,6 +132,9 @@
         case "difficulty":
           cmp = a.task.difficulty - b.task.difficulty;
           break;
+        case "urgent":
+          cmp = Number(a.task.urgent_override) - Number(b.task.urgent_override);
+          break;
         case "due_date": {
           const da = a.task.sgdb_date ?? a.task.due_date ?? "9999-99-99";
           const db = b.task.sgdb_date ?? b.task.due_date ?? "9999-99-99";
@@ -176,42 +184,58 @@
 
     <div class="form-field">
       <label for="db-status-filter">Status</label>
-      <select id="db-status-filter" bind:value={statusFilter}>
-        <option value="">All Statuses</option>
-        {#each STATUS_ORDER as st}
-          <option value={st}>{STATUS_LABELS[st]}</option>
-        {/each}
-      </select>
+      <Select
+        id="db-status-filter"
+        placeholder="All Statuses"
+        value={statusFilter}
+        options={[
+          { value: "", label: "All Statuses" },
+          ...STATUS_ORDER.map((st) => ({
+            value: st,
+            label: STATUS_LABELS[st],
+          })),
+        ]}
+        onValueChange={(v) => (statusFilter = v)}
+      />
     </div>
 
     <div class="form-field">
       <label for="db-tag-filter">Tag</label>
-      <select id="db-tag-filter" bind:value={tagFilter}>
-        <option value="">All Tags</option>
-        {#each knownTags as t}
-          <option value={t}>#{t}</option>
-        {/each}
-      </select>
+      <Select
+        id="db-tag-filter"
+        value={tagFilter}
+        options={[
+          { value: "", label: "All Tags" },
+          ...knownTags.map((t) => ({ value: t, label: `#${t}` })),
+        ]}
+        onValueChange={(v) => (tagFilter = v)}
+      />
     </div>
 
     <div class="form-field">
       <label for="db-project-filter">Project</label>
-      <select id="db-project-filter" bind:value={projectFilter}>
-        <option value="">All Projects</option>
-        {#each knownProjects as p}
-          <option value={p}>{p}</option>
-        {/each}
-      </select>
+      <Select
+        id="db-project-filter"
+        value={projectFilter}
+        options={[
+          { value: "", label: "All Projects" },
+          ...knownProjects.map((p) => ({ value: p, label: p })),
+        ]}
+        onValueChange={(v) => (projectFilter = v)}
+      />
     </div>
 
     <div class="form-field">
       <label for="db-assignee-filter">Assignee</label>
-      <select id="db-assignee-filter" bind:value={assigneeFilter}>
-        <option value="">All Assignees</option>
-        {#each knownUsers as u}
-          <option value={u}>@{u}</option>
-        {/each}
-      </select>
+      <Select
+        id="db-assignee-filter"
+        value={assigneeFilter}
+        options={[
+          { value: "", label: "All Assignees" },
+          ...knownUsers.map((u) => ({ value: u, label: `@${u}` })),
+        ]}
+        onValueChange={(v) => (assigneeFilter = v)}
+      />
     </div>
   </div>
 
@@ -226,6 +250,7 @@
       ids={selection.ids}
       {knownTags}
       {knownUsers}
+      {userKinds}
       {knownProjects}
       {announce}
       onClear={() => selection.clear()}
@@ -326,7 +351,15 @@
             </button>
           </th>
           <th scope="col">Tags</th>
-          <th scope="col">Actions</th>
+          <th scope="col" aria-sort={ariaSortFor("urgent")}>
+            <button
+              type="button"
+              class="sort-btn"
+              onclick={() => toggleSort("urgent")}
+            >
+              Urgent {sortCol === "urgent" ? (sortAsc ? "▲" : "▼") : ""}
+            </button>
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -352,25 +385,29 @@
                 />
               </td>
               <td>
-                <span class="task-id-badge">{hit.task.id}</span>
+                <button
+                  type="button"
+                  class="link-btn"
+                  onclick={() => onSelectTask(hit.task.id)}
+                >
+                  <span class="task-id">{hit.task.id}</span>
+                </button>
               </td>
               <td>
-                <strong>{hit.task.title}</strong>
-                {#if hit.task.urgent_override}
-                  <span
-                    class="badge badge-urgent"
-                    style="margin-left: 0.35rem;"
-                  >
-                    Urgent
-                  </span>
-                {/if}
+                <button
+                  type="button"
+                  class="link-btn link-btn-title"
+                  onclick={() => onSelectTask(hit.task.id)}
+                >
+                  {hit.task.title}
+                </button>
                 {#if hit.task.attachments.length > 0}
-                  <span class="badge" style="margin-left: 0.35rem;">
+                  <span class="badge title-meta">
                     {hit.task.attachments.length} file(s)
                   </span>
                 {/if}
               </td>
-              <td>
+              <td class="db-status">
                 <span class="badge">{STATUS_LABELS[hit.task.status]}</span>
               </td>
               <td>
@@ -401,13 +438,9 @@
                 {/each}
               </td>
               <td>
-                <button
-                  type="button"
-                  class="btn-sm"
-                  onclick={() => onSelectTask(hit.task.id)}
-                >
-                  Details
-                </button>
+                {#if hit.task.urgent_override}
+                  <span class="badge badge-urgent">Urgent</span>
+                {/if}
               </td>
             </tr>
           {/each}

@@ -2,26 +2,49 @@
   /* Relative scale driven by the Settings slider; keeps every rem-relative size
      proportional to the user's system font size (no hardcoded px root). */
   font-size: calc(100% * var(--ui-font-scale, 1));
-  --bg-app: #0f172a;
-  --bg-surface: #1e293b;
-  --bg-elevated: #283548;
+  /* Studio Dark: layered surfaces (app < column < card < hover) instead of
+     hairline borders. Borders are translucent so they read on every layer. */
+  --bg-app: #0f1117;
+  --bg-surface: #161822;
+  --bg-elevated: #202433;
   /* Board containers (Kanban columns, Eisenhower quadrants) vs. the cards inside
      them: cards sit one elevation step above their container so they read as
      distinct objects rather than blending into it. */
-  --bg-column: var(--bg-surface);
-  --bg-card: var(--bg-elevated);
-  --card-shadow: none;
-  --bg-input: #0b1120;
-  --bg-header-sub: #152033;
+  --bg-column: #12141c;
+  --bg-card: #181b27;
+  --card-shadow:
+    0 10px 25px -5px rgba(0, 0, 0, 0.45), 0 4px 10px -6px rgba(0, 0, 0, 0.4);
+  --bg-input: #0c0e14;
+  --bg-header-sub: #13151f;
   --text-primary: #f8fafc;
   --text-secondary: #cbd5e1;
   --text-muted: #94a3b8;
-  --border-subtle: #334155;
-  --border-strong: #64748b;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
   --accent-primary: #38bdf8;
   --accent-primary-hover: #7dd3fc;
   --accent-text-dark: #082f49;
-  --focus-ring: #facc15;
+  --focus-ring: #818cf8;
+  /* Semantic badge / pill / metadata triplets: translucent backgrounds with
+     tinted text. Every fg/bg pair must reach 4.5:1 in every theme. */
+  --badge-score-bg: rgba(99, 102, 241, 0.1);
+  --badge-score-fg: #a5b4fc;
+  --badge-score-border: rgba(99, 102, 241, 0.25);
+  --badge-urgent-bg: rgba(244, 63, 94, 0.1);
+  --badge-urgent-fg: #fda4af;
+  --badge-urgent-border: rgba(244, 63, 94, 0.28);
+  --badge-neutral-bg: rgba(148, 163, 184, 0.1);
+  --badge-neutral-fg: #cbd5e1;
+  --badge-neutral-border: rgba(148, 163, 184, 0.22);
+  --pill-human-bg: rgba(59, 130, 246, 0.12);
+  --pill-human-fg: #93c5fd;
+  --pill-human-border: rgba(59, 130, 246, 0.3);
+  --pill-agent-bg: rgba(168, 85, 247, 0.12);
+  --pill-agent-fg: #d8b4fe;
+  --pill-agent-border: rgba(168, 85, 247, 0.35);
+  --meta-estimate: #94a3b8;
+  --meta-sgdb: #fbbf24;
+  --meta-due: #fb7185;
   --status-todo: #60a5fa;
   --status-in-progress: #34d399;
   --status-in-review: #c084fc;
@@ -65,6 +88,17 @@
     --accent-primary-hover: #0369a1;
     --accent-text-dark: #ffffff;
     --focus-ring: #ca8a04;
+    --badge-score-fg: #4338ca;
+    --badge-urgent-fg: #be123c;
+    --badge-urgent-border: rgba(225, 29, 72, 0.4);
+    --badge-neutral-fg: #334155;
+    --pill-human-fg: #1d4ed8;
+    --pill-human-border: rgba(37, 99, 235, 0.4);
+    --pill-agent-fg: #7e22ce;
+    --pill-agent-border: rgba(126, 34, 206, 0.45);
+    --meta-estimate: #475569;
+    --meta-sgdb: #b45309;
+    --meta-due: #be123c;
     --status-todo: #2563eb;
     --status-in-progress: #059669;
     --status-in-review: #7c3aed;
@@ -97,6 +131,17 @@
   --accent-primary-hover: #0369a1;
   --accent-text-dark: #ffffff;
   --focus-ring: #ca8a04;
+  --badge-score-fg: #4338ca;
+  --badge-urgent-fg: #be123c;
+  --badge-urgent-border: rgba(225, 29, 72, 0.4);
+  --badge-neutral-fg: #334155;
+  --pill-human-fg: #1d4ed8;
+  --pill-human-border: rgba(37, 99, 235, 0.4);
+  --pill-agent-fg: #7e22ce;
+  --pill-agent-border: rgba(126, 34, 206, 0.45);
+  --meta-estimate: #475569;
+  --meta-sgdb: #b45309;
+  --meta-due: #be123c;
   --status-todo: #2563eb;
   --status-in-progress: #059669;
   --status-in-review: #7c3aed;
@@ -127,7 +172,7 @@
   --text-primary: #f8fafc;
   --text-secondary: #d4dbe5;
   --text-muted: #a3aebd;
-  --border-subtle: #262626;
+  --border-subtle: rgba(255, 255, 255, 0.14);
   --border-strong: #7b8794;
   --accent-primary: #67cdfb;
   --accent-primary-hover: #a5e3fd;
@@ -162,12 +207,14 @@
   :root {
     --border-subtle: var(--text-secondary);
     --border-strong: var(--text-primary);
+    --focus-ring: #facc15;
   }
 }
 
 :root[data-contrast="more"] {
   --border-subtle: var(--text-secondary);
   --border-strong: var(--text-primary);
+  --focus-ring: #facc15;
 }
 
 /* Forced Colors (OS High-Contrast Themes) */
@@ -176,13 +223,17 @@
   .task-card,
   .kanban-column,
   .quadrant-panel,
-  .detail-drawer,
+  .detail-modal,
   .drawer-panel,
-  .switcher-modal-card,
-  .switcher-modal-option.is-highlighted,
+  .command-palette,
+  .command-palette-item[data-selected],
   .confirm-modal-dialog,
   .date-picker-popover,
-  .relation-combobox-content {
+  .relation-combobox-content,
+  .ui-select-content,
+  .badge,
+  .task-id-badge,
+  .user-pill {
     background-color: Canvas;
     color: CanvasText;
     border: 2px solid CanvasText;
@@ -190,10 +241,16 @@
 
   button,
   .tab-btn,
-  .status-user-btn {
+  .status-user-btn,
+  .ui-select-trigger {
     background-color: ButtonFace;
     color: ButtonText;
     border: 1px solid ButtonText;
+  }
+
+  .ui-select-item[data-highlighted] {
+    background-color: Highlight;
+    color: HighlightText;
   }
 
   .tab-btn[aria-current="page"],
@@ -528,12 +585,13 @@ select[aria-invalid="true"] {
 .task-card {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 0.5rem;
-  padding: 0.9rem;
+  border-radius: 0.75rem;
+  padding: 1rem;
   box-shadow: var(--card-shadow);
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 0.6rem;
+  position: relative;
 }
 
 .task-card-header {
@@ -545,39 +603,84 @@ select[aria-invalid="true"] {
 
 .task-id-badge {
   font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 0.82rem;
-  background: var(--bg-input);
-  color: var(--accent-primary);
+  font-weight: 600;
+  font-size: 0.78rem;
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
   padding: 0.15rem 0.45rem;
   border-radius: 0.25rem;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--badge-neutral-border);
+  white-space: nowrap;
+}
+
+/* Task ID shown as an underlined mono prefix before the title. */
+.task-id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  white-space: nowrap;
 }
 
 .badge {
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
   font-size: 0.78rem;
   font-weight: 600;
   padding: 0.15rem 0.5rem;
   border-radius: 999px;
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-subtle);
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+  border: 1px solid var(--badge-neutral-border);
 }
 
 .badge-urgent,
 .badge-q1 {
-  background: rgba(248, 113, 113, 0.18);
-  color: var(--danger-text);
-  border-color: var(--danger);
+  background: var(--badge-urgent-bg);
+  color: var(--badge-urgent-fg);
+  border-color: var(--badge-urgent-border);
 }
 
 .badge-tag,
 .badge-q2 {
-  background: rgba(56, 189, 248, 0.14);
-  color: var(--accent-primary);
-  border-color: rgba(56, 189, 248, 0.35);
+  background: var(--badge-score-bg);
+  color: var(--badge-score-fg);
+  border-color: var(--badge-score-border);
+}
+
+/* Persona pills (human vs. agent users) and metadata colours. */
+.user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  background: var(--pill-human-bg);
+  color: var(--pill-human-fg);
+  border: 1px solid var(--pill-human-border);
+  white-space: nowrap;
+}
+
+.user-pill.is-agent {
+  background: var(--pill-agent-bg);
+  color: var(--pill-agent-fg);
+  border: 1px dashed var(--pill-agent-border);
+}
+
+.meta-estimate {
+  color: var(--meta-estimate);
+}
+
+.meta-sgdb {
+  color: var(--meta-sgdb);
+}
+
+.meta-due {
+  color: var(--meta-due);
 }
 
 .meta-row {
@@ -728,6 +831,41 @@ table.db-table td {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Status pill keeps its column width so it never breaks across lines. */
+table.db-table td.db-status {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* Clickable ID and title: look like text, open the task details. */
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0.2rem;
+}
+
+.link-btn .task-id,
+.link-btn-title:hover {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+.link-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+table.db-table .title-meta {
+  margin-left: 0.35rem;
+}
+
 table.db-table th {
   background: var(--bg-header-sub);
   color: var(--text-secondary);
@@ -756,20 +894,53 @@ table.db-table th {
   justify-content: flex-end;
 }
 
-.detail-drawer,
-.drawer-panel {
-  background: var(--bg-surface);
-  border-left: 1px solid var(--border-strong);
-  width: min(47.5rem, 95vw);
-  height: 100vh;
-  overflow-y: auto;
-  padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
+/* Task detail modal (TaskDetailDrawer.svelte): centered, bits-ui Dialog, Esc closes. */
+.detail-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 1000;
 }
 
-.drawer-header {
+.detail-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  z-index: 1001;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.75rem;
+  box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.6);
+  width: min(90rem, 96vw);
+  max-height: 94vh;
+  overflow: hidden;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  animation: detail-modal-in 0.16s ease-out;
+}
+
+@keyframes detail-modal-in {
+  from {
+    opacity: 0;
+    scale: 0.98;
+  }
+  to {
+    opacity: 1;
+    scale: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-modal {
+    animation: none;
+  }
+}
+
+.drawer-header,
+.detail-modal-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -778,74 +949,326 @@ table.db-table th {
   padding-bottom: 0.85rem;
 }
 
+.detail-modal-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.detail-modal-title {
+  margin: 0;
+  font-size: 1.25rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+/* Two columns: metadata sidebar on the right, long-form content on the left. */
+/* The body scrolls, which clips anything past its box; the padding gives focus
+   rings room on every side, and the negative margin keeps the layout aligned. */
+.detail-modal-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 0.75rem var(--detail-side-width, 22rem);
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0.4rem 0.5rem 0.5rem;
+  margin: -0.4rem -0.5rem -0.5rem;
+}
+
+.detail-modal-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
+  padding-right: 0.5rem;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.detail-modal-side {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  grid-column: 3;
+  grid-row: 1;
+  align-self: start;
+  min-width: 0;
+}
+
+/* Drag handle on the sidebar's left edge; a hairline with a wider hit area. */
+.detail-modal-handle {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: stretch;
+  justify-self: center;
+  width: 0.5rem;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+  border-radius: 0.25rem;
+}
+
+.detail-modal-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--border-subtle);
+  transform: translateX(-50%);
+}
+
+.detail-modal-handle:hover::before,
+.detail-modal-handle.is-dragging::before,
+.detail-modal-handle:focus-visible::before {
+  background: var(--accent-primary);
+  width: 2px;
+}
+
+.detail-modal-handle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Comment composer footer: attachment alt text fills the row, the spawn toggle
+   sits against the right edge, and Post Comment sits below, right-aligned. */
+.comment-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.6rem;
+}
+
+.comment-attach-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.comment-attach-row input[type="text"] {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.comment-spawn-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.comment-actions > .btn-primary {
+  align-self: flex-end;
+}
+
+/* Sidebar blocks use headings and dividers, not nested cards. */
+.side-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.side-heading {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.side-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.side-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.75rem;
+  margin: 0;
+  font-size: 0.88rem;
+  align-items: center;
+}
+
+.side-list dt {
+  color: var(--text-secondary);
+}
+
+.side-list dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Edit-mode fields in the sidebar: label above control, same rhythm as view rows. */
+.side-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.side-field > label,
+.side-field-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.detail-modal-side input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Sliders in the sidebar: reserve room above and below so tick labels never
+   collide with the header above or the next block below. */
+.detail-modal-side .slider-field {
+  gap: 0.25rem;
+}
+
+.detail-modal-side .slider-root {
+  padding: 0.6rem 0 1.6rem;
+}
+
+/* Main-column section titles, matching the attachments/relations headings. */
+.detail-modal .section-heading {
+  margin: 0 0 0.6rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.side-muted {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Inside the modal, sections separate with a rule instead of a boxed card. */
+.detail-modal .card,
+.detail-modal .detail-section {
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 1rem 0 0;
+}
+
+@media (max-width: 48rem) {
+  .detail-modal-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .detail-modal-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .detail-modal-side,
+  .detail-modal-main {
+    grid-column: 1;
+    grid-row: auto;
+    padding-right: 0;
+  }
+
+  .detail-modal-handle {
+    display: none;
+  }
+
+  .detail-modal-side {
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: 1rem;
+  }
+}
+
 .drawer-body {
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
 
-/* Active user and project switcher modals (Ctrl+U / Ctrl+P) */
-.switcher-modal-backdrop {
+/* Command palette (Cmd/Ctrl+K, Ctrl+U for users, Ctrl+P for projects; bits-ui Dialog + Command) */
+.command-palette-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(2, 6, 23, 0.68);
+  background: rgba(2, 6, 23, 0.6);
   z-index: 1500;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1.5rem;
 }
 
-.switcher-modal-card {
+.command-palette {
+  position: fixed;
+  top: 12vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1501;
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
-  border-radius: 0.5rem;
-  width: min(26rem, 92vw);
-  padding: 1rem;
+  border-radius: 0.75rem;
+  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.6);
+  width: min(36rem, 92vw);
+  max-height: 70vh;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  overflow: hidden;
 }
 
-.switcher-modal-header {
+.command-palette-root {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.switcher-modal-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 15rem;
+.command-palette-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+  padding: 0.85rem 1rem;
+  font-size: 0.98rem;
+}
+
+.command-palette-list {
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  padding: 0.4rem;
 }
 
-.switcher-modal-input {
-  width: 100%;
+.command-palette-heading {
+  padding: 0.5rem 0.6rem 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
-.switcher-modal-option {
-  width: 100%;
+.command-palette-item {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
-  text-align: left;
-  background: var(--bg-input);
-  padding: 0.45rem 0.65rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 0.4rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-primary);
 }
 
-.switcher-modal-option.is-highlighted {
-  border-color: var(--accent-primary);
-  background: rgba(56, 189, 248, 0.12);
+.command-palette-item[data-selected] {
+  background: var(--bg-elevated);
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
-.switcher-modal-option.is-current {
-  font-weight: 600;
+.command-palette-empty {
+  padding: 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }
 
 /* Confirmation Modal (bits-ui Dialog) */
@@ -901,8 +1324,8 @@ table.db-table th {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.5rem;
-  flex-wrap: nowrap;
+  gap: 0.25rem 0.5rem;
+  flex-wrap: wrap;
 }
 
 .date-picker-label-row label {
@@ -951,7 +1374,7 @@ table.db-table th {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 
 .date-picker-input,
@@ -1391,6 +1814,92 @@ input[type="text"].tag-compact-input {
   min-width: 9.5rem;
 }
 
+/* Shared Bits UI select (components/ui/Select.svelte). Themed through the same
+   tokens as inputs so it matches every theme and contrast mode. */
+.ui-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: auto;
+  min-width: 7.5rem;
+  max-width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.375rem;
+  color: var(--text-primary);
+  padding: 0.45rem 0.65rem;
+  text-align: left;
+}
+
+.form-field .ui-select-trigger,
+.entry-field .ui-select-trigger,
+.settings-field .ui-select-trigger {
+  width: 100%;
+}
+
+.ui-select-trigger.ui-select-sm {
+  padding: 0.28rem 0.55rem;
+  font-size: 0.85rem;
+}
+
+.ui-select-trigger[data-placeholder] .ui-select-value {
+  color: var(--text-muted);
+}
+
+.ui-select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-select-chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.ui-select-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  padding: 0.35rem;
+  z-index: 1600;
+  min-width: var(--bits-select-anchor-width, 10rem);
+  max-height: 18rem;
+  overflow: hidden;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.45);
+}
+
+.ui-select-viewport {
+  max-height: inherit;
+  overflow-y: auto;
+}
+
+.ui-select-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  font-size: 0.86rem;
+  color: var(--text-primary);
+}
+
+.ui-select-item[data-highlighted] {
+  background: var(--bg-elevated);
+}
+
+.ui-select-item[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ui-select-check {
+  width: 1ch;
+  color: var(--accent-primary);
+}
+
 /* Draft Attachments List */
 .draft-attachments-list {
   list-style: none;
@@ -1525,6 +2034,44 @@ input[type="text"].tag-compact-input {
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   gap: 1rem;
   align-items: start;
+}
+
+/* New Task form: main column (title, description, relations, attachments) beside a
+   narrower sidebar (status, ratings, personas, tags, project, dates). Collapses to one
+   column when the form itself is narrow. */
+.entry-form {
+  container-type: inline-size;
+}
+
+.entry-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(16rem, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.entry-main,
+.entry-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.entry-sidebar {
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--border-subtle);
+}
+
+@container (max-width: 48rem) {
+  .entry-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .entry-sidebar {
+    padding-left: 0;
+    border-left: none;
+  }
 }
 
 .form-grid-dates {
@@ -1682,24 +2229,53 @@ input[type="text"].tag-compact-input {
 }
 
 /* Settings User Management & Deletion Modal */
-.user-mgmt-list {
-  list-style: none;
-  padding: 0;
-  margin: 0.35rem 0 0 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.user-mgmt-row {
+.user-mgmt-identity {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.user-table td,
+.user-table th {
+  vertical-align: middle;
+}
+
+.user-table .user-actions {
+  text-align: right;
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* Kind cell: reads as text, shows an editable affordance on hover and focus. */
+.inline-edit {
+  background: transparent;
+  border: 1px dashed transparent;
   border-radius: 0.375rem;
+  padding: 0.2rem 0.55rem;
+  font: inherit;
+  color: inherit;
+  cursor: text;
+}
+
+.inline-edit:hover,
+.inline-edit:focus-visible {
+  border-color: var(--border-strong);
+}
+
+.inline-edit:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.user-kind-input {
+  width: 10rem;
+}
+
+.user-pill-kind {
+  font-weight: 500;
+  opacity: 0.9;
 }
 
 .user-delete-modal-card {
@@ -1802,8 +2378,222 @@ input[type="text"].tag-compact-input {
   min-width: 0;
 }
 
+/* Free-text bulk fields (new assignee or project names), sized like the sm selects. */
+.bulk-text-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.bulk-text-input {
+  width: 9.5rem;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.bulk-notice {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  flex-basis: 100%;
+}
+
+.bulk-notice.is-warning {
+  color: var(--danger);
+}
+
+/* Shared typed-user input (components/UserRefInput.svelte). */
+.user-ref {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.user-ref input {
+  width: 100%;
+  min-width: 0;
+}
+
+.user-ref-warning {
+  font-size: 0.78rem;
+  color: var(--warning);
+}
+
+.bulk-text-field .field-warning {
+  font-size: 0.75rem;
+  color: var(--warning, var(--text-secondary));
+}
+
+.bulk-text-field .field-error {
+  font-size: 0.75rem;
+}
+
 .bulk-spacer {
   flex: 1;
+}
+
+/* TaskCard (components/TaskCard.svelte). The title button stretches over the whole card
+   (stretched-link pattern), so the controls that must stay separate sit above it. */
+.card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.card-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+}
+
+/* Badges wrap within their own region; the menu never moves into the badge flow. */
+.card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.card-personas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.card-control {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+.card-menu {
+  flex: none;
+  margin-left: auto;
+}
+
+.card-complete-btn {
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.card-complete-btn:hover:not(:disabled) {
+  color: var(--success);
+  border-color: var(--success);
+  background: transparent;
+}
+
+.card-menu-btn {
+  padding: 0.05rem 0.45rem;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  line-height: 1.3;
+}
+
+.task-card:hover .card-menu-btn,
+.card-menu-btn:focus-visible,
+.card-menu-btn[data-state="open"] {
+  opacity: 1;
+}
+
+.badge-score {
+  background: var(--badge-score-bg);
+  color: var(--badge-score-fg);
+  border-color: var(--badge-score-border);
+  font-weight: 700;
+}
+
+.card-quadrant {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.card-title-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.card-title-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.task-card:hover .card-title-btn {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+.card-preview {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.card-unblocks {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.card-temporal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin-top: 0.1rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.card-temporal > span {
+  white-space: nowrap;
 }
 
 .task-card.is-selected,

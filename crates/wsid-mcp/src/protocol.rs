@@ -173,7 +173,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "list_users".to_string(),
-            description: "Lists all known user handles (valid `@user` / `assignee` values) plus the default and primary (main) users.".to_string(),
+            description: "Lists all known user handles (valid `@user` / `assignee` values) plus the default and primary (main) users, and each user's kind (`kinds` map; `human` unless set).".to_string(),
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         ToolDefinition {
@@ -183,6 +183,18 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                 "type": "object",
                 "properties": { "user": { "type": "string" } },
                 "required": ["user"]
+            }),
+        },
+        ToolDefinition {
+            name: "set_user_kind".to_string(),
+            description: "Sets what kind of actor a user is (e.g. `human` (default), `claude`, `opencode`, `jira`). Kinds are free-form lowercase tokens; the user must already exist (use register_user first).".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "user": { "type": "string" },
+                    "kind": { "type": "string" }
+                },
+                "required": ["user", "kind"]
             }),
         },
         ToolDefinition {

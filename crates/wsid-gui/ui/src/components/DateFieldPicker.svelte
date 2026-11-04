@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { untrack } from "svelte";
   import { DatePicker, TimeField } from "bits-ui";
   import {
@@ -282,8 +283,8 @@
     value = formatCombinedIso(pickerDate, pickerTime, tzMode, offsetMinutes);
   }
 
-  function handleTzModeChange(e: Event) {
-    tzMode = (e.currentTarget as HTMLSelectElement).value as TzMode;
+  function handleTzModeChange(next: string) {
+    tzMode = next as TzMode;
     if (tzMode === "offset" && offsetToMinutes(offsetInput) === null) {
       offsetInput = minutesToOffset(offsetMinutes);
     }
@@ -336,17 +337,19 @@
       <div class="date-picker-label-row">
         <DatePicker.Label class="field-label">{label}</DatePicker.Label>
         <div class="tz-control">
-          <select
+          <Select
             class="tz-select"
+            size="sm"
             value={tzMode}
-            onchange={handleTzModeChange}
-            aria-label={`${label} time zone`}
+            options={[
+              { value: "local", label: `Local · ${shortTzName}` },
+              { value: "utc", label: "UTC · Z" },
+              { value: "offset", label: "Custom offset" },
+            ]}
+            onValueChange={handleTzModeChange}
+            ariaLabel={`${label} time zone`}
             title="Time zone used to interpret the date and time you enter. Stored as UTC."
-          >
-            <option value="local">Local · {shortTzName}</option>
-            <option value="utc">UTC · Z</option>
-            <option value="offset">Custom offset</option>
-          </select>
+          />
           {#if tzMode === "offset"}
             <input
               class="tz-offset-input"

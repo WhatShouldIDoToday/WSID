@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
+  import TaskCard from "./TaskCard.svelte";
   import {
     type FocusQueueResponse,
     type BlockedTaskEntry,
@@ -13,6 +15,8 @@
 
   interface Props {
     focusData: FocusQueueResponse | null;
+    /** Account kind per user (`human` unless set); drives persona pills. */
+    userKinds?: Record<string, string>;
     blockedTasks: BlockedTaskEntry[];
     knownProjects: string[];
     projectFilter: string;
@@ -25,6 +29,7 @@
 
   let {
     focusData,
+    userKinds = {},
     blockedTasks,
     knownProjects,
     projectFilter,
@@ -63,33 +68,33 @@
     {#if focusData}
       <div class="control-inline">
         <label for="focus-project-select">Project:</label>
-        <select
+        <Select
           id="focus-project-select"
+          size="sm"
           value={projectFilter}
-          onchange={(e) =>
-            onProjectChange((e.currentTarget as HTMLSelectElement).value)}
-        >
-          {#each [...new Set( ["default", ...knownProjects] )] as project (project)}
-            <option value={project}>{project}</option>
-          {/each}
-          <option value="all">All projects</option>
-        </select>
+          options={[
+            ...[...new Set(["default", ...knownProjects])].map((project) => ({
+              value: project,
+              label: project,
+            })),
+            { value: "all", label: "All projects" },
+          ]}
+          onValueChange={(v) => onProjectChange(v)}
+        />
       </div>
 
       <div class="control-inline">
         <label for="focus-preset-select">Preset:</label>
-        <select
+        <Select
           id="focus-preset-select"
+          size="sm"
           value={focusData.preset}
-          onchange={(e) =>
-            onPresetChange(
-              (e.currentTarget as HTMLSelectElement).value as FocusPreset,
-            )}
-        >
-          {#each Object.entries(PRESET_LABELS) as [key, label]}
-            <option value={key}>{label}</option>
-          {/each}
-        </select>
+          options={Object.entries(PRESET_LABELS).map(([key, label]) => ({
+            value: key,
+            label,
+          }))}
+          onValueChange={(v) => onPresetChange(v as FocusPreset)}
+        />
       </div>
     {/if}
   </div>
@@ -105,109 +110,24 @@
     >
       {#each focusData.actionable_tasks as item, idx (item.task.id)}
         <li>
-          <article
-            class="task-card"
-            aria-labelledby={`focus-title-${item.task.id}`}
-          >
-            <div class="task-card-header">
-              <div>
-                <div class="meta-row" style="margin-bottom: 0.3rem;">
-                  <span
-                    class="badge"
-                    style="background: var(--accent-primary); color: var(--accent-text-dark); font-weight: 800;"
-                  >
-                    #{idx + 1} · Score {item.breakdown.total_score.toFixed(1)}
-                  </span>
-                  <span class="task-id-badge">{item.task.id}</span>
-                  <span class="badge">{STATUS_LABELS[item.task.status]}</span>
-                  <span class="badge">{QUADRANT_META[item.quadrant].badge}</span
-                  >
-                  {#if item.task.urgent_override}
-                    <span class="badge badge-urgent">Urgent</span>
-                  {/if}
-                  {#if item.task.attachments.length > 0}
-                    <span class="badge">
-                      {item.task.attachments.length} attachment(s)
-                    </span>
-                  {/if}
-                </div>
-                <h3
-                  id={`focus-title-${item.task.id}`}
-                  style="margin: 0; font-size: 1.1rem;"
-                >
-                  {item.task.title}
-                </h3>
-              </div>
-
-              <div class="actions-row">
-                {#if item.task.status === "todo"}
-                  <button
-                    type="button"
-                    class="btn-sm"
-                    onclick={() =>
-                      handleQuickStatus(item.task.id, "in_progress")}
-                  >
-                    Start Work
-                  </button>
-                {/if}
-                <button
-                  type="button"
-                  class="btn-sm btn-primary"
-                  onclick={() => handleQuickStatus(item.task.id, "completed")}
-                >
-                  {item.task.assignee.toLowerCase() !==
-                  item.task.evaluator.toLowerCase()
-                    ? `Submit Review (@${item.task.evaluator})`
-                    : "Complete"}
-                </button>
-                <button
-                  type="button"
-                  class="btn-sm"
-                  onclick={() => onSelectTask(item.task.id)}
-                >
-                  Open Details & Notes
-                </button>
-              </div>
-            </div>
-
-            <div class="meta-row">
-              <span>Importance: <strong>{item.task.importance}/5</strong></span>
-              <span
-                >· Difficulty: <strong>{item.task.difficulty}/5</strong></span
-              >
-              <span>
-                · Estimate:
-                <strong
-                  >{formatDurationMinutes(
-                    item.task.time_estimate_minutes,
-                  )}</strong
-                >
-              </span>
-              {#if item.breakdown.effective_deadline}
-                <span>
-                  · Effective Deadline:
-                  <strong>{item.breakdown.effective_deadline}</strong>
-                  {#if item.breakdown.slack_days !== null}
-                    ({item.breakdown.slack_days.toFixed(1)}d slack)
-                  {/if}
-                </span>
-              {/if}
-              {#if item.breakdown.unblocks_count > 0}
-                <span>
-                  · Unblocks <strong>{item.breakdown.unblocks_count}</strong> downstream
-                  task(s)
-                </span>
-              {/if}
-            </div>
-
-            {#if item.task.tags.length > 0}
-              <div class="meta-row">
-                {#each item.task.tags as tag}
-                  <span class="badge badge-tag">#{tag}</span>
-                {/each}
-              </div>
-            {/if}
-          </article>
+          <TaskCard
+            task={item.task}
+            titleId={`focus-title-${item.task.id}`}
+            rank={idx + 1}
+            score={item.breakdown.total_score}
+            quadrantLabel={QUADRANT_META[item.quadrant].badge}
+            unblocksCount={item.breakdown.unblocks_count}
+            deadline={item.breakdown.effective_deadline}
+            slackDays={item.breakdown.slack_days}
+            showStatus
+            {userKinds}
+            completeLabel={item.task.assignee.toLowerCase() !==
+            item.task.evaluator.toLowerCase()
+              ? `Submit for review (@${item.task.evaluator})`
+              : "Mark complete"}
+            onComplete={() => handleQuickStatus(item.task.id, "completed")}
+            onOpen={() => onSelectTask(item.task.id)}
+          />
         </li>
       {/each}
     </ol>

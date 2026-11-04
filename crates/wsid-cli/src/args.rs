@@ -180,6 +180,8 @@ pub enum UsersAction {
     List,
     /// Register a user handle (lowercase letters, digits, `_`, `-`)
     Add { user: String },
+    /// Set a user's kind, such as `human` (default), `claude`, `opencode`, or `jira`
+    Kind { user: String, kind: String },
     /// Delete a user, reassigning their tasks to the main user (previews unless `--yes` is given)
     Delete {
         user: String,

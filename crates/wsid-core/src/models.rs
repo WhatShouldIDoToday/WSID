@@ -334,6 +334,31 @@ pub struct AddTaskNoteOutcome {
     pub spawned_tasks: Vec<Task>,
     pub reused_tasks: Vec<Task>,
     pub completed_review_tasks: Vec<Task>,
+    /// Typed user references (`@kind:user`) that created a user or conflicted with an existing kind.
+    pub user_notices: Vec<UserNotice>,
+}
+
+/// Something the user should know about after a typed user reference (`@kind:user`) was resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UserNotice {
+    /// A user was created from a typed reference. `new_kind` is true when that kind was not used by any user before.
+    Created { user: String, kind: String, new_kind: bool },
+    /// The user already exists with a different kind; the stored kind was left unchanged.
+    KindMismatch { user: String, requested: String, actual: String },
+}
+
+impl UserNotice {
+    /// One-sentence description shared by the CLI, TUI, and MCP. Mismatches are prefixed `warning:`.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Created { user, kind, new_kind: true } => format!("Created @{user} with new user kind '{kind}'."),
+            Self::Created { user, kind, new_kind: false } => format!("Created @{user} as {kind}."),
+            Self::KindMismatch { user, requested, actual } => {
+                format!("warning: @{user} is a {actual} user; '{requested}:' was ignored.")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

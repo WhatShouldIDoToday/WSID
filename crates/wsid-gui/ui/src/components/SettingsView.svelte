@@ -1,5 +1,9 @@
 <script lang="ts">
+  import { tick } from "svelte";
+  import Select from "./ui/Select.svelte";
+  import UserPill from "./UserPill.svelte";
   import { Dialog } from "bits-ui";
+  import { knownUserKinds, setUserKind, userKindOf } from "../lib/ipc";
   import {
     type AppSessionSnapshot,
     type FocusPreset,
@@ -24,6 +28,7 @@
     onFocusLimitChange: (limit: number) => void | Promise<void>;
     onOpenAbout: () => void;
     onUserDeleted: () => void | Promise<void>;
+    onUserKindChanged: () => void | Promise<void>;
     onSelectTask?: (id: string) => void;
     announce: (msg: string) => void;
   }
@@ -41,9 +46,76 @@
     onFocusLimitChange,
     onOpenAbout,
     onUserDeleted,
+    onUserKindChanged,
     onSelectTask,
     announce,
   }: Props = $props();
+
+  /** Unsaved kind edits per user; a user without a draft shows their saved kind. */
+  let kindDrafts = $state<Record<string, string>>({});
+  let kindOptions = $derived(knownUserKinds(session.user_kinds));
+
+  /** The user whose kind cell is currently an input, if any. */
+  let editingKindUser = $state<string | null>(null);
+
+  function kindButtonId(username: string): string {
+    return `user-kind-btn-${username}`;
+  }
+
+  /** Returns true when the kind was saved. A failure keeps the draft for correction. */
+  async function saveUserKind(username: string): Promise<boolean> {
+    const kind = (
+      kindDrafts[username] ?? userKindOf(session.user_kinds, username)
+    ).trim();
+    userMgmtError = null;
+    try {
+      await setUserKind(username, kind);
+      delete kindDrafts[username];
+      announce(`Set @${username} kind to ${kind.toLowerCase()}.`);
+      await onUserKindChanged();
+      return true;
+    } catch (err) {
+      userMgmtError = String(err);
+      announce(`Failed to set kind for @${username}: ${String(err)}`);
+      return false;
+    }
+  }
+
+  function startKindEdit(username: string) {
+    kindDrafts[username] = userKindOf(session.user_kinds, username);
+    editingKindUser = username;
+  }
+
+  async function endKindEdit(username: string) {
+    editingKindUser = null;
+    delete kindDrafts[username];
+    await tick();
+    document.getElementById(kindButtonId(username))?.focus();
+  }
+
+  /** Enter or blur saves a changed kind; an unchanged value just closes the editor. */
+  async function commitKindEdit(username: string) {
+    if (editingKindUser !== username) return;
+    const draft = (kindDrafts[username] ?? "").trim();
+    const current = userKindOf(session.user_kinds, username);
+    if (!draft || draft.toLowerCase() === current.toLowerCase()) {
+      await endKindEdit(username);
+      return;
+    }
+    kindDrafts[username] = draft;
+    if (await saveUserKind(username)) {
+      await endKindEdit(username);
+    } else {
+      // Keep the editor open so the typed value can be corrected.
+      await tick();
+      document.getElementById(`user-kind-input-${username}`)?.focus();
+    }
+  }
+
+  function focusAndSelect(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
 
   let isMainUser = $derived(
     session.active_user.toLowerCase() === session.primary_user.toLowerCase(),
@@ -156,18 +228,15 @@
         <label for="settings-focus-preset" class="field-label">
           Default Focus Preset
         </label>
-        <select
+        <Select
           id="settings-focus-preset"
           value={session.active_preset}
-          onchange={(e) =>
-            onPresetChange(
-              (e.currentTarget as HTMLSelectElement).value as FocusPreset,
-            )}
-        >
-          {#each Object.entries(PRESET_LABELS) as [key, label]}
-            <option value={key}>{label}</option>
-          {/each}
-        </select>
+          options={Object.entries(PRESET_LABELS).map(([key, label]) => ({
+            value: key,
+            label,
+          }))}
+          onValueChange={(v) => onPresetChange(v as FocusPreset)}
+        />
       </div>
 
       <div class="form-field">
@@ -216,56 +285,47 @@
         <label for="settings-theme-select" class="field-label">
           Color Scheme
         </label>
-        <select
+        <Select
           id="settings-theme-select"
           value={uiPrefs.theme}
-          onchange={(e) =>
-            setTheme(
-              (e.currentTarget as HTMLSelectElement)
-                .value as UiPreferences["theme"],
-            )}
-        >
-          <option value="system">System Default (prefers-color-scheme)</option>
-          <option value="dark">Dark</option>
-          <option value="oled">OLED (Pure Black)</option>
-          <option value="light">Light</option>
-        </select>
+          options={[
+            { value: "system", label: "System Default (prefers-color-scheme)" },
+            { value: "dark", label: "Dark" },
+            { value: "oled", label: "OLED (Pure Black)" },
+            { value: "light", label: "Light" },
+          ]}
+          onValueChange={(v) => setTheme(v as UiPreferences["theme"])}
+        />
       </div>
 
       <div class="form-field" style="margin-bottom: 1rem;">
         <label for="settings-contrast-select" class="field-label">
           Contrast Level
         </label>
-        <select
+        <Select
           id="settings-contrast-select"
           value={uiPrefs.contrast}
-          onchange={(e) =>
-            setContrast(
-              (e.currentTarget as HTMLSelectElement)
-                .value as UiPreferences["contrast"],
-            )}
-        >
-          <option value="system">System Default (prefers-contrast)</option>
-          <option value="more">High Contrast</option>
-        </select>
+          options={[
+            { value: "system", label: "System Default (prefers-contrast)" },
+            { value: "more", label: "High Contrast" },
+          ]}
+          onValueChange={(v) => setContrast(v as UiPreferences["contrast"])}
+        />
       </div>
 
       <div class="form-field" style="margin-bottom: 1rem;">
         <label for="settings-palette-select" class="field-label">
           Status & Priority Color Palette
         </label>
-        <select
+        <Select
           id="settings-palette-select"
           value={uiPrefs.palette}
-          onchange={(e) =>
-            setPalette(
-              (e.currentTarget as HTMLSelectElement)
-                .value as UiPreferences["palette"],
-            )}
-        >
-          <option value="default">Standard Palette</option>
-          <option value="okabe-ito">Okabe-Ito (Colorblind-Safe)</option>
-        </select>
+          options={[
+            { value: "default", label: "Standard Palette" },
+            { value: "okabe-ito", label: "Okabe-Ito (Colorblind-Safe)" },
+          ]}
+          onValueChange={(v) => setPalette(v as UiPreferences["palette"])}
+        />
       </div>
 
       <div class="form-field">
@@ -339,21 +399,20 @@
           <label for="settings-recent-db" class="field-label">
             Recent Workspaces
           </label>
-          <select
+          <Select
             id="settings-recent-db"
             value={session.is_global_db ? "" : session.db_path}
-            onchange={(e) => {
-              const target = e.currentTarget as HTMLSelectElement;
-              if (target.value) {
-                void onSwitchRecentDb(target.value);
-              }
+            options={[
+              { value: "", label: "Select a recent workspace database..." },
+              ...session.recent_workspaces.map((ws) => ({
+                value: ws,
+                label: ws,
+              })),
+            ]}
+            onValueChange={(v) => {
+              if (v) void onSwitchRecentDb(v);
             }}
-          >
-            <option value="">Select a recent workspace database...</option>
-            {#each session.recent_workspaces as ws}
-              <option value={ws}>{ws}</option>
-            {/each}
-          </select>
+          />
         </div>
       {/if}
     </section>
@@ -405,32 +464,95 @@
           </div>
         {/if}
 
-        <ul class="user-mgmt-list" aria-label="Registered database users">
-          {#each session.known_users as user (user)}
-            <li class="user-mgmt-row">
-              <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <strong style="font-family: var(--font-mono);">@{user}</strong>
-                {#if user.toLowerCase() === session.primary_user.toLowerCase()}
-                  <span class="badge">Main User</span>
-                {/if}
-                {#if user.toLowerCase() === session.active_user.toLowerCase()}
-                  <span class="badge">Active</span>
-                {/if}
-              </div>
-
-              {#if user.toLowerCase() !== session.primary_user.toLowerCase()}
-                <button
-                  type="button"
-                  class="btn-sm btn-danger"
-                  onclick={() => openDeleteUserDialog(user)}
-                  aria-label={`Delete user @${user} from database`}
-                >
-                  Delete User...
-                </button>
-              {/if}
-            </li>
+        <datalist id="user-kind-options">
+          {#each kindOptions as kind (kind)}
+            <option value={kind}></option>
           {/each}
-        </ul>
+        </datalist>
+
+        <table class="db-table user-table">
+          <caption class="sr-only">Registered database users</caption>
+          <thead>
+            <tr>
+              <th scope="col">User</th>
+              <th scope="col">Kind</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each session.known_users as user (user)}
+              {@const kind = userKindOf(session.user_kinds, user)}
+              <tr>
+                <td>
+                  <div class="user-mgmt-identity">
+                    <UserPill {user} {kind} />
+                    {#if user.toLowerCase() === session.primary_user.toLowerCase()}
+                      <span class="badge">Main User</span>
+                    {/if}
+                    {#if user.toLowerCase() === session.active_user.toLowerCase()}
+                      <span class="badge">Active</span>
+                    {/if}
+                  </div>
+                </td>
+                <td>
+                  {#if editingKindUser === user}
+                    <input
+                      id={`user-kind-input-${user}`}
+                      class="user-kind-input"
+                      type="text"
+                      list="user-kind-options"
+                      autocomplete="off"
+                      aria-label={`Kind for @${user}. Enter saves, Escape cancels.`}
+                      bind:value={kindDrafts[user]}
+                      use:focusAndSelect
+                      onkeydown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void commitKindEdit(user);
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void endKindEdit(user);
+                        }
+                      }}
+                      onblur={() => void commitKindEdit(user)}
+                    />
+                  {:else}
+                    <button
+                      id={kindButtonId(user)}
+                      type="button"
+                      class="inline-edit"
+                      aria-label={`Kind for @${user}: ${kind}. Press Enter to edit.`}
+                      aria-keyshortcuts="Enter F2"
+                      title="Double-click, Enter or F2 to edit"
+                      ondblclick={() => startKindEdit(user)}
+                      onkeydown={(e) => {
+                        if (e.key === "Enter" || e.key === "F2") {
+                          e.preventDefault();
+                          startKindEdit(user);
+                        }
+                      }}
+                    >
+                      {kind}
+                    </button>
+                  {/if}
+                </td>
+                <td class="user-actions">
+                  {#if user.toLowerCase() !== session.primary_user.toLowerCase()}
+                    <button
+                      type="button"
+                      class="btn-sm btn-danger"
+                      onclick={() => openDeleteUserDialog(user)}
+                      aria-label={`Delete user @${user} from database`}
+                    >
+                      Delete User...
+                    </button>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </section>
     {/if}
 

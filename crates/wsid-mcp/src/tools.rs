@@ -6,11 +6,11 @@ use serde_json::{Map, Value, json};
 use wsid_core::{
     AppConfig, AttachmentInput, BulkTaskPatch, Database, FocusPreset, RelationDraft, RelationInputKind, Scalar, SearchQuery, Task,
     TaskDraft, TaskNote, TaskRelation, TaskStatus, UpdateTaskInput, WsidError, add_task_note, attach_existing_file, bulk_delete_tasks,
-    bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft, delete_task, delete_task_note, get_blocked_tasks,
-    get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks,
-    get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_task_relations, parse_deadline_datetime,
-    parse_duration_minutes, register_user, remove_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask,
-    unlink_tasks, update_attachment_description, update_task,
+    bulk_update_tasks, compute_focus_queue_in_project, create_task_from_draft_with_notices, delete_task, delete_task_note,
+    get_blocked_tasks, get_direct_blocked_tasks, get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers,
+    get_related_tasks, get_task, link_tasks, list_eisenhower_matrix, list_known_users, list_task_notes, list_task_relations,
+    list_user_kinds, parse_deadline_datetime, parse_duration_minutes, register_user, remove_attachment, search_tasks, set_user_kind,
+    transition_task_status, unblock_or_dismiss_subtask, unlink_tasks, update_attachment_description, update_task_with_notices,
 };
 
 use crate::protocol::CallToolResult;
@@ -50,6 +50,13 @@ struct ListUsersArgs {}
 #[derive(Debug, Clone, Deserialize)]
 struct RegisterUserArgs {
     pub user: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetUserKindArgs {
+    pub user: String,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -244,17 +251,27 @@ pub fn dispatch_tool(
         }
         "list_users" => {
             let _args: ListUsersArgs = parse_args(args_val)?;
+            let kinds = list_user_kinds(db).map_err(|e| e.to_string())?;
             list_known_users(db, &[config.primary_user.as_str(), config.default_user.as_str()]).map(|users| {
                 CallToolResult::ok_json(&json!({
                     "default_user": config.default_user,
                     "primary_user": config.primary_user,
                     "users": users,
+                    "kinds": kinds,
                 }))
             })
         }
         "register_user" => {
             let args: RegisterUserArgs = parse_args(args_val)?;
             register_user(db, &args.user).map(|user| CallToolResult::ok_json(&json!({ "registered": user })))
+        }
+        "set_user_kind" => {
+            let args: SetUserKindArgs = parse_args(args_val)?;
+            set_user_kind(db, &args.user, &args.kind).and_then(|()| {
+                let user = wsid_core::normalize_user(&args.user)?;
+                let kind = wsid_core::normalize_user_kind(&args.kind)?;
+                Ok(CallToolResult::ok_json(&json!({ "user": user, "kind": kind })))
+            })
         }
         "get_eisenhower_matrix" => {
             let args: EisenhowerArgs = parse_args(args_val)?;
@@ -397,12 +414,13 @@ fn handle_create_task(db: &mut Database, config: &AppConfig, args: CreateTaskArg
     };
 
     // Atomic: the task, its relations, and its attachments are created together or not at all.
-    let created = create_task_from_draft(db, &draft, &config.default_user)?;
+    let (created, user_notices) = create_task_from_draft_with_notices(db, &draft, &config.default_user)?;
     let relations = list_task_relations(db, &created.id)?;
 
     Ok(CallToolResult::ok_json(&json!({
         "task": created,
         "relations": relations,
+        "user_notices": user_notices,
     })))
 }
 
@@ -437,7 +455,7 @@ fn handle_update_task(db: &mut Database, args_val: Value) -> Result<CallToolResu
     let assignee = parse_optional_string(obj, "assignee")?;
     let evaluator = parse_optional_string(obj, "evaluator")?;
 
-    let updated = update_task(
+    let (updated, user_notices) = update_task_with_notices(
         db,
         id,
         UpdateTaskInput {
@@ -459,7 +477,10 @@ fn handle_update_task(db: &mut Database, args_val: Value) -> Result<CallToolResu
         },
     )?;
 
-    Ok(CallToolResult::ok_json(&updated))
+    // Task fields stay at the top level; typed-reference notices ride along beside them.
+    let mut value = serde_json::to_value(&updated).unwrap_or_default();
+    value["user_notices"] = json!(user_notices);
+    Ok(CallToolResult::ok_json(&value))
 }
 
 fn parse_optional_string(obj: &Map<String, Value>, key: &str) -> Result<Option<String>, WsidError> {

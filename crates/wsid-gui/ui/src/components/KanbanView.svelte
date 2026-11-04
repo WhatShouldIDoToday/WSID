@@ -1,8 +1,10 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { untrack } from "svelte";
   import {
     type Task,
     type TaskStatus,
+    type CardMoveDirection,
     STATUS_LABELS,
     STATUS_ORDER,
     bulkEditTasks,
@@ -13,7 +15,7 @@
     beginPointerDrag,
     type PointerDragState,
   } from "../lib/pointerdrag";
-  import BoardTaskCard from "./BoardTaskCard.svelte";
+  import TaskCard from "./TaskCard.svelte";
   import BulkActions from "./BulkActions.svelte";
   import DragGhost from "./DragGhost.svelte";
 
@@ -23,6 +25,8 @@
     activeProject: string;
     knownTags: string[];
     knownUsers: string[];
+    /** Account kind per user (`human` unless set); drives typed-mention hints. */
+    userKinds?: Record<string, string>;
     knownProjects: string[];
     onSelectTask: (id: string) => void;
     onDataChanged: () => void;
@@ -35,6 +39,7 @@
     activeProject,
     knownTags,
     knownUsers,
+    userKinds = {},
     knownProjects,
     onSelectTask,
     onDataChanged,
@@ -71,6 +76,14 @@
     value: status,
     label: STATUS_LABELS[status],
   }));
+
+  /** Alt+Left/Right moves a card to the neighbouring status column. */
+  function moveStatusByKey(task: Task, direction: CardMoveDirection) {
+    if (direction !== "left" && direction !== "right") return;
+    const index = STATUS_ORDER.indexOf(task.status);
+    const next = STATUS_ORDER[index + (direction === "right" ? 1 : -1)];
+    if (next) void moveTasksToStatus([task.id], next);
+  }
 
   $effect(() => {
     selection.prune(tasks.map((t) => t.id));
@@ -229,36 +242,44 @@
       <label for="kanban-project-select" class="field-label" style="margin: 0;">
         Project
       </label>
-      <select
+      <Select
         id="kanban-project-select"
-        bind:value={projectFilter}
-        onchange={() => announce(`Kanban project filter: ${projectFilter}`)}
-      >
-        {#each projectOptions as project (project)}
-          <option value={project}>{project}</option>
-        {/each}
-        <option value={PROJECT_ALL}>All projects</option>
-      </select>
+        size="sm"
+        value={projectFilter}
+        options={[
+          ...projectOptions.map((project) => ({
+            value: project,
+            label: project,
+          })),
+          { value: PROJECT_ALL, label: "All projects" },
+        ]}
+        onValueChange={(v) => {
+          projectFilter = v;
+          announce(`Kanban project filter: ${projectFilter}`);
+        }}
+      />
     </div>
 
     <div class="control-inline">
       <label for="kanban-user-select" class="field-label" style="margin: 0;">
         User
       </label>
-      <select
+      <Select
         id="kanban-user-select"
-        bind:value={userFilter}
-        onchange={() =>
+        size="sm"
+        value={userFilter}
+        options={[
+          { value: USER_ALL, label: "All users" },
+          ...userOptions.map((user) => ({ value: user, label: `@${user}` })),
+        ]}
+        onValueChange={(v) => {
+          userFilter = v;
           announce(
             "Kanban user filter: " +
               (userFilter === USER_ALL ? "all users" : "@" + userFilter),
-          )}
-      >
-        <option value={USER_ALL}>All users</option>
-        {#each userOptions as user (user)}
-          <option value={user}>@{user}</option>
-        {/each}
-      </select>
+          );
+        }}
+      />
     </div>
   </div>
 
@@ -267,6 +288,7 @@
       ids={selection.ids}
       {knownTags}
       {knownUsers}
+      {userKinds}
       {knownProjects}
       {announce}
       onClear={() => selection.clear()}
@@ -300,18 +322,21 @@
           <ul class="kanban-column-list">
             {#each colTasks as task (task.id)}
               <li>
-                <BoardTaskCard
+                <TaskCard
                   {task}
                   titleId={`kanban-card-${task.id}`}
+                  selectable
                   selected={selection.has(task.id)}
                   dragging={dragIds.includes(task.id)}
                   showProject={projectFilter === PROJECT_ALL}
-                  urgentLabel={task.urgent_override ? "Urgent" : ""}
-                  moveLabel={`Move ${task.id} to column:`}
-                  moveOptions={STATUS_OPTIONS}
-                  moveValue={task.status}
+                  {userKinds}
+                  moveLabel="Move to status"
+                  moveOptions={STATUS_OPTIONS.filter(
+                    (o) => o.value !== task.status,
+                  )}
                   onMove={(status) =>
                     void moveTasksToStatus([task.id], status as TaskStatus)}
+                  onKeyMove={(direction) => moveStatusByKey(task, direction)}
                   onOpen={() => onSelectTask(task.id)}
                   onPointerDown={(e) => handlePointerDown(e, task)}
                   onSelectClick={(e) =>

@@ -8,7 +8,7 @@ use wsid_core::{
     AppConfig, BulkTaskPatch, Database, DbChangeDetector, EisenhowerClassification, EisenhowerQuadrant, FieldIssue, FocusPreset,
     FocusQueueResponse, SearchHit, SearchQuery, Task, TaskAttachment, TaskNote, TaskStatus, UpdateTaskInput, UserDeletionPreview,
     WsidError, add_task_note, attach_existing_file, bulk_delete_tasks, bulk_update_tasks, compute_focus_queue_in_project,
-    create_task_from_draft, delete_task, delete_task_note, delete_user_from_db, get_attachment, get_direct_blocked_tasks,
+    create_task_from_draft_with_notices, delete_task, delete_task_note, delete_user_from_db, get_attachment, get_direct_blocked_tasks,
     get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, list_eisenhower_matrix,
     list_known_users, list_task_notes, list_tasks, normalize_project, normalize_user, open_file_in_os, parse_note_tokens,
     preview_user_deletion, register_user, remove_attachment, save_clipboard_attachment, search_relation_targets, search_tasks,
@@ -19,6 +19,7 @@ use crate::cli_runner::read_system_clipboard_attachment;
 pub use crate::tui::form::DataEntryForm;
 use crate::tui::form::{self, CommentSuggestion, CommentTokenKind, trailing_comment_token};
 use crate::tui::text_edit::{self, EditKind, TextHistory, apply_text_shortcut};
+use crate::tui::user_ref::{user_kind_mismatch, user_label};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
@@ -166,6 +167,8 @@ pub enum FocusContext {
     FormErrorModal,
     AboutModal,
     ProjectModal,
+    /// The Settings user-kind picker.
+    KindModal,
     /// The user filter modal (per-view user scope) owns input while it is open.
     UserModal,
     /// A prompt inside the task detail modal (comment, attach, jump, delete...).
@@ -254,9 +257,15 @@ pub struct SettingsState {
     pub mode: SettingsMode,
     pub focus_limit_input: String,
     pub database_path_input: String,
+    pub user_kind_target: String,
+    /// Search text of the kind picker.
+    pub user_kind_input: String,
+    pub kind_modal_open: bool,
+    pub kind_selected: usize,
     pub delete_confirm: Option<UserDeleteConfirm>,
     focus_limit_history: TextHistory,
     database_path_history: TextHistory,
+    user_kind_history: TextHistory,
 }
 
 pub struct TuiApp {
@@ -285,6 +294,8 @@ pub struct TuiApp {
 
     // Kanban View state
     pub all_tasks: Vec<Task>,
+    /// Cached `list_user_kinds`, refreshed with the task lists.
+    pub user_kinds: std::collections::BTreeMap<String, String>,
     pub kanban_col: usize,
     pub kanban_row: usize,
     pub kanban_states: [ListState; 6],
@@ -404,6 +415,7 @@ impl TuiApp {
             Some(wsid_core::ALL_PROJECTS),
         )?;
         let all_tasks = list_tasks(&db)?;
+        let user_kinds = wsid_core::list_user_kinds(&db)?;
         let eisenhower_items = list_eisenhower_matrix(&db, Some(&user), today, config.scoring)?;
         let search_hits = search_tasks(&db, &SearchQuery::default())?;
         let active_project = wsid_core::DEFAULT_PROJECT.to_string();
@@ -428,6 +440,7 @@ impl TuiApp {
             focus_state: ListState::default(),
             show_blocked_banner: true,
             all_tasks,
+            user_kinds,
             kanban_col: 1, // Todo column by default
             kanban_row: 0,
             kanban_states: std::array::from_fn(|_| ListState::default()),
@@ -529,6 +542,7 @@ impl TuiApp {
         }
 
         self.all_tasks = list_tasks(&self.db)?;
+        self.user_kinds = wsid_core::list_user_kinds(&self.db)?;
         {
             let existing: std::collections::HashSet<&str> = self.all_tasks.iter().map(|t| t.id.as_str()).collect();
             self.selected_ids
@@ -659,6 +673,8 @@ impl TuiApp {
             FocusContext::AboutModal
         } else if self.project_modal_open {
             FocusContext::ProjectModal
+        } else if self.settings.kind_modal_open {
+            FocusContext::KindModal
         } else if self.user_modal_open {
             FocusContext::UserModal
         } else if self.detail_modal.is_some() {
@@ -698,6 +714,7 @@ impl TuiApp {
             FocusContext::FormErrorModal => self.dismiss_form_errors(key),
             FocusContext::AboutModal => self.handle_about_modal_key(key),
             FocusContext::ProjectModal => self.handle_project_modal_key(key),
+            FocusContext::KindModal => self.handle_kind_modal_key(key),
             FocusContext::UserModal => self.handle_user_modal_key(key),
             FocusContext::DetailPrompt(_) | FocusContext::DetailAttachments | FocusContext::DetailModal => {
                 self.handle_detail_modal_key(key);
@@ -1297,11 +1314,17 @@ impl TuiApp {
         let mut users = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
         users.sort();
         users.dedup();
+        let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
         for user in users {
             if user == wsid_core::ALL_USERS {
                 continue;
             }
-            let label = if user == self.user { format!("@{user} (active)") } else { format!("@{user}") };
+            let kind = kinds
+                .get(&user)
+                .map(String::as_str)
+                .unwrap_or(wsid_core::DEFAULT_USER_KIND);
+            let kind_tag = if kind == wsid_core::DEFAULT_USER_KIND { String::new() } else { format!(" · {kind}") };
+            let label = if user == self.user { format!("@{user}{kind_tag} (active)") } else { format!("@{user}{kind_tag}") };
             options.push((user, label));
         }
         let current = self.user_modal_current_for(mode);
@@ -2109,6 +2132,16 @@ impl TuiApp {
                     .record(&before, EditKind::Discrete);
                 self.project_modal_selected = 0;
             }
+            FocusContext::KindModal => {
+                let before = self.settings.user_kind_input.clone();
+                self.settings
+                    .user_kind_input
+                    .push_str(&text_edit::flatten_paste(text));
+                self.settings
+                    .user_kind_history
+                    .record(&before, EditKind::Discrete);
+                self.settings.kind_selected = 0;
+            }
             FocusContext::UserModal => {
                 let before = self.user_modal_query.clone();
                 self.user_modal_query
@@ -2213,11 +2246,11 @@ impl TuiApp {
             self.submit_edited_task(&id, &draft);
             return;
         }
-        match create_task_from_draft(&mut self.db, &draft, &self.user) {
-            Ok(created) => {
+        match create_task_from_draft_with_notices(&mut self.db, &draft, &self.user) {
+            Ok((created, notices)) => {
                 self.entry_form = DataEntryForm::new_for(&self.user, &self.active_project);
                 let _ = self.refresh_all();
-                self.status_message = format!("Created task [{}] {}", created.id, created.title);
+                self.status_message = Self::with_user_notices(format!("Created task [{}] {}", created.id, created.title), &notices);
             }
             Err(WsidError::DraftRejected(issues)) => {
                 self.form_errors = Some(
@@ -2239,10 +2272,17 @@ impl TuiApp {
         }
     }
 
+    /// Appends typed-reference notices (`@kind:user`) to a status message.
+    fn with_user_notices(message: String, notices: &[wsid_core::UserNotice]) -> String {
+        notices
+            .iter()
+            .fold(message, |acc, notice| format!("{acc}. {}", notice.message()))
+    }
+
     /// Applies an edited form to the task it was opened for and returns to its detail modal.
     fn submit_edited_task(&mut self, id: &str, draft: &wsid_core::TaskDraft) {
-        match wsid_core::update_task_from_draft(&mut self.db, id, draft, &self.user) {
-            Ok(updated) => {
+        match wsid_core::update_task_from_draft_with_notices(&mut self.db, id, draft, &self.user) {
+            Ok((updated, notices)) => {
                 self.editing_task_id = None;
                 self.entry_form = DataEntryForm::new_for(&self.user, &self.active_project);
                 if let Some(tab) = self.editing_return_tab.take() {
@@ -2250,7 +2290,7 @@ impl TuiApp {
                 }
                 let _ = self.refresh_all();
                 self.open_detail_for(&updated.id);
-                self.status_message = format!("Updated task [{}] {}", updated.id, updated.title);
+                self.status_message = Self::with_user_notices(format!("Updated task [{}] {}", updated.id, updated.title), &notices);
             }
             Err(WsidError::DraftRejected(issues)) => {
                 self.form_errors = Some(
@@ -2622,12 +2662,14 @@ impl TuiApp {
             _ => "@",
         };
         let users = suggest_users(&self.db, token.query, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
+        let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
         for user in users.into_iter().take(6) {
-            self.detail_suggestions.push(CommentSuggestion {
-                insert: format!("{scope}{user}"),
-                label: format!("{scope}{user}"),
-                hint: "known user".to_string(),
-            });
+            let hint = match kinds.get(&user) {
+                Some(kind) if kind != wsid_core::DEFAULT_USER_KIND => format!("known user · {kind}"),
+                _ => "known user".to_string(),
+            };
+            self.detail_suggestions
+                .push(CommentSuggestion { insert: format!("{scope}{user}"), label: format!("{scope}{user}"), hint });
         }
         let typed = token.query.trim();
         if !typed.is_empty()
@@ -2731,11 +2773,14 @@ impl TuiApp {
                 match add_task_note(&mut self.db, &snapshot.task.id, &self.user, &input, true) {
                     Ok(outcome) => {
                         let _ = self.refresh_all();
-                        self.status_message = format!(
-                            "Posted note #{} on [{}] (spawned {} task(s))",
-                            outcome.note.id,
-                            snapshot.task.id,
-                            outcome.spawned_tasks.len()
+                        self.status_message = Self::with_user_notices(
+                            format!(
+                                "Posted note #{} on [{}] (spawned {} task(s))",
+                                outcome.note.id,
+                                snapshot.task.id,
+                                outcome.spawned_tasks.len()
+                            ),
+                            &outcome.user_notices,
                         );
                     }
                     Err(err) => {
@@ -2868,6 +2913,19 @@ impl TuiApp {
         self.db_path == wsid_core::default_global_db_path()
     }
 
+    /// `@user`, or `@user (kind)` for non-human users, for compact displays.
+    pub fn user_label(&self, user: &str) -> String {
+        user_label(&self.user_kinds, user)
+    }
+
+    /// `kind · ` for a non-default kind, otherwise empty.
+    fn kind_prefix(kinds: &std::collections::BTreeMap<String, String>, user: &str) -> String {
+        match kinds.get(user) {
+            Some(kind) if kind != wsid_core::DEFAULT_USER_KIND => format!("{kind} · "),
+            _ => String::new(),
+        }
+    }
+
     /// Rows rendered by the Settings view and navigated with `j`/`k`.
     pub fn settings_rows(&self) -> Vec<SettingsRow> {
         let mut rows = Vec::new();
@@ -2932,6 +2990,7 @@ impl TuiApp {
         if self.is_primary_user() {
             let mut users = list_known_users(&self.db, &[self.user.as_str(), self.config.primary_user.as_str()]).unwrap_or_default();
             users.sort_by_key(|user| user.to_ascii_lowercase());
+            let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
             if users.is_empty() {
                 rows.push(SettingsRow {
                     section: "User Management",
@@ -2945,14 +3004,14 @@ impl TuiApp {
                     rows.push(SettingsRow {
                         section: "User Management",
                         label: format!("@{known}"),
-                        value: "primary".to_string(),
+                        value: format!("{}primary", Self::kind_prefix(&kinds, &known)),
                         action: SettingsAction::None,
                     });
                 } else {
                     rows.push(SettingsRow {
                         section: "User Management",
                         label: format!("@{known}"),
-                        value: "Enter to delete".to_string(),
+                        value: format!("{}Enter to delete", Self::kind_prefix(&kinds, &known)),
                         action: SettingsAction::DeleteUser(known),
                     });
                 }
@@ -3035,7 +3094,148 @@ impl TuiApp {
             KeyCode::Home | KeyCode::Char('g') => self.settings.selected = 0,
             KeyCode::End | KeyCode::Char('G') => self.settings.selected = len.saturating_sub(1),
             KeyCode::Enter => self.activate_settings_row(),
+            KeyCode::Char('t') => self.begin_user_kind_prompt(),
             _ => {}
+        }
+    }
+
+    fn begin_user_kind_prompt(&mut self) {
+        let rows = self.settings_rows();
+        let Some(row) = rows.get(self.settings.selected) else {
+            return;
+        };
+        let Some(user) = row
+            .section
+            .eq("User Management")
+            .then(|| row.label.strip_prefix('@'))
+            .flatten()
+        else {
+            return;
+        };
+        self.settings.user_kind_target = user.to_string();
+        self.settings.kind_modal_open = false;
+        self.settings.kind_selected = 0;
+        self.settings.user_kind_input.clear();
+        self.settings.user_kind_history.clear();
+        self.settings.kind_modal_open = true;
+        let current = self.kind_modal_current();
+        self.settings.kind_selected = self
+            .filtered_kind_options()
+            .iter()
+            .position(|(value, _)| *value == current)
+            .unwrap_or(0);
+        self.status_message = format!("Kind for @{user} — type to search or add a kind, Enter to apply, Esc to cancel");
+    }
+
+    /// The target user's current kind.
+    pub fn kind_modal_current(&self) -> String {
+        self.user_kinds
+            .get(&self.settings.user_kind_target)
+            .cloned()
+            .unwrap_or_else(|| wsid_core::DEFAULT_USER_KIND.to_string())
+    }
+
+    /// Known kinds (always including `human`) narrowed by the search text, plus the typed text as a new kind when valid.
+    pub(crate) fn filtered_kind_options(&self) -> Vec<(String, String)> {
+        let mut kinds: Vec<String> = self.user_kinds.values().cloned().collect();
+        kinds.push(wsid_core::DEFAULT_USER_KIND.to_string());
+        kinds.sort();
+        kinds.dedup();
+        let typed = self.settings.user_kind_input.trim().to_ascii_lowercase();
+        let mut options: Vec<(String, String)> = kinds
+            .into_iter()
+            .filter(|kind| typed.is_empty() || kind.contains(&typed))
+            .map(|kind| {
+                let count = self.user_kinds.values().filter(|k| **k == kind).count();
+                let label = match count {
+                    0 => kind.clone(),
+                    1 => format!("{kind} · 1 user"),
+                    n => format!("{kind} · {n} users"),
+                };
+                (kind, label)
+            })
+            .collect();
+        if !typed.is_empty()
+            && let Ok(normalized) = wsid_core::normalize_user_kind(&typed)
+            && !options.iter().any(|(value, _)| *value == normalized)
+        {
+            options.push((normalized.clone(), format!("{normalized} · new kind")));
+        }
+        options
+    }
+
+    fn handle_kind_modal_key(&mut self, key: KeyEvent) {
+        if let Some(changed) = apply_text_shortcut(&key, &mut self.settings.user_kind_input, &mut self.settings.user_kind_history) {
+            if changed {
+                self.settings.kind_selected = 0;
+            }
+            return;
+        }
+        if is_modified_char(&key) {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.close_kind_modal();
+                self.status_message = "Cancelled kind change".to_string();
+            }
+            KeyCode::Enter => {
+                if let Some((kind, _)) = self
+                    .filtered_kind_options()
+                    .get(self.settings.kind_selected)
+                    .cloned()
+                {
+                    self.submit_user_kind(&kind);
+                } else {
+                    self.status_message = "No matching kind — type a name to add one".to_string();
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let len = self.filtered_kind_options().len();
+                if len > 0 {
+                    self.settings.kind_selected = (self.settings.kind_selected + 1) % len;
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                let len = self.filtered_kind_options().len();
+                if len > 0 {
+                    self.settings.kind_selected = self
+                        .settings
+                        .kind_selected
+                        .checked_sub(1)
+                        .unwrap_or(len - 1);
+                }
+            }
+            KeyCode::Backspace => {
+                self.settings.user_kind_input.pop();
+                self.settings.kind_selected = 0;
+            }
+            KeyCode::Char(ch) => {
+                self.settings.user_kind_input.push(ch);
+                self.settings.kind_selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    fn close_kind_modal(&mut self) {
+        self.settings.kind_modal_open = false;
+        self.settings.user_kind_input.clear();
+        self.settings.kind_selected = 0;
+        self.settings.user_kind_history.clear();
+    }
+
+    fn submit_user_kind(&mut self, kind: &str) {
+        let user = self.settings.user_kind_target.clone();
+        // Users known only from task fields have no row yet; register them first.
+        let result = wsid_core::register_user(&mut self.db, &user).and_then(|_| wsid_core::set_user_kind(&mut self.db, &user, kind));
+        match result {
+            Ok(()) => {
+                self.close_kind_modal();
+                let _ = self.refresh_all();
+                self.status_message = format!("Set @{user} kind to {kind}");
+            }
+            Err(err) => self.status_message = format!("Cannot set kind: {err}"),
         }
     }
 
@@ -3173,6 +3373,8 @@ impl TuiApp {
         self.settings.mode = SettingsMode::EditDatabasePath;
         self.settings.database_path_input.clear();
         self.settings.database_path_history.clear();
+        self.settings.user_kind_input.clear();
+        self.settings.user_kind_history.clear();
         self.update_database_path_prompt();
     }
 
@@ -3464,10 +3666,19 @@ impl TuiApp {
 
     fn update_bulk_prompt_message(&mut self) {
         let n = self.selected_ids.len().max(1);
-        self.status_message = format!(
-            "Bulk edit {n} task(s): status=todo assignee=bob importance=4 difficulty=2 urgent=on +tag -tag delete | {}_",
-            self.bulk_input
-        );
+        let kinds = wsid_core::list_user_kinds(&self.db).unwrap_or_default();
+        let warning = self
+            .bulk_input
+            .split_whitespace()
+            .filter_map(|t| t.strip_prefix("assignee=").or_else(|| t.strip_prefix("a=")))
+            .find_map(|v| user_kind_mismatch(v, &kinds));
+        self.status_message = match warning {
+            Some(w) => format!("{w} | Bulk edit {n} task(s): {}_", self.bulk_input),
+            None => format!(
+                "Bulk edit {n} task(s): status=todo assignee=[kind:]bob importance=4 difficulty=2 urgent=on +tag -tag delete | {}_",
+                self.bulk_input
+            ),
+        };
     }
 
     fn handle_bulk_input_key(&mut self, key: KeyEvent) {
@@ -3503,7 +3714,7 @@ impl TuiApp {
         }
     }
 
-    fn apply_bulk_input(&mut self, input: &str) {
+    pub(crate) fn apply_bulk_input(&mut self, input: &str) {
         let ids: Vec<String> =
             if self.selected_ids.is_empty() { self.highlighted_task_id().into_iter().collect() } else { self.selected_ids.clone() };
         if ids.is_empty() {
@@ -3523,7 +3734,10 @@ impl TuiApp {
                 } else if let Some((k, v)) = token.split_once('=') {
                     match k {
                         "status" | "s" => patch.status = Some(v.parse::<TaskStatus>().map_err(|e| e.to_string())?),
-                        "assignee" | "a" => patch.assignee = Some(v.to_string()),
+                        "assignee" | "a" => {
+                            wsid_core::parse_user_ref(v).map_err(|e| e.to_string())?;
+                            patch.assignee = Some(v.to_string());
+                        }
                         "importance" | "i" => patch.importance = Some(v.parse().map_err(|_| format!("bad importance '{v}'"))?),
                         "difficulty" | "d" => patch.difficulty = Some(v.parse().map_err(|_| format!("bad difficulty '{v}'"))?),
                         "urgent" | "u" => patch.urgent_override = Some(matches!(v, "on" | "true" | "yes" | "1")),
@@ -3560,6 +3774,7 @@ impl TuiApp {
                             .join("; ")
                     )
                 };
+                self.status_message = Self::with_user_notices(std::mem::take(&mut self.status_message), &outcome.user_notices);
                 if failed == 0 {
                     self.selected_ids.clear();
                 }

@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN kind TEXT NOT NULL DEFAULT 'human';

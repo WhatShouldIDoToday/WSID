@@ -1,6 +1,8 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { untrack } from "svelte";
   import {
+    type CardMoveDirection,
     type EisenhowerClassification,
     type EisenhowerQuadrant,
     QUADRANT_META,
@@ -12,7 +14,7 @@
     beginPointerDrag,
     type PointerDragState,
   } from "../lib/pointerdrag";
-  import BoardTaskCard from "./BoardTaskCard.svelte";
+  import TaskCard from "./TaskCard.svelte";
   import BulkActions from "./BulkActions.svelte";
   import DragGhost from "./DragGhost.svelte";
 
@@ -23,6 +25,8 @@
     activeProject: string;
     knownTags: string[];
     knownUsers: string[];
+    /** Account kind per user (`human` unless set); drives typed-mention hints. */
+    userKinds?: Record<string, string>;
     knownProjects: string[];
     onUserFilterChange: (user: string) => void;
     onSelectTask: (id: string) => void;
@@ -37,6 +41,7 @@
     activeProject,
     knownTags,
     knownUsers,
+    userKinds = {},
     knownProjects,
     onUserFilterChange,
     onSelectTask,
@@ -188,6 +193,22 @@
     pointerDrag = null;
   }
 
+  /** Alt+Arrows move a card one cell in the 2×2 quadrant grid (q1 q2 / q3 q4). */
+  function moveQuadrantByKey(
+    entry: EisenhowerClassification,
+    direction: CardMoveDirection,
+  ) {
+    const index = QUADRANTS.indexOf(entry.quadrant);
+    let row = Math.floor(index / 2);
+    let col = index % 2;
+    if (direction === "up") row -= 1;
+    if (direction === "down") row += 1;
+    if (direction === "left") col -= 1;
+    if (direction === "right") col += 1;
+    if (row < 0 || row > 1 || col < 0 || col > 1) return;
+    void moveIdsToQuadrant([entry.task.id], QUADRANTS[row * 2 + col]);
+  }
+
   function handlePointerDown(e: PointerEvent, entry: EisenhowerClassification) {
     if (e.button !== 0 || isInteractiveTarget(e.target)) return;
     pointerDrag = beginPointerDrag(entry, e, e.currentTarget as Element | null);
@@ -255,33 +276,38 @@
       <label for="matrix-project-select" class="field-label" style="margin: 0;">
         Project
       </label>
-      <select
+      <Select
         id="matrix-project-select"
-        bind:value={projectFilter}
-        onchange={() => announce(`Matrix project filter: ${projectFilter}`)}
-      >
-        {#each projectOptions as project (project)}
-          <option value={project}>{project}</option>
-        {/each}
-        <option value={PROJECT_ALL}>All projects</option>
-      </select>
+        size="sm"
+        value={projectFilter}
+        options={[
+          ...projectOptions.map((project) => ({
+            value: project,
+            label: project,
+          })),
+          { value: PROJECT_ALL, label: "All projects" },
+        ]}
+        onValueChange={(v) => {
+          projectFilter = v;
+          announce(`Matrix project filter: ${projectFilter}`);
+        }}
+      />
     </div>
 
     <div class="control-inline">
       <label for="matrix-user-select" class="field-label" style="margin: 0;">
         User
       </label>
-      <select
+      <Select
         id="matrix-user-select"
+        size="sm"
         value={userFilter}
-        onchange={(e) =>
-          onUserFilterChange((e.currentTarget as HTMLSelectElement).value)}
-      >
-        <option value={USER_ALL}>All users</option>
-        {#each userOptions as user (user)}
-          <option value={user}>@{user}</option>
-        {/each}
-      </select>
+        options={[
+          { value: USER_ALL, label: "All users" },
+          ...userOptions.map((user) => ({ value: user, label: `@${user}` })),
+        ]}
+        onValueChange={(v) => onUserFilterChange(v)}
+      />
     </div>
   </div>
 
@@ -309,6 +335,7 @@
       ids={selection.ids}
       {knownTags}
       {knownUsers}
+      {userKinds}
       {knownProjects}
       {announce}
       onClear={() => selection.clear()}
@@ -317,20 +344,19 @@
         onDataChanged();
       }}
     >
-      <select
-        aria-label="Move to quadrant"
-        onchange={(e) => {
-          const el = e.currentTarget as HTMLSelectElement;
-          const q = el.value as EisenhowerQuadrant;
-          el.value = "";
-          if (q) void moveIdsToQuadrant(selection.ids, q);
+      <Select
+        size="sm"
+        ariaLabel="Move to quadrant"
+        placeholder="Quadrant…"
+        value=""
+        options={QUADRANTS.map((q) => ({
+          value: q,
+          label: QUADRANT_META[q].title,
+        }))}
+        onValueChange={(v) => {
+          if (v) void moveIdsToQuadrant(selection.ids, v as EisenhowerQuadrant);
         }}
-      >
-        <option value="">Quadrant…</option>
-        {#each QUADRANTS as q}
-          <option value={q}>{QUADRANT_META[q].title}</option>
-        {/each}
-      </select>
+      />
     </BulkActions>
   {/if}
 
@@ -376,18 +402,19 @@
           >
             {#each qItems as entry (entry.task.id)}
               <li>
-                <BoardTaskCard
+                <TaskCard
                   task={entry.task}
+                  titleId={`eisenhower-card-${entry.task.id}`}
+                  selectable
                   selected={selection.has(entry.task.id)}
                   dragging={dragIds.includes(entry.task.id)}
                   showStatus
                   showProject={projectFilter === PROJECT_ALL}
-                  urgentLabel={entry.task.urgent_override ? "Override" : ""}
+                  {userKinds}
+                  quadrantLabel={QUADRANT_META[entry.quadrant].badge}
                   deadline={entry.effective_deadline}
                   slackDays={entry.slack_days}
-                  estimatePlaceholder
-                  moveLabel={`Move ${entry.task.id} to quadrant:`}
-                  movePlaceholder="Move…"
+                  moveLabel="Move to quadrant"
                   moveOptions={QUADRANTS.filter(
                     (x) => x !== entry.quadrant,
                   ).map((quadrant) => ({
@@ -399,6 +426,7 @@
                       [entry.task.id],
                       quadrant as EisenhowerQuadrant,
                     )}
+                  onKeyMove={(direction) => moveQuadrantByKey(entry, direction)}
                   onOpen={() => onSelectTask(entry.task.id)}
                   onPointerDown={(e) => handlePointerDown(e, entry)}
                   onSelectClick={(e) =>

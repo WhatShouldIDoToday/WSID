@@ -750,30 +750,30 @@ mod tests {
         let mut db = open_in_memory_db().unwrap();
         let dated = create_task(
             &mut db,
-            CreateTaskInput { title: "Dated task".to_string(), due_date: Some("2026-11-03T15:00:00".to_string()), ..Default::default() },
+            CreateTaskInput { title: "Dated task".to_string(), due_date: Some("2031-11-03T15:00:00".to_string()), ..Default::default() },
             "david",
         )
         .unwrap();
         create_task(&mut db, CreateTaskInput { title: "Undated task".to_string(), ..Default::default() }, "david").unwrap();
 
-        let same_day = search_tasks(&db, &SearchQuery { query: "due==2026-11-03".to_string(), ..Default::default() }).unwrap();
+        let same_day = search_tasks(&db, &SearchQuery { query: "due==2031-11-03".to_string(), ..Default::default() }).unwrap();
         assert_eq!(same_day.len(), 1);
         assert_eq!(same_day[0].task.id, dated.id);
 
-        let before = search_tasks(&db, &SearchQuery { query: "due<2026-11-03".to_string(), ..Default::default() }).unwrap();
+        let before = search_tasks(&db, &SearchQuery { query: "due<2031-11-03".to_string(), ..Default::default() }).unwrap();
         assert!(before.is_empty());
 
-        let after = search_tasks(&db, &SearchQuery { query: "due>2026-11-03".to_string(), ..Default::default() }).unwrap();
+        let after = search_tasks(&db, &SearchQuery { query: "due>2031-11-03".to_string(), ..Default::default() }).unwrap();
         assert!(after.is_empty());
 
-        let from_day = search_tasks(&db, &SearchQuery { query: "due>=2026-11-03".to_string(), ..Default::default() }).unwrap();
+        let from_day = search_tasks(&db, &SearchQuery { query: "due>=2031-11-03".to_string(), ..Default::default() }).unwrap();
         assert_eq!(from_day.len(), 1);
 
         // Undated tasks are addressable, and never match ordered comparisons.
         let undated = search_tasks(&db, &SearchQuery { query: "due==none".to_string(), ..Default::default() }).unwrap();
         assert_eq!(undated.len(), 1);
         assert_eq!(undated[0].task.title, "Undated task");
-        let undated_ge = search_tasks(&db, &SearchQuery { query: "due>=2026-01-01".to_string(), ..Default::default() }).unwrap();
+        let undated_ge = search_tasks(&db, &SearchQuery { query: "due>=2031-01-01".to_string(), ..Default::default() }).unwrap();
         assert_eq!(undated_ge.len(), 1);
     }
 }

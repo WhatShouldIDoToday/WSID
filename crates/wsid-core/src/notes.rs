@@ -9,10 +9,13 @@ use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::{is_valid_task_id, normalize_task_id};
 use crate::models::{
-    AddTaskNoteOutcome, CreateTaskInput, OriginKind, RelationInputKind, StatusTransitionOutcome, Task, TaskNote, TaskStatus,
+    AddTaskNoteOutcome, CreateTaskInput, OriginKind, RelationInputKind, StatusTransitionOutcome, Task, TaskNote, TaskStatus, UserNotice,
 };
 use crate::relations::{ensure_task_exists, link_tasks_in_tx};
-use crate::tasks::{create_task_in_tx, format_utc, get_task, get_task_conn, normalize_user, parse_utc, register_user_conn};
+use crate::tasks::{
+    create_task_in_tx, format_utc, get_task, get_task_conn, normalize_user, parse_user_ref, parse_utc, register_user_conn,
+    resolve_persona_conn, resolve_user_ref_conn,
+};
 
 /// Parsed tokens extracted from a task note body.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -62,13 +65,13 @@ pub fn parse_note_tokens(body: &str) -> ParsedNoteTokens {
                     if raw_mention.len() > 9 && raw_mention[..9].eq_ignore_ascii_case("takenote:") { Some(&raw_mention[9..]) } else { None }
                 })
             {
-                if let Ok(user) = normalize_user(rest)
+                if let Ok(user) = normalize_user(user_part(rest))
                     && takenote_set.insert(user.clone())
                 {
                     takenote_mentions.push(user);
                 }
             } else if !raw_mention.is_empty()
-                && let Ok(user) = normalize_user(raw_mention)
+                && let Ok(user) = normalize_user(user_part(raw_mention))
                 && blocking_set.insert(user.clone())
             {
                 blocking_mentions.push(user);
@@ -100,6 +103,66 @@ pub fn parse_note_tokens(body: &str) -> ParsedNoteTokens {
     }
 
     ParsedNoteTokens { blocking_mentions, takenote_mentions, task_references }
+}
+
+/// The username part of a possibly kind-qualified mention (`claude:bob` -> `bob`).
+fn user_part(raw: &str) -> &str {
+    raw.rsplit(':').next().unwrap_or(raw)
+}
+
+/// Strips a case-insensitive `takenote:` directive prefix, returning the rest.
+fn strip_takenote_prefix(raw: &str) -> Option<&str> {
+    raw.get(..9)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("takenote:"))
+        .map(|_| &raw[9..])
+}
+
+/// Rewrites typed mentions (`@kind:user`, `@takenote:kind:user`) to canonical `@user` /
+/// `@takenote:user` form. Each reference is resolved (and created with its kind when new), and
+/// conflicts or creations are recorded in `notices`. Plain mentions are left untouched.
+pub(crate) fn canonicalize_user_mentions(conn: &Connection, body: &str, notices: &mut Vec<UserNotice>) -> Result<String> {
+    let bytes = body.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len);
+    let mut copied = 0;
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] != b'@' || (i > 0 && is_ident_char(bytes[i - 1])) {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut token_end = start;
+        while token_end < len && !bytes[token_end].is_ascii_whitespace() {
+            token_end += 1;
+        }
+        let mut clean_end = token_end;
+        while clean_end > start && is_trailing_punct(bytes[clean_end - 1]) {
+            clean_end -= 1;
+        }
+        let raw_mention = &body[start..clean_end];
+        let (takenote, rest) = match strip_takenote_prefix(raw_mention) {
+            Some(rest) => (true, rest),
+            None => (false, raw_mention),
+        };
+        if rest.contains(':')
+            && let Ok(user_ref) = parse_user_ref(rest)
+        {
+            let username = resolve_user_ref_conn(conn, &user_ref, notices)?;
+            out.push_str(&body[copied..i]);
+            out.push('@');
+            if takenote {
+                out.push_str("takenote:");
+            }
+            out.push_str(&username);
+            copied = clean_end;
+        }
+        i = token_end.max(i + 1);
+    }
+
+    out.push_str(&body[copied..]);
+    Ok(out)
 }
 
 const fn is_ident_char(b: u8) -> bool {
@@ -149,17 +212,19 @@ pub fn add_task_note(
     spawn_subtasks: bool,
 ) -> Result<AddTaskNoteOutcome> {
     let task_id = normalize_task_id(raw_task_id)?;
-    let author = normalize_user(raw_author)?;
-    let body = raw_body.trim().to_string();
-    if body.is_empty() {
+    let trimmed_body = raw_body.trim();
+    if trimmed_body.is_empty() {
         return Err(WsidError::Validation("task note body cannot be empty".to_string()));
     }
 
     let commented_task = get_task(db, &task_id)?;
-    let tokens = parse_note_tokens(&body);
     let now_str = format_utc(Utc::now());
 
     let tx = db.conn.transaction()?;
+    let mut user_notices = Vec::new();
+    let author = resolve_persona_conn(&tx, raw_author, &mut user_notices)?;
+    let body = canonicalize_user_mentions(&tx, trimmed_body, &mut user_notices)?;
+    let tokens = parse_note_tokens(&body);
 
     tx.execute(
         "INSERT INTO task_notes (task_id, author, body, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -244,6 +309,7 @@ pub fn add_task_note(
                         ..Default::default()
                     },
                     &author,
+                    &mut Vec::new(),
                 )?;
 
                 link_tasks_in_tx(&tx, &new_id, RelationInputKind::Blocks, &effective_parent.id)?;
@@ -297,6 +363,7 @@ pub fn add_task_note(
                     ..Default::default()
                 },
                 &author,
+                &mut Vec::new(),
             )?;
 
             // Crucial: `@takenote:<user>` links via `related` ONLY (never `blocks` or `sub_task_of`).
@@ -329,7 +396,7 @@ pub fn add_task_note(
         completed_review_tasks.push(get_task(db, id)?);
     }
 
-    Ok(AddTaskNoteOutcome { note, spawned_tasks, reused_tasks, completed_review_tasks })
+    Ok(AddTaskNoteOutcome { note, spawned_tasks, reused_tasks, completed_review_tasks, user_notices })
 }
 
 /// Lists all notes for `raw_task_id` in chronological order.
@@ -474,6 +541,7 @@ pub fn transition_task_status(db: &mut Database, raw_task_id: &str, new_status: 
                     ..Default::default()
                 },
                 &task.evaluator,
+                &mut Vec::new(),
             )?;
 
             link_tasks_in_tx(&tx, &new_rev_id, RelationInputKind::Blocks, &task.id)?;
