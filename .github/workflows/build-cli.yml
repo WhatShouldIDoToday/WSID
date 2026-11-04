@@ -57,7 +57,8 @@ jobs:
           cache: true
 
       - name: Add Rust target
-        run: mise exec -- rustup target add "${{ matrix.target }}"
+        # Plain rustup: `mise exec` would try to install every tool in mise.toml, and some have no binary for this runner.
+        run: rustup target add "${{ matrix.target }}"
 
       - name: Install musl tools
         if: endsWith(matrix.target, '-linux-musl')

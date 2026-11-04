@@ -39,15 +39,21 @@ jobs:
           - name: macos-universal
             os: macos-15
             targets: aarch64-apple-darwin x86_64-apple-darwin
+            install: bun rust aqua:tauri-apps/tauri/cargo-tauri
             args: --bundles app,dmg --target universal-apple-darwin
           - name: linux-x64
             os: ubuntu-22.04
+            install: bun rust aqua:tauri-apps/tauri/cargo-tauri
             args: --bundles deb,rpm,appimage
           - name: linux-arm64
             os: ubuntu-22.04-arm
+            # The aqua package has no linux/arm64 binary, so build the Tauri CLI from source.
+            install: bun rust
+            tauri_from_source: true
             args: --bundles deb,rpm,appimage
           - name: windows-x64
             os: windows-2025
+            install: bun rust aqua:tauri-apps/tauri/cargo-tauri
             args: --bundles nsis
     steps:
       - uses: actions/checkout@v7
@@ -63,20 +69,34 @@ jobs:
 
       - uses: jdx/mise-action@v5
         with:
-          install_args: bun rust aqua:tauri-apps/tauri/cargo-tauri
+          install_args: ${{ matrix.install }}
           cache: true
 
       - name: Add Rust targets
         if: matrix.targets
         shell: bash
-        run: mise exec -- rustup target add ${{ matrix.targets }}
+        run: rustup target add ${{ matrix.targets }}
+
+      - name: Build the Tauri CLI from source
+        if: matrix.tauri_from_source
+        shell: bash
+        run: |
+          version="$(sed -n 's/^"aqua:tauri-apps\/tauri\/cargo-tauri" = "\(.*\)"$/\1/p' mise.toml)"
+          test -n "$version"
+          cargo install tauri-cli --version "$version" --locked
 
       - uses: Swatinem/rust-cache@v2
         with:
           key: gui-${{ matrix.name }}
 
+      # Run bun directly: `mise run` would try to install every tool in mise.toml, including ones
+      # with no binary for this runner.
       - name: Build frontend
-        run: mise run ui:build
+        working-directory: crates/wsid-gui/ui
+        shell: bash
+        run: |
+          bun install --frozen-lockfile
+          bun run build
 
       - name: Write App Store Connect API key
         if: inputs.publish && runner.os == 'macOS'
