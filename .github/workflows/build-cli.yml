@@ -1,0 +1,114 @@
+name: Build CLI
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref or SHA to build.
+        type: string
+        required: true
+      version:
+        description: Version used in archive names.
+        type: string
+        required: true
+      tag:
+        description: Release tag to upload to. Required when publish is true.
+        type: string
+        default: ""
+      environment:
+        description: Environment holding signing secrets. Used only when publish is true.
+        type: string
+        default: ""
+      publish:
+        description: Sign, notarize, and upload to the draft release. Otherwise upload a workflow artifact.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: cli (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    environment: ${{ inputs.publish && inputs.environment || '' }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { os: windows-2025, target: x86_64-pc-windows-msvc }
+          - { os: windows-11-arm, target: aarch64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: rust
+          cache: true
+
+      - name: Add Rust target
+        run: mise exec -- rustup target add "${{ matrix.target }}"
+
+      - name: Install musl tools
+        if: endsWith(matrix.target, '-linux-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build -p wsid-cli --release --locked --target "${{ matrix.target }}"
+
+      - name: Sign and notarize
+        if: inputs.publish && runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: scripts/ci/sign-macos-cli.sh "target/${{ matrix.target }}/release/wsid"
+
+      - name: Smoke test
+        env:
+          EXE: ${{ runner.os == 'Windows' && 'wsid.exe' || 'wsid' }}
+        run: |
+          "target/${{ matrix.target }}/release/${EXE}" --version
+
+      - name: Package
+        id: package
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          archive="$(scripts/ci/package-cli.sh "${{ matrix.target }}" "$VERSION" | tail -n 1)"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to draft release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: gh release upload "$TAG" "$ARCHIVE" --clobber
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ !inputs.publish }}
+        with:
+          name: cli-${{ matrix.target }}
+          path: ${{ steps.package.outputs.archive }}
+          retention-days: 3
