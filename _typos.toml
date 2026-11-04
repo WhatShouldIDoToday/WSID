@@ -1,0 +1,13 @@
+[files]
+extend-exclude = [
+  "crates/wsid-core/src/licenses/",
+  "**/generated-frontend-licenses.json",
+  "*.lock",
+  "crates/wsid-gui/icons/",
+]
+
+[default.extend-words]
+# Real crate name, flagged as a typo of "ratatouille".
+ratatui = "ratatui"
+# Deliberate misspelling used as input in the fuzzy search test.
+acessibility = "acessibility"
