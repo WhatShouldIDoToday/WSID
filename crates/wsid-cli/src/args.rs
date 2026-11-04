@@ -11,7 +11,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub db: Option<PathBuf>,
 
-    /// Use workspace-local `.wsid.db` (discovers existing or creates in git root / current directory)
+    /// Use workspace-local `.wsid.db` (uses the nearest existing one in the current directory or an ancestor, otherwise creates it in the current directory)
     #[arg(long, global = true)]
     pub local: bool,
 

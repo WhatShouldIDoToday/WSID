@@ -1283,7 +1283,7 @@ mod tests {
         // Verify About and third-party license metadata endpoint
         let about = get_about_info().unwrap();
         assert_eq!(about.license_spdx, "Apache-2.0");
-        assert_eq!(about.repository_url, "https://github.com/dmbeta/WSID");
+        assert_eq!(about.repository_url, "https://github.com/WhatShouldIDoToday/WSID");
         assert!(!about.rust_licenses.licenses.is_empty());
     }
 

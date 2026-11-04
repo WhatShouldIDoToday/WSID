@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::error::{Result, WsidError};
 
 const INITIAL_MIGRATION_SQL: &str = include_str!("migrations/0001_initial.sql");
 const MIGRATION_0002_SQL: &str = include_str!("migrations/0002_manual_priority_1_to_5.sql");
@@ -15,6 +15,8 @@ const SCHEMA_VERSION_2: i64 = 2;
 const SCHEMA_VERSION_3: i64 = 3;
 const SCHEMA_VERSION_4: i64 = 4;
 const SCHEMA_VERSION_5: i64 = 5;
+/// Newest schema version this build knows how to read and write.
+const LATEST_SCHEMA_VERSION: i64 = SCHEMA_VERSION_5;
 
 /// Opaque handle to a WSID task database.
 ///
@@ -74,6 +76,10 @@ pub fn run_migrations(db: &mut Database) -> Result<()> {
     let current_version: i64 = db
         .conn
         .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |row| row.get(0))?;
+
+    if current_version > LATEST_SCHEMA_VERSION {
+        return Err(WsidError::DatabaseTooNew { found: current_version, supported: LATEST_SCHEMA_VERSION });
+    }
 
     if current_version < SCHEMA_VERSION_1 {
         let tx = db.conn.transaction()?;
@@ -180,6 +186,43 @@ mod tests {
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, 5);
+    }
+
+    #[test]
+    fn refuses_database_newer_than_this_build_without_changing_it() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("newer.db");
+
+        let db = open_db(&db_path).unwrap();
+        db.conn
+            .execute("INSERT INTO schema_migrations (version) VALUES (?1)", [LATEST_SCHEMA_VERSION + 1])
+            .unwrap();
+        drop(db);
+
+        let err = open_db(&db_path)
+            .err()
+            .expect("newer database must be refused");
+        assert!(matches!(
+            err,
+            WsidError::DatabaseTooNew { found, supported }
+                if found == LATEST_SCHEMA_VERSION + 1 && supported == LATEST_SCHEMA_VERSION
+        ));
+        assert!(err.to_string().contains("upgrade WSID"));
+
+        let conn = Connection::open(&db_path).unwrap();
+        let (max, count): (i64, i64) = conn
+            .query_row("SELECT MAX(version), COUNT(*) FROM schema_migrations", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(max, LATEST_SCHEMA_VERSION + 1);
+        assert_eq!(count, LATEST_SCHEMA_VERSION + 1);
+    }
+
+    #[test]
+    fn reopening_a_current_database_succeeds() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("current.db");
+        drop(open_db(&db_path).unwrap());
+        assert!(open_db(&db_path).is_ok());
     }
 
     #[test]

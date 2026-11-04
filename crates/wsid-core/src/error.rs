@@ -5,6 +5,9 @@ pub enum WsidError {
     #[error("database error: {0}")]
     Database(String),
 
+    #[error("this database uses schema version {found}, but this WSID supports up to version {supported}; upgrade WSID to open it")]
+    DatabaseTooNew { found: i64, supported: i64 },
+
     #[error("invalid task ID '{0}': expected 2 letters (excluding I and O) followed by 4 digits (e.g. AB1234)")]
     InvalidTaskId(String),
 

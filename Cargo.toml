@@ -11,8 +11,9 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/dmbeta/WSID"
-homepage = "https://github.com/dmbeta/WSID"
+repository = "https://github.com/WhatShouldIDoToday/WSID"
+homepage = "https://github.com/WhatShouldIDoToday/WSID"
+publish = false
 
 [workspace.dependencies]
 wsid-core = { path = "crates/wsid-core" }
@@ -35,3 +36,8 @@ toml = "0.8"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
