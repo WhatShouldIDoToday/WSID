@@ -1,0 +1,131 @@
+[tools]
+bun = "latest"
+"cargo:cargo-about" = { version = "latest", features = "cli" }
+rumdl = "latest"
+rust = { version = "stable", components = ["rustfmt", "clippy"] }
+taplo = "latest"
+
+[tasks."ui:install"]
+description = "Install frontend dependencies with Bun"
+dir = "crates/wsid-gui/ui"
+run = "bun install --frozen-lockfile"
+sources = ["package.json", "bun.lock"]
+outputs = { auto = true }
+
+[tasks."ui:build"]
+description = "Build the Svelte/Vite frontend bundle and frontend license metadata"
+dir = "crates/wsid-gui/ui"
+depends = ["ui:install"]
+run = "bun run build"
+sources = [
+  "package.json",
+  "bun.lock",
+  "tsconfig.json",
+  "vite.config.ts",
+  "index.html",
+  "src/**/*.ts",
+  "src/**/*.svelte",
+  "src/**/*.css",
+]
+outputs = ["dist/index.html"]
+
+[tasks."ui:dev"]
+description = "Start the Vite frontend dev server"
+dir = "crates/wsid-gui/ui"
+depends = ["ui:install"]
+run = "bun run dev"
+
+[tasks."ui:check"]
+description = "Run svelte-check and TypeScript validation on the GUI frontend"
+dir = "crates/wsid-gui/ui"
+depends = ["ui:install"]
+run = "bun run check"
+
+[tasks."ui:test"]
+description = "Run frontend unit tests (shared validation vectors)"
+dir = "crates/wsid-gui/ui"
+depends = ["ui:install"]
+run = "bun test"
+
+[tasks."ui:fmt"]
+description = "Format frontend files with Bun"
+dir = "crates/wsid-gui/ui"
+run = "bun fmt"
+
+[tasks."ui:fmt:check"]
+description = "Check formatting of frontend files with Bun"
+dir = "crates/wsid-gui/ui"
+run = "bun fmt --check"
+
+[tasks.build]
+description = "Build all workspace binaries in release mode"
+depends = ["ui:build"]
+run = "cargo build --workspace --release"
+
+[tasks."build:debug"]
+description = "Build all workspace binaries in debug mode"
+depends = ["ui:build"]
+run = "cargo build --workspace"
+
+[tasks.run]
+description = "Build and run the WSID CLI/TUI in release mode"
+run = "cargo run -p wsid-cli --release"
+
+[tasks."run:debug"]
+description = "Build and run the WSID CLI/TUI in debug mode"
+run = "cargo run -p wsid-cli"
+
+[tasks."run:gui"]
+description = "Build and run the WSID desktop GUI in release mode"
+depends = ["ui:build"]
+run = "cargo run -p wsid-gui --release"
+
+[tasks."run:gui:debug"]
+description = "Build and run the WSID desktop GUI in debug mode"
+depends = ["ui:build"]
+run = "cargo run -p wsid-gui"
+
+[tasks.fmt]
+description = "Format Rust, TOML, Markdown, and frontend files"
+depends = ["ui:fmt"]
+run = ["cargo fmt --all", "taplo fmt", "rumdl fmt"]
+
+[tasks."fmt:check"]
+description = "Check formatting of Rust, TOML, Markdown, and frontend files"
+depends = ["ui:fmt:check"]
+run = ["cargo fmt --all -- --check", "taplo fmt --check", "rumdl fmt --check"]
+
+[tasks.lint]
+description = "Run Clippy, svelte-check, taplo, and rumdl linters"
+depends = ["ui:build", "ui:check"]
+run = [
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "taplo lint",
+  "rumdl check",
+]
+
+[tasks.licenses]
+description = "Regenerate embedded Rust and frontend third-party license bundles"
+depends = ["ui:build"]
+run = [
+  "cargo about generate --workspace --fail about.hbs -o crates/wsid-core/src/licenses/THIRD_PARTY_NOTICES.txt",
+  "cargo about generate --workspace --fail about.json.hbs -o crates/wsid-core/src/licenses/rust_licenses.json",
+]
+
+[tasks."licenses:check"]
+description = "Verify third-party Rust crate licenses against about.toml"
+run = "cargo about generate --workspace --offline --fail about.hbs -o /dev/null"
+
+[tasks.test]
+description = "Run all workspace tests"
+depends = ["ui:build", "ui:test"]
+run = "cargo test --workspace"
+
+[tasks.pc]
+alias = "pre-commit"
+description = "Run all pre-commit checks (format check, lint, license audit, tests)"
+depends = ["fmt:check", "lint", "licenses:check", "test"]
+
+[tasks."hooks:install"]
+description = "Install the git pre-commit hook via mise"
+run = "mise generate git-pre-commit --write --task=pc"

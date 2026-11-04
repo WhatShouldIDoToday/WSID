@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141035" />
+      <stop offset="100%" stop-color="#09071c" />
+    </linearGradient>
+
+    <!-- Core Ambient Glow -->
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff9800" stop-opacity="0.65" />
+      <stop offset="45%" stop-color="#ff7900" stop-opacity="0.2" />
+      <stop offset="100%" stop-color="#ff5722" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Core Surface Gradient -->
+    <linearGradient id="coreGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffea80" />
+      <stop offset="40%" stop-color="#ffb020" />
+      <stop offset="100%" stop-color="#ff6d00" />
+    </linearGradient>
+
+    <!-- Ring Gradients -->
+    <linearGradient id="innerRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffe082" />
+      <stop offset="100%" stop-color="#ff8f00" />
+    </linearGradient>
+
+    <linearGradient id="midRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b388ff" />
+      <stop offset="100%" stop-color="#651fff" />
+    </linearGradient>
+
+    <linearGradient id="outerRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9c27b0" />
+      <stop offset="100%" stop-color="#4a148c" />
+    </linearGradient>
+
+    <!-- Soft Glow Filter Scaled to 1024 Canvas -->
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Full 1024x1024 Square Background -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bgGradient)" />
+
+  <!-- Ambient Glow (Scaled R=280) -->
+  <circle cx="512" cy="512" r="280" fill="url(#coreGlow)" />
+
+  <!-- Concentric Rings (Scaled R=380, 280, 184) -->
+  <circle cx="512" cy="512" r="380" fill="none" stroke="url(#outerRingGrad)" stroke-width="9" opacity="0.9" />
+  <circle cx="512" cy="512" r="280" fill="none" stroke="url(#midRingGrad)" stroke-width="10" opacity="0.95" />
+  <circle cx="512" cy="512" r="184" fill="none" stroke="url(#innerRingGrad)" stroke-width="11" />
+
+  <!-- Central Focus Core (Scaled R=84) -->
+  <circle cx="512" cy="512" r="84" fill="url(#coreGradient)" filter="url(#glow)" />
+
+  <!-- Mathematically Aligned Orbiting Nodes (-35° / 145° Axis Scaled) -->
+  <!-- Inner Ring: Top-Right Node (R=184, theta=-35°) -->
+  <circle cx="662.72" cy="406.46" r="24" fill="#ffe082" filter="url(#glow)" />
+
+  <!-- Inner Ring: Bottom-Left Node (R=184, theta=145°) -->
+  <circle cx="361.28" cy="617.54" r="22" fill="#ff8f00" />
+
+  <!-- Middle Ring: Top-Right Node (R=280, theta=-35°) -->
+  <circle cx="741.36" cy="351.40" r="26" fill="#ffd54f" filter="url(#glow)" />
+
+  <!-- Outer Ring: Bottom-Left Node (R=380, theta=145°) -->
+  <circle cx="200.72" cy="729.96" r="26" fill="#b388ff" filter="url(#glow)" />
+</svg>

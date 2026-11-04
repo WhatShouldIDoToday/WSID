@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/wsid-core",
+  "crates/wsid-mcp",
+  "crates/wsid-cli",
+  "crates/wsid-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/dmbeta/WSID"
+homepage = "https://github.com/dmbeta/WSID"
+
+[workspace.dependencies]
+wsid-core = { path = "crates/wsid-core" }
+wsid-mcp = { path = "crates/wsid-mcp" }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+crossterm = "0.28"
+dirs = "6.0"
+nucleo-matcher = "0.3"
+rand = "0.9"
+ratatui = "0.29"
+rusqlite = { version = "0.34", features = ["bundled", "chrono"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+tempfile = "3.17"
+thiserror = "2.0"
+toml = "0.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

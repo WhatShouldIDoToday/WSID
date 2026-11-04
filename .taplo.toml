@@ -1,0 +1,3 @@
+# taplo formats every TOML file it finds; target/ is build output and mise.lock is generated
+# by `mise lock`.
+exclude = ["target/**", "mise.lock"]

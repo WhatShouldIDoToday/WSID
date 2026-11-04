@@ -1,0 +1,57 @@
+{
+  "usernames": [
+    { "input": "davidb", "normalized": "davidb" },
+    { "input": "@DavidB", "normalized": "davidb" },
+    { "input": "  @Cool_User-1  ", "normalized": "cool_user-1" },
+    { "input": "", "normalized": null },
+    { "input": "@", "normalized": null },
+    { "input": "@@bob", "normalized": null },
+    { "input": "two words", "normalized": null },
+    { "input": "invalid'hehe", "normalized": null },
+    { "input": "#coolboy", "normalized": null },
+    { "input": "café", "normalized": null },
+    { "input": "all", "normalized": null },
+    { "input": "@all", "normalized": null },
+    { "input": "@ALL", "normalized": null }
+  ],
+  "tags": [
+    { "input": "backend", "normalized": "backend" },
+    { "input": "Backend", "normalized": "backend" },
+    { "input": "#mcp", "normalized": "mcp" },
+    { "input": "a_b-c9", "normalized": "a_b-c9" },
+    { "input": "", "normalized": null },
+    { "input": "two words", "normalized": null },
+    { "input": "café", "normalized": null },
+    { "input": "no!", "normalized": null }
+  ],
+  "durations": [
+    { "input": "45", "minutes": 45 },
+    { "input": "15m", "minutes": 15 },
+    { "input": "2h", "minutes": 120 },
+    { "input": "1h30m", "minutes": 90 },
+    { "input": "1d 2h 20m", "minutes": 1580 },
+    { "input": "20m 2h 1d", "minutes": 1580 },
+    { "input": "1w", "minutes": 10080 },
+    { "input": "2 hours", "minutes": 120 },
+    { "input": "0", "minutes": null },
+    { "input": "10x", "minutes": null },
+    { "input": "20m 10m", "minutes": null },
+    { "input": "1h 2h", "minutes": null },
+    { "input": "h", "minutes": null },
+    { "input": "1h junk", "minutes": null }
+  ],
+  "deadline_order": [
+    { "sgdb": "2099-01-01", "due": "2099-01-02", "valid": true },
+    { "sgdb": "2099-01-01", "due": "2099-01-01", "valid": true },
+    { "sgdb": "2099-01-02", "due": "2099-01-01", "valid": false },
+    { "sgdb": "2099-01-01T09:00", "due": "2099-01-01T08:00", "valid": false },
+    { "sgdb": null, "due": "2099-01-01", "valid": true },
+    { "sgdb": "2099-01-01", "due": null, "valid": true }
+  ],
+  "past_deadlines": [
+    { "value": "2000-01-01", "past": true },
+    { "value": "2000-01-01T09:00", "past": true },
+    { "value": "2099-01-01", "past": false },
+    { "value": "2099-01-01T09:00", "past": false }
+  ]
+}
