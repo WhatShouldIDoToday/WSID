@@ -32,6 +32,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: mise run fmt:check
       - run: mise run lint
+      # cargo-about runs offline, so download every crate (all targets) first.
+      - run: cargo fetch --locked
       - run: mise run licenses:check
 
   test:
