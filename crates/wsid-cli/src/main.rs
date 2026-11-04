@@ -333,7 +333,9 @@ mod tests {
         execute_command(Commands::Show { id: task_id.clone() }, &db_path, &config, "alice", OutputMode::Accessible, &mut show_buf).unwrap();
         let show_str = String::from_utf8(show_buf).unwrap();
         assert!(show_str.contains("Kanban architecture diagram"));
-        assert!(show_str.contains(&ext_img.display().to_string()));
+        // Attachment paths are stored canonicalized, which can differ from the temp path (for example 8.3 short names on Windows).
+        let stored_img = std::fs::canonicalize(&ext_img).unwrap();
+        assert!(show_str.contains(&stored_img.display().to_string()));
 
         // 5. Verify `wsid about` outputs version, Apache-2.0 license, repository URL, and third-party crates
         let mut about_buf = Vec::new();

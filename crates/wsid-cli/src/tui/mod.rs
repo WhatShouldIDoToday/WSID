@@ -48,7 +48,9 @@ fn is_keyboard_enhanced() -> bool {
 fn run_event_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut TuiApp) -> wsid_core::Result<()> {
     let tick_rate = Duration::from_millis(250);
     loop {
-        terminal.draw(|frame| ui::render(frame, app))?;
+        terminal
+            .draw(|frame| ui::render(frame, app))
+            .map_err(|err| std::io::Error::other(err.to_string()))?;
 
         if event::poll(tick_rate)? {
             match event::read()? {

@@ -1288,6 +1288,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "on Windows the window icon comes from the executable resource, which unit-test binaries do not embed")]
     fn tauri_context_embeds_valid_window_icon_and_frontend_assets() {
         let context = tauri_context();
 

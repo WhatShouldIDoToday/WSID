@@ -1,0 +1,48 @@
+name: PR checks
+
+# pull_request_target runs with repository permissions, so this workflow must never
+# check out or execute code from the pull request.
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  source-branch:
+    name: source-branch
+    if: github.base_ref == 'main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Only dev and Release Please branches may target main
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$HEAD_REPO" != "$THIS_REPO" ]; then
+            echo "Pull requests into main must come from this repository, not a fork."
+            exit 1
+          fi
+          case "$HEAD_REF" in
+            dev | release-please--branches--main*) echo "Source branch '$HEAD_REF' is allowed." ;;
+            *)
+              echo "Pull requests into main must come from dev or the Release Please branch, not '$HEAD_REF'."
+              exit 1
+              ;;
+          esac
