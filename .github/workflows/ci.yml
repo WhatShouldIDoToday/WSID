@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [dev, main]
+    # `labeled` lets a maintainer add the `package-check` label to build installers on a PR into dev.
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [dev, main]
 
@@ -107,6 +109,45 @@ jobs:
           for result in $RESULTS; do
             if [ "$result" != "success" ]; then
               echo "A required job did not succeed."
+              exit 1
+            fi
+          done
+
+  # Installer builds run for PRs into main, or for any PR labeled `package-check`.
+  package-cli:
+    name: package-cli
+    if: github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-cli.yml
+    with:
+      ref: ${{ github.sha }}
+      version: pr-${{ github.event.pull_request.number }}
+
+  package-gui:
+    name: package-gui
+    if: github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-gui.yml
+    with:
+      ref: ${{ github.sha }}
+
+  # Separate from ci-gate, which fails on skipped jobs. Require this check on main only.
+  package-gate:
+    name: package-gate
+    if: always() && github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
+    needs: [package-cli, package-gui]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require both package builds to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Package results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "A package build did not succeed."
               exit 1
             fi
           done
