@@ -2,9 +2,8 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "WSID",
   "version": "0.1.0",
-  "identifier": "io.github.dmbeta.wsid",
+  "identifier": "io.github.whatshouldidotoday.wsid",
   "build": {
-    "beforeBuildCommand": "bun --cwd ui run build",
     "frontendDist": "ui/dist"
   },
   "app": {
@@ -24,8 +23,13 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
+    "active": true,
+    "targets": ["app", "dmg", "deb", "rpm", "appimage", "nsis"],
+    "publisher": "WhatShouldIDoToday",
+    "shortDescription": "Offline task manager that ranks what to do next",
+    "longDescription": "WSID (What Should I Do?) is an offline-first task manager with a desktop app, a terminal interface, and an MCP server for local AI agents.",
+    "category": "Productivity",
+    "license": "Apache-2.0",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

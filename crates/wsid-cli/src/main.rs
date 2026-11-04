@@ -82,6 +82,11 @@ mod tests {
     use crate::tui::app::{ActiveTab, PickerMode, SettingsAction, SettingsMode, TuiApp};
     use wsid_core::{CreateTaskInput, EisenhowerQuadrant};
 
+    /// Builds a `TuiApp` whose config saves stay inside the test's temp directory instead of the real config path.
+    fn test_app(db_path: &std::path::Path, config: AppConfig, user: &str, accessible_mode: bool) -> TuiApp {
+        TuiApp::new_with_config_path(db_path, config, user.to_string(), accessible_mode, db_path.with_file_name("config.toml")).unwrap()
+    }
+
     #[test]
     fn tui_edit_opens_prefilled_form_and_saves_through_update() {
         let dir = tempdir().unwrap();
@@ -105,7 +110,7 @@ mod tests {
             .id
         };
 
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
 
         app.open_detail_for(&task_id);
@@ -170,7 +175,7 @@ mod tests {
             .id
         };
 
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
 
         // `3` opens the Eisenhower matrix; Shift+Tab steps back, Tab steps forward.
@@ -335,7 +340,7 @@ mod tests {
         execute_command(Commands::About { full: true }, &db_path, &config, "alice", OutputMode::Accessible, &mut about_buf).unwrap();
         let about_str = String::from_utf8(about_buf).unwrap();
         assert!(about_str.contains("Apache-2.0"));
-        assert!(about_str.contains("https://github.com/dmbeta/WSID"));
+        assert!(about_str.contains("https://github.com/WhatShouldIDoToday/WSID"));
         assert!(about_str.contains("ratatui"));
     }
 
@@ -467,7 +472,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut app = TuiApp::new(&db_path, config.clone(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, config.clone(), "alice", false);
         let backend = TestBackend::new(120, 36);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -596,7 +601,7 @@ mod tests {
                 .unwrap();
             }
         }
-        let mut app = TuiApp::new(&db_path, config, "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, config, "alice", false);
         let key = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
 
         key(&mut app, KeyCode::Char('4'));
@@ -632,7 +637,7 @@ mod tests {
             wsid_core::add_task_note(&mut db, &t.id, "alice", "first comment", false).unwrap();
             t.id
         };
-        let mut app = TuiApp::new(&db_path, config, "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, config, "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
         let type_str = |app: &mut TuiApp, s: &str| {
             for ch in s.chars() {
@@ -691,7 +696,7 @@ mod tests {
     fn tui_add_task_form_cursor_mask_validation_and_error_modal() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("tui_form.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
         let type_str = |app: &mut TuiApp, s: &str| {
@@ -771,7 +776,7 @@ mod tests {
     fn tui_relation_attachment_and_user_pickers() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("tui_pickers.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let target = wsid_core::create_task(
             &mut Database::open(&db_path).unwrap(),
             wsid_core::CreateTaskInput { title: "Fix login".to_string(), ..Default::default() },
@@ -908,7 +913,7 @@ mod tests {
     fn tui_time_estimate_normalization_and_timezone_display() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("tui_tz.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
         let type_str = |app: &mut TuiApp, s: &str| {
@@ -1009,7 +1014,7 @@ mod tests {
         };
         std::fs::remove_file(&missing_file).unwrap();
 
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let mut terminal = Terminal::new(TestBackend::new(140, 42)).unwrap();
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
         let type_str = |app: &mut TuiApp, s: &str| {
@@ -1115,7 +1120,7 @@ mod tests {
                 .unwrap()
                 .id
         };
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
 
         // Plain list view.
         assert_eq!(app.focus_context(), FocusContext::Tab(crate::tui::app::ActiveTab::Focus));
@@ -1149,7 +1154,7 @@ mod tests {
     fn tui_prompts_support_word_delete_undo_and_paste() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("prompts.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
 
         // Project filter: Option+Backspace removes a word, Ctrl+Z brings it back.
@@ -1215,7 +1220,7 @@ mod tests {
             .id;
             (do_first, delegate)
         };
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
         // Quadrant and row the matrix cursor is on.
         let focused = |app: &TuiApp| {
@@ -1281,7 +1286,7 @@ mod tests {
             wsid_core::create_task(&mut db, wsid_core::CreateTaskInput { title: "Bob task".to_string(), ..Default::default() }, "bob")
                 .unwrap();
         }
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
         let has_all = |app: &TuiApp| {
             app.user_picker_options(crate::tui::app::PickerMode::Filter)
@@ -1369,7 +1374,7 @@ mod tests {
             }
         }
 
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
 
         press(&mut app, KeyCode::Char('4'));
@@ -1631,7 +1636,7 @@ mod tests {
     fn tui_ctrl_u_and_settings_open_user_switcher_without_all() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("switcher_user.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
         let type_str = |app: &mut TuiApp, s: &str| {
             for ch in s.chars() {
@@ -1684,7 +1689,7 @@ mod tests {
     fn tui_ctrl_p_switches_active_project_and_p_stays_a_filter() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("switcher_project.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
         let type_str = |app: &mut TuiApp, s: &str| {
             for ch in s.chars() {
@@ -1742,7 +1747,7 @@ mod tests {
     fn tui_view_entry_resets_scope_but_keeps_database_search_state() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("scope_reset.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
 
         app.active_project = "backend".to_string();
@@ -1789,7 +1794,7 @@ mod tests {
     fn tui_switching_active_user_moves_only_views_following_the_old_user() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("switch_follow.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
 
         app.kanban_user = "alice".to_string();
         app.eisenhower_user = "bob".to_string();
@@ -1807,7 +1812,7 @@ mod tests {
     fn tui_add_task_follows_active_context_but_keeps_drafts() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("entry_context.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), false).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", false);
         let press = |app: &mut TuiApp, code: KeyCode, modifiers: KeyModifiers| app.handle_key(KeyEvent::new(code, modifiers));
 
         // A pristine form is seeded with the active user and project.
@@ -1841,7 +1846,7 @@ mod tests {
     fn tui_active_context_switchers_render_titles_in_accessible_mode() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("switcher_render.db");
-        let mut app = TuiApp::new(&db_path, AppConfig::default(), "alice".to_string(), true).unwrap();
+        let mut app = test_app(&db_path, AppConfig::default(), "alice", true);
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         let rendered = |terminal: &mut Terminal<TestBackend>, app: &mut TuiApp| {
             terminal.draw(|f| crate::tui::ui::render(f, app)).unwrap();

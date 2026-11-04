@@ -317,7 +317,14 @@ pub fn parse_pasted_paths(raw: &str) -> Vec<String> {
     }
     out.into_iter()
         .map(|p| match p.strip_prefix("file://") {
-            Some(rest) => rest.replace("%20", " "),
+            Some(rest) => {
+                let decoded = rest.replace("%20", " ");
+                // `file:///C:/Users/me/a.txt` carries a leading slash before the drive letter.
+                match decoded.as_bytes() {
+                    [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => decoded[1..].to_string(),
+                    _ => decoded,
+                }
+            }
             None => p,
         })
         .collect()
@@ -1325,6 +1332,7 @@ mod tests {
         assert_eq!(parse_pasted_paths("\"/tmp/x y.txt\"\n/tmp/z.txt"), ["/tmp/x y.txt", "/tmp/z.txt"]);
         assert_eq!(parse_pasted_paths("file:///tmp/a%20b.png"), ["/tmp/a b.png"]);
         assert_eq!(parse_pasted_paths(r"C:\Users\me\a.txt"), [r"C:\Users\me\a.txt"]);
+        assert_eq!(parse_pasted_paths("file:///C:/Users/me/a%20b.txt"), ["C:/Users/me/a b.txt"]);
         assert!(parse_pasted_paths("   ").is_empty());
     }
 

@@ -1,9 +1,13 @@
 [tools]
-bun = "latest"
-"cargo:cargo-about" = { version = "latest", features = "cli" }
-rumdl = "latest"
-rust = { version = "stable", components = ["rustfmt", "clippy"] }
-taplo = "latest"
+bun = "1.4.4"
+"cargo:cargo-about" = { version = "0.9.3", features = "cli" }
+"cargo:cargo-deny" = "0.20.2"
+"cargo:cargo-nextest" = "0.9.151"
+"cargo:tauri-cli" = "2.12.4"
+rumdl = "0.3.2"
+rust = { version = "1.99.1", components = ["rustfmt", "clippy"] }
+taplo = "0.10.0"
+typos = "1.52.0"
 
 [tasks."ui:install"]
 description = "Install frontend dependencies with Bun"
@@ -67,6 +71,12 @@ description = "Build all workspace binaries in debug mode"
 depends = ["ui:build"]
 run = "cargo build --workspace"
 
+[tasks.bundle]
+description = "Build the desktop app installers and bundles with the Tauri CLI"
+dir = "crates/wsid-gui"
+depends = ["ui:build"]
+run = "cargo tauri build"
+
 [tasks.run]
 description = "Build and run the WSID CLI/TUI in release mode"
 run = "cargo run -p wsid-cli --release"
@@ -114,7 +124,7 @@ run = [
 
 [tasks."licenses:check"]
 description = "Verify third-party Rust crate licenses against about.toml"
-run = "cargo about generate --workspace --offline --fail about.hbs -o /dev/null"
+run = "cargo about generate --workspace --offline --fail about.hbs -o target/licenses-check.txt"
 
 [tasks.test]
 description = "Run all workspace tests"
