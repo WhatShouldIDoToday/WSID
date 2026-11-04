@@ -33,8 +33,9 @@ accessibility rules in [`docs/AGENT_UI_GUIDELINES.md`](docs/AGENT_UI_GUIDELINES.
 
 ## Tooling & Tasks (`mise.toml`)
 
-Tool versions (`rust`, `bun`, `cargo-about`, `rumdl`, `taplo`) and project
-workflows are managed via [`mise.toml`](mise.toml):
+Tool versions (`rust`, `bun`, `cargo-about`, `cargo-deny`, `cargo-nextest`,
+the Tauri CLI, `rumdl`, `taplo`, `typos`) are pinned, and project workflows are
+managed, in [`mise.toml`](mise.toml):
 
 - `mise run build` / `mise run build:debug`: Build the frontend bundle and Rust
   workspace (`release` or `debug`).
@@ -48,7 +49,29 @@ workflows are managed via [`mise.toml`](mise.toml):
 - `mise run licenses` / `mise run licenses:check`: Generate or verify
   third-party license attributions via `cargo-about`.
 - `mise run test`: Run the workspace test suite (`cargo test --workspace`).
+- `mise run test:ci`: Run the frontend tests and the workspace tests with
+  `cargo nextest`, exactly as CI does.
+- `mise run bundle`: Build the desktop installers with the Tauri CLI. It builds
+  the frontend first, because Tauri does not.
 - `mise run pc`: Run all pre-commit checks (`fmt:check`, `lint`,
   `licenses:check`, and `test`).
 - `mise run hooks:install`: Install the git pre-commit hook (`mise generate
   git-pre-commit`).
+
+## Git, Pull Requests & CI
+
+- Branch from `dev` and open pull requests into `dev`. Squash-merge feature
+  PRs. `dev` is merged into `main` with a merge commit, and a Release Please PR
+  on `main` publishes stable releases.
+- PR titles must be [Conventional Commits](https://www.conventionalcommits.org/)
+  (`feat(cli): ...`, `fix(core): ...`, `ci: ...`). Release notes and version
+  bumps are generated from them.
+- Run `mise run pc` before pushing. CI (`.github/workflows/ci.yml`) runs the
+  same checks plus `cargo deny`, `typos`, and tests on Linux, macOS, and
+  Windows. The `ci-gate` job summarizes them and is the check to require.
+- Add the `package-check` label to a PR to build unsigned installers for every
+  platform. PRs into `main` always build them.
+- Never edit `Cargo.lock` versions or release versions by hand. Release Please
+  bumps `Cargo.toml`, `tauri.conf.json`, and `ui/package.json` together.
+- Do not commit signing keys, certificates, or tokens. Secrets live in the
+  `release` and `beta` GitHub environments.
