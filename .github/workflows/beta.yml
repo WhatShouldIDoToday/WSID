@@ -104,6 +104,18 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: scripts/ci/publish-release.sh "$TAG" prerelease
 
+  homebrew:
+    name: homebrew
+    needs: [prepare, publish]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/homebrew.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      tag: ${{ needs.prepare.outputs.tag }}
+      channel: beta
+
   # Skipped when cancelled: a replaced run must not touch the newer run's draft.
   prune:
     name: prune
