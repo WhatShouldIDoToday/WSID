@@ -28,9 +28,8 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
-
+# No workflow-level permissions: a callee can only narrow the caller's token, and uploads need contents: write.
+# Callers set the permissions.
 jobs:
   build:
     name: cli (${{ matrix.target }})
