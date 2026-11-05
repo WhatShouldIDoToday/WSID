@@ -13,6 +13,16 @@ pub const GLOBAL_DB_FILENAME: &str = "wsid.db";
 pub const CONFIG_FILENAME: &str = "config.toml";
 pub const ATTACHMENTS_DIRNAME: &str = "attachments";
 pub const WSID_DB_ENV_VAR: &str = "WSID_DB";
+/// Folder name for config and app data. Beta builds (`WSID_CHANNEL=beta`) use their own, so a beta
+/// schema migration can never touch stable data.
+pub const APP_DIR_NAME: &str = app_dir_name(option_env!("WSID_CHANNEL"));
+
+const fn app_dir_name(channel: Option<&str>) -> &'static str {
+    match channel {
+        Some(value) if value.eq_ignore_ascii_case("beta") => "wsid-beta",
+        _ => "wsid",
+    }
+}
 
 pub const MIN_FOCUS_LIMIT: usize = 1;
 pub const MAX_FOCUS_LIMIT: usize = 50;
@@ -93,7 +103,7 @@ impl AppConfig {
 pub fn default_config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("wsid")
+        .join(APP_DIR_NAME)
         .join(CONFIG_FILENAME)
 }
 
@@ -101,11 +111,13 @@ pub fn default_config_path() -> PathBuf {
 /// - macOS: `~/Library/Application Support/wsid`
 /// - Windows: `%LOCALAPPDATA%\wsid`
 /// - Linux: `$XDG_DATA_HOME/wsid` (or `~/.local/share/wsid`)
+///
+/// Beta builds use `wsid-beta` in place of `wsid`.
 pub fn default_app_data_dir() -> PathBuf {
     dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("wsid")
+        .join(APP_DIR_NAME)
 }
 
 pub fn default_global_db_path() -> PathBuf {
@@ -173,6 +185,14 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    #[test]
+    fn app_dir_name_separates_only_the_beta_channel() {
+        assert_eq!(app_dir_name(None), "wsid");
+        assert_eq!(app_dir_name(Some("")), "wsid");
+        assert_eq!(app_dir_name(Some("stable")), "wsid");
+        assert_eq!(app_dir_name(Some("beta")), "wsid-beta");
+    }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         let nanos = SystemTime::now()

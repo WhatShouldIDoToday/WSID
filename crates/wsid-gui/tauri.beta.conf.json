@@ -1,0 +1,18 @@
+{
+  "productName": "WSID Beta",
+  "mainBinaryName": "wsid-gui-beta",
+  "identifier": "io.github.whatshouldidotoday.wsid.beta",
+  "app": {
+    "windows": [
+      {
+        "title": "WSID Beta — What Should I Do?",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 900,
+        "minHeight": 640,
+        "resizable": true,
+        "dragDropEnabled": true
+      }
+    ]
+  }
+}

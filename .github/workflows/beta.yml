@@ -1,0 +1,124 @@
+name: Beta
+
+on:
+  push:
+    branches: [dev]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+permissions:
+  contents: read
+
+# A newer push replaces an older beta. prune removes the draft a cancelled run leaves behind.
+concurrency:
+  group: beta
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Compute version
+        id: version
+        run: scripts/ci/beta-version.sh --print
+      - name: Create draft prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists."
+            exit 0
+          fi
+          gh release create "$TAG" --draft --prerelease --target "$GITHUB_SHA" --title "$TAG" \
+            --notes "Beta build of $GITHUB_SHA from dev. Betas keep their data separate from stable."
+
+  build-cli:
+    name: build-cli
+    needs: prepare
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-cli.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      tag: ${{ needs.prepare.outputs.tag }}
+      environment: beta
+      publish: true
+      beta: true
+
+  build-gui:
+    name: build-gui
+    needs: prepare
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-gui.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.sha }}
+      tag: ${{ needs.prepare.outputs.tag }}
+      environment: beta
+      publish: true
+      prerelease: true
+      beta: true
+
+  flatpak:
+    name: flatpak
+    needs: [prepare, build-gui]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/flatpak.yml
+    with:
+      ref: ${{ github.sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      tag: ${{ needs.prepare.outputs.tag }}
+      publish: true
+      beta: true
+
+  publish:
+    name: publish
+    needs: [prepare, build-cli, build-gui, flatpak]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Add checksums and publish the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: scripts/ci/publish-release.sh "$TAG" prerelease
+
+  # Skipped when cancelled: a replaced run must not touch the newer run's draft.
+  prune:
+    name: prune
+    needs: [prepare, publish]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Delete old betas and abandoned drafts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: scripts/ci/prune-betas.sh "$TAG"

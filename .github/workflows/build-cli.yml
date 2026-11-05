@@ -23,6 +23,10 @@ on:
         description: Sign, notarize, and upload to the draft release. Otherwise upload a workflow artifact.
         type: boolean
         default: false
+      beta:
+        description: Apply the beta version and build with WSID_CHANNEL=beta.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,6 +36,8 @@ jobs:
     name: cli (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     environment: ${{ inputs.publish && inputs.environment || '' }}
+    env:
+      WSID_CHANNEL: ${{ inputs.beta && 'beta' || '' }}
     defaults:
       run:
         shell: bash
@@ -68,7 +74,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: cli-${{ matrix.target }}
+          key: cli-${{ matrix.target }}-${{ inputs.beta && 'beta' || 'stable' }}
+
+      - name: Apply beta version
+        if: inputs.beta
+        run: scripts/ci/beta-version.sh
 
       - name: Build
         run: cargo build -p wsid-cli --release --locked --target "${{ matrix.target }}"

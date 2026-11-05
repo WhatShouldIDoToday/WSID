@@ -1,0 +1,108 @@
+name: Flatpak
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref or SHA holding the manifest.
+        type: string
+        required: true
+      version:
+        description: Version used in the bundle name.
+        type: string
+        required: true
+      tag:
+        description: Release tag to read the .deb from and upload to. Required when publish is true.
+        type: string
+        default: ""
+      beta:
+        description: Build the beta app ID and data folder.
+        type: boolean
+        default: false
+      publish:
+        description: Use the .deb on the draft release and upload the bundle to it. Otherwise use the gui-linux-x64 artifact from this run.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    name: flatpak deb
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download the .deb from the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: gh release download "$TAG" --pattern '*_amd64.deb' --dir deb
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flatpak-deb
+          path: deb/*.deb
+          if-no-files-found: error
+          retention-days: 1
+
+  bundle:
+    name: flatpak bundle
+    needs: deb
+    if: ${{ !cancelled() && (needs.deb.result == 'success' || needs.deb.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.publish && 'flatpak-deb' || 'gui-linux-x64' }}
+          path: deb
+
+      - name: Prepare manifest
+        id: manifest
+        env:
+          BETA: ${{ inputs.beta }}
+        run: |
+          manifest=packaging/flatpak/io.github.whatshouldidotoday.wsid.yml
+          deb="$(find deb -name '*.deb' | head -n 1)"
+          test -n "$deb"
+          cp "$deb" packaging/flatpak/wsid.deb
+          if [ "$BETA" = "true" ]; then
+            sed -i \
+              -e 's/whatshouldidotoday\.wsid$/whatshouldidotoday.wsid.beta/' \
+              -e 's/wsid-gui/wsid-gui-beta/g' \
+              -e 's#xdg-data/wsid:create#xdg-data/wsid-beta:create#' \
+              "$manifest"
+          fi
+          echo "path=$manifest" >> "$GITHUB_OUTPUT"
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: ${{ steps.manifest.outputs.path }}
+          bundle: WSID-${{ inputs.version }}-x86_64.flatpak
+          artifact-name: flatpak-bundle
+          cache: false
+
+  upload:
+    name: flatpak upload
+    needs: bundle
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: flatpak-bundle
+          path: bundle
+      - name: Upload to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" bundle/*.flatpak --clobber
