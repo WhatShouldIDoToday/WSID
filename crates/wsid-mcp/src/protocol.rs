@@ -4,6 +4,23 @@ use serde_json::{Value, json};
 pub const JSONRPC_VERSION: &str = "2.0";
 pub const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// Initialize-handshake revisions this server speaks, newest first. It only serves tools, so the
+/// differences between them do not affect it.
+pub const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Echo the requested version when supported. Otherwise answer with the newest supported one,
+/// and let the client decide whether it can use it, as the lifecycle spec describes.
+pub fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
+    match requested {
+        None => DEFAULT_MCP_PROTOCOL_VERSION,
+        Some(version) => SUPPORTED_MCP_PROTOCOL_VERSIONS
+            .iter()
+            .copied()
+            .find(|v| *v == version)
+            .unwrap_or(SUPPORTED_MCP_PROTOCOL_VERSIONS[0]),
+    }
+}
+
 pub const PARSE_ERROR_CODE: i64 = -32700;
 pub const INVALID_REQUEST_CODE: i64 = -32600;
 pub const METHOD_NOT_FOUND_CODE: i64 = -32601;
@@ -108,7 +125,7 @@ impl CallToolResult {
 }
 
 pub fn build_initialize_result(requested_protocol_version: Option<&str>) -> Value {
-    let protocol_version = requested_protocol_version.unwrap_or(DEFAULT_MCP_PROTOCOL_VERSION);
+    let protocol_version = negotiate_protocol_version(requested_protocol_version);
     json!({
         "protocolVersion": protocol_version,
         "capabilities": {

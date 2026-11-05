@@ -7,7 +7,7 @@ pub mod tools;
 pub use protocol::{
     CallToolParams, CallToolResult, DEFAULT_MCP_PROTOCOL_VERSION, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE, INVALID_REQUEST_CODE,
     InitializeParams, JSONRPC_VERSION, JsonRpcError, JsonRpcRequest, JsonRpcResponse, METHOD_NOT_FOUND_CODE, PARSE_ERROR_CODE,
-    ToolDefinition, ToolTextContent, build_initialize_result, list_mcp_tools,
+    SUPPORTED_MCP_PROTOCOL_VERSIONS, ToolDefinition, ToolTextContent, build_initialize_result, list_mcp_tools, negotiate_protocol_version,
 };
 pub use server::McpServer;
 pub use tools::{TaskDetailResponse, build_task_detail, dispatch_tool};
@@ -368,5 +368,16 @@ mod tests {
 
         let search = call_tool(&mut server, 2, "search_tasks", json!({}));
         assert_eq!(search["count"], 0, "no half-created task left behind");
+    }
+
+    #[test]
+    fn protocol_version_is_echoed_only_when_supported() {
+        assert_eq!(negotiate_protocol_version(None), DEFAULT_MCP_PROTOCOL_VERSION);
+        for version in SUPPORTED_MCP_PROTOCOL_VERSIONS {
+            assert_eq!(negotiate_protocol_version(Some(version)), *version);
+        }
+        // A revision this server does not know gets the newest supported one back, never an echo.
+        assert_eq!(negotiate_protocol_version(Some("2026-07-28")), SUPPORTED_MCP_PROTOCOL_VERSIONS[0]);
+        assert_eq!(build_initialize_result(Some("1900-01-01"))["protocolVersion"], SUPPORTED_MCP_PROTOCOL_VERSIONS[0]);
     }
 }

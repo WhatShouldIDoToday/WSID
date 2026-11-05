@@ -1,5 +1,6 @@
 mod args;
 mod cli_runner;
+mod mcp_install;
 mod tui;
 
 use std::io::{self, IsTerminal};
@@ -20,6 +21,16 @@ fn main() {
 
 fn try_main() -> wsid_core::Result<()> {
     let cli = Cli::parse();
+
+    // Managing client configs must not touch WSID's own config or database.
+    if let Some(Commands::Mcp { action: Some(action), .. }) = &cli.command {
+        let mode = OutputMode::from_flags(cli.accessible, cli.json);
+        if let Err(message) = mcp_install::run(action, mode, &mut io::stdout()) {
+            eprintln!("Error: {message}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     let cfg_path = default_config_path();
     let mut config = AppConfig::load_from_path(&cfg_path).unwrap_or_default();
@@ -57,7 +68,7 @@ fn try_main() -> wsid_core::Result<()> {
             }
         }
         Some(Commands::Tui) => tui::run_tui(&db_path, config, user, cli.accessible),
-        Some(Commands::Mcp { verbose }) => {
+        Some(Commands::Mcp { verbose, .. }) => {
             let db = Database::open(&db_path)?;
             let mut server = wsid_mcp::McpServer::new(db, config).with_stderr_logging(verbose);
             server.run_stdio()?;

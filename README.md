@@ -95,8 +95,10 @@ they exist.
 
 ### Connect an AI agent
 
-`FIXME:` A `wsid mcp install` command is planned. Until then, add WSID to your
-agent's MCP configuration by hand:
+Run `wsid mcp status` to see which AI clients WSID finds, then
+`wsid mcp install --agent <id>` or `wsid mcp install --all-detected`. See
+[`docs/MCP.md`](docs/MCP.md) for the supported clients and troubleshooting.
+To add WSID by hand instead:
 
 ```json
 {

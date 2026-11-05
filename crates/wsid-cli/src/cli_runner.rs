@@ -51,7 +51,7 @@ pub fn execute_command<W: Write>(
 ) -> wsid_core::Result<()> {
     match command {
         Commands::Tui => Ok(()),
-        Commands::Mcp { verbose } => {
+        Commands::Mcp { verbose, .. } => {
             let db = Database::open(db_path)?;
             let mut server = McpServer::new(db, config.clone()).with_stderr_logging(verbose);
             server.run_stdio()?;
