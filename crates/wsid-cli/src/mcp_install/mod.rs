@@ -639,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unparseable_file_is_left_untouched() {
+    fn an_unparsable_file_is_left_untouched() {
         let (_dir, env) = env();
         let path = env.home.join(".cursor/mcp.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();

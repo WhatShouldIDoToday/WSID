@@ -98,8 +98,14 @@ mod tests {
 
     #[test]
     fn explicit_binary_wins_and_is_made_absolute() {
-        let inputs = Inputs { explicit: Some(PathBuf::from("/opt/wsid")), ..exe("/somewhere/else/wsid") };
-        assert_eq!(resolve(&inputs).unwrap(), Resolved::Path("/opt/wsid".to_string()));
+        let dir = tempfile::tempdir().unwrap();
+        let explicit = dir.path().join("wsid");
+        let inputs = Inputs { explicit: Some(explicit.clone()), ..exe("/somewhere/else/wsid") };
+        assert_eq!(resolve(&inputs).unwrap(), Resolved::Path(explicit.to_string_lossy().into_owned()));
+        // A relative path is made absolute.
+        let relative = Inputs { explicit: Some(PathBuf::from("bin/wsid")), ..exe("/somewhere/else/wsid") };
+        let Resolved::Path(path) = resolve(&relative).unwrap() else { panic!("not a path") };
+        assert!(Path::new(&path).is_absolute());
     }
 
     #[test]
@@ -122,7 +128,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&real, &link).unwrap();
         #[cfg(not(unix))]
-        std::fs::copy(&real, &link).map(|_| ()).unwrap();
+        std::fs::hard_link(&real, &link).unwrap();
         let inputs = Inputs { current_exe: Some(real), which: Some(link.clone()), ..Inputs::default() };
         assert_eq!(resolve(&inputs).unwrap(), Resolved::Path(link.to_string_lossy().into_owned()));
     }
