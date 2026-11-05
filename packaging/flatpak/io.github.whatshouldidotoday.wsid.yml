@@ -1,0 +1,32 @@
+# Repackages the Linux x64 .deb into a .flatpak bundle attached to GitHub releases. This is not the
+# Flathub manifest: Flathub must build from source. flatpak.yml rewrites the IDs for beta builds.
+app-id: io.github.whatshouldidotoday.wsid
+runtime: org.gnome.Platform
+runtime-version: "51"
+sdk: org.gnome.Sdk
+command: wsid-gui
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Mounted at the host path and at the sandbox's $XDG_DATA_HOME/wsid, so the GUI and a host `wsid`
+  # CLI share one database.
+  - --filesystem=xdg-data/wsid:create
+modules:
+  - name: wsid-gui
+    buildsystem: simple
+    sources:
+      - type: file
+        path: wsid.deb
+    build-commands:
+      - ar x wsid.deb
+      - tar -xf data.tar.*
+      - install -Dm755 usr/bin/wsid-gui /app/bin/wsid-gui
+      - install -Dm644 usr/share/applications/*.desktop "/app/share/applications/$FLATPAK_ID.desktop"
+      - desktop-file-edit --set-icon="$FLATPAK_ID" --set-key=Exec --set-value=wsid-gui "/app/share/applications/$FLATPAK_ID.desktop"
+      - |
+        for icon in usr/share/icons/hicolor/*/apps/*; do
+          size="$(basename "$(dirname "$(dirname "$icon")")")"
+          install -Dm644 "$icon" "/app/share/icons/hicolor/$size/apps/$FLATPAK_ID.png"
+        done

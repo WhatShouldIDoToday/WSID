@@ -23,6 +23,10 @@ on:
         description: Whether the release being uploaded to is a prerelease.
         type: boolean
         default: false
+      beta:
+        description: Apply the beta version and build the beta app identity with WSID_CHANNEL=beta.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,6 +36,8 @@ jobs:
     name: gui (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     environment: ${{ inputs.publish && inputs.environment || '' }}
+    env:
+      WSID_CHANNEL: ${{ inputs.beta && 'beta' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -87,7 +93,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: gui-${{ matrix.name }}
+          key: gui-${{ matrix.name }}-${{ inputs.beta && 'beta' || 'stable' }}
+
+      - name: Apply beta version
+        if: inputs.beta
+        shell: bash
+        run: scripts/ci/beta-version.sh
+
+      # RPM versions cannot contain `-`, so Linux packages use semver build metadata (0.1.1+beta.7).
+      # Only the bundle version changes. Cargo keeps the prerelease version.
+      - name: Use an RPM-safe bundle version
+        if: inputs.beta && runner.os == 'Linux'
+        run: |
+          sed -i 's/^\(  "version": "[^"]*\)-beta\./\1+beta./' crates/wsid-gui/tauri.conf.json
 
       # Run bun directly: `mise run` would try to install every tool in mise.toml, including ones
       # with no binary for this runner.
@@ -126,13 +144,13 @@ jobs:
           releaseName: ${{ inputs.tag }}
           releaseDraft: true
           prerelease: ${{ inputs.prerelease }}
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }}${{ inputs.beta && ' --config tauri.beta.conf.json' || '' }}
 
       - name: Build unsigned bundles
         if: ${{ !inputs.publish }}
         shell: bash
         working-directory: crates/wsid-gui
-        run: cargo tauri build ${{ matrix.args }}
+        run: cargo tauri build ${{ matrix.args }}${{ inputs.beta && ' --config tauri.beta.conf.json' || '' }}
 
       - uses: actions/upload-artifact@v7
         if: ${{ !inputs.publish }}

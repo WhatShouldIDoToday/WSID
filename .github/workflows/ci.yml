@@ -123,6 +123,7 @@ jobs:
     with:
       ref: ${{ github.sha }}
       version: pr-${{ github.event.pull_request.number }}
+      beta: ${{ github.base_ref == 'dev' }}
 
   package-gui:
     name: package-gui
@@ -132,12 +133,25 @@ jobs:
     uses: ./.github/workflows/build-gui.yml
     with:
       ref: ${{ github.sha }}
+      beta: ${{ github.base_ref == 'dev' }}
+
+  package-flatpak:
+    name: package-flatpak
+    needs: package-gui
+    if: github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
+    permissions:
+      contents: read
+    uses: ./.github/workflows/flatpak.yml
+    with:
+      ref: ${{ github.sha }}
+      version: pr-${{ github.event.pull_request.number }}
+      beta: ${{ github.base_ref == 'dev' }}
 
   # Separate from ci-gate, which fails on skipped jobs. Require this check on main only.
   package-gate:
     name: package-gate
     if: always() && github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
-    needs: [package-cli, package-gui]
+    needs: [package-cli, package-gui, package-flatpak]
     runs-on: ubuntu-24.04
     steps:
       - name: Require both package builds to succeed
