@@ -136,6 +136,46 @@ jobs:
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: scripts/ci/publish-release.sh "$TAG" latest
 
+  homebrew:
+    name: homebrew
+    needs: [release-please, publish]
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/homebrew.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.release-please.outputs.version }}
+      tag: ${{ needs.release-please.outputs.tag_name }}
+      channel: stable
+
+  # Gated until the first manifests are merged by hand (issue #7). Never runs for betas.
+  winget:
+    name: winget
+    needs: [release-please, publish]
+    if: needs.release-please.outputs.release_created == 'true' && vars.WINGET_ENABLED == 'true'
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      # Pinned to the v2 commit. The action installs the released Komac, not Komac's main branch (Komac issue 1841).
+      - name: Submit the desktop app
+        uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54
+        with:
+          identifier: WhatShouldIDoToday.WSID
+          installers-regex: '_x64-setup\.exe$'
+          release-tag: ${{ needs.release-please.outputs.tag_name }}
+          fork-user: WhatShouldIDoToday
+          token: ${{ secrets.WINGET_TOKEN }}
+      - name: Submit the CLI
+        uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54
+        with:
+          identifier: WhatShouldIDoToday.WSID.CLI
+          installers-regex: 'wsid-(x86_64|aarch64)-pc-windows-msvc-.*\.zip$'
+          release-tag: ${{ needs.release-please.outputs.tag_name }}
+          fork-user: WhatShouldIDoToday
+          token: ${{ secrets.WINGET_TOKEN }}
+
   sync-dev:
     name: sync-dev
     needs: [release-please, publish]

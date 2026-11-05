@@ -1,0 +1,22 @@
+cask "wsid-gui" do
+  version "@@VERSION@@"
+  sha256 "@@SHA_DMG@@"
+
+  url "https://github.com/WhatShouldIDoToday/WSID/releases/download/@@TAG@@/@@DMG@@"
+  name "WSID"
+  desc "Offline task manager that ranks what to do next"
+  homepage "https://github.com/WhatShouldIDoToday/WSID"
+
+  depends_on macos: ">= :high_sierra"
+
+  app "WSID.app"
+
+  # User data stays unless the user runs `brew uninstall --zap`.
+  zap trash: [
+    "~/Library/Application Support/io.github.whatshouldidotoday.wsid",
+    "~/Library/Application Support/wsid",
+    "~/Library/Caches/io.github.whatshouldidotoday.wsid",
+    "~/Library/Saved Application State/io.github.whatshouldidotoday.wsid.savedState",
+    "~/Library/WebKit/io.github.whatshouldidotoday.wsid",
+  ]
+end
