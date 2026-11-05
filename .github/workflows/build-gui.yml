@@ -104,7 +104,8 @@ jobs:
       # Only the bundle version changes. Cargo keeps the prerelease version.
       - name: Use an RPM-safe bundle version
         if: inputs.beta && runner.os == 'Linux'
-        run: sed -i 's/^\(  "version": "[^"]*\)-beta\./\1+beta./' crates/wsid-gui/tauri.conf.json
+        run: |
+          sed -i 's/^\(  "version": "[^"]*\)-beta\./\1+beta./' crates/wsid-gui/tauri.conf.json
 
       # Run bun directly: `mise run` would try to install every tool in mise.toml, including ones
       # with no binary for this runner.
