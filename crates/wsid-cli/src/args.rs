@@ -4,6 +4,59 @@ use std::str::FromStr;
 use clap::{Args, Parser, Subcommand};
 use wsid_core::{FocusPreset, RelationInputKind, Result, TaskStatus};
 
+/// Subcommands of `wsid mcp`. Without one, `wsid mcp` serves MCP over stdio.
+#[derive(Debug, Subcommand)]
+pub enum McpAction {
+    /// Add WSID to the MCP configuration of AI clients
+    Install(McpInstallArgs),
+    /// Remove WSID from the MCP configuration of AI clients
+    Uninstall(McpUninstallArgs),
+    /// Show which AI clients are detected and whether WSID is configured in each
+    Status,
+}
+
+#[derive(Debug, Args)]
+pub struct McpInstallArgs {
+    /// Client to configure (repeatable). Use `wsid mcp status` to list client IDs
+    #[arg(long = "agent", value_name = "ID")]
+    pub agents: Vec<String>,
+
+    /// Configure every client detected on this machine
+    #[arg(long)]
+    pub all_detected: bool,
+
+    /// Show what would change without writing anything
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Print the configuration for the selected clients instead of editing files
+    #[arg(long)]
+    pub print: bool,
+
+    /// Path to the `wsid` binary to register (default: detected automatically)
+    #[arg(long, value_name = "PATH")]
+    pub binary: Option<PathBuf>,
+
+    /// Replace an existing `wsid` entry that points elsewhere, and create config files for clients that are not detected
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct McpUninstallArgs {
+    /// Client to remove WSID from (repeatable)
+    #[arg(long = "agent", value_name = "ID")]
+    pub agents: Vec<String>,
+
+    /// Remove WSID from every client that has it
+    #[arg(long)]
+    pub all_detected: bool,
+
+    /// Show what would change without writing anything
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "wsid", version, about = "WSID (What Should I Do?) — Offline-first, accessible task manager & MCP server")]
 pub struct Cli {
@@ -158,11 +211,14 @@ pub enum Commands {
         all: bool,
     },
 
-    /// Run the passive stdio JSON-RPC 2.0 Model Context Protocol (MCP) server
+    /// Run the passive stdio JSON-RPC 2.0 Model Context Protocol (MCP) server, or manage AI client configuration
     Mcp {
         /// Log diagnostic events to stderr
         #[arg(long, short = 'v')]
         verbose: bool,
+
+        #[command(subcommand)]
+        action: Option<McpAction>,
     },
 
     /// Display WSID application version, Apache-2.0 license, repository URL, and third-party license attributions
@@ -483,5 +539,53 @@ mod tests {
         assert_eq!(format_duration_estimate(Some(1580)), "1d 2h 20m");
         assert_eq!(format_duration_estimate(Some(10080)), "1w");
         assert_eq!(format_duration_estimate(None), "-");
+    }
+}
+
+#[cfg(test)]
+mod mcp_args_tests {
+    use clap::Parser;
+
+    use super::*;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(std::iter::once("wsid").chain(args.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn bare_mcp_still_means_serve_over_stdio() {
+        match parse(&["mcp"]).command {
+            Some(Commands::Mcp { verbose: false, action: None }) => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+        match parse(&["mcp", "-v"]).command {
+            Some(Commands::Mcp { verbose: true, action: None }) => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_parses_repeated_agents_and_flags() {
+        let cli =
+            parse(&["mcp", "install", "--agent", "cursor", "--agent", "zed", "--dry-run", "--force", "--binary", "/x/wsid", "--json"]);
+        assert!(cli.json);
+        let Some(Commands::Mcp { action: Some(McpAction::Install(args)), .. }) = cli.command else { panic!("not install") };
+        assert_eq!(args.agents, ["cursor", "zed"]);
+        assert!(args.dry_run && args.force && !args.print && !args.all_detected);
+        assert_eq!(args.binary.as_deref(), Some(std::path::Path::new("/x/wsid")));
+    }
+
+    #[test]
+    fn uninstall_and_status_parse() {
+        assert!(matches!(
+            parse(&["mcp", "uninstall", "--all-detected"]).command,
+            Some(Commands::Mcp { action: Some(McpAction::Uninstall(McpUninstallArgs { all_detected: true, .. })), .. })
+        ));
+        assert!(matches!(parse(&["mcp", "status", "--accessible"]).command, Some(Commands::Mcp { action: Some(McpAction::Status), .. })));
+    }
+
+    #[test]
+    fn unknown_mcp_subcommands_are_rejected() {
+        assert!(Cli::try_parse_from(["wsid", "mcp", "bogus"]).is_err());
     }
 }

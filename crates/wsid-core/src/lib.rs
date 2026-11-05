@@ -25,7 +25,7 @@ pub use attachments::{
 };
 pub use bulk::{BulkEditOutcome, BulkTaskFailure, BulkTaskPatch, bulk_delete_tasks, bulk_update_tasks};
 pub use config::{
-    ATTACHMENTS_DIRNAME, AppConfig, CONFIG_FILENAME, GLOBAL_DB_FILENAME, LOCAL_DB_FILENAME, MAX_FOCUS_LIMIT, MIN_FOCUS_LIMIT,
+    APP_DIR_NAME, ATTACHMENTS_DIRNAME, AppConfig, CONFIG_FILENAME, GLOBAL_DB_FILENAME, LOCAL_DB_FILENAME, MAX_FOCUS_LIMIT, MIN_FOCUS_LIMIT,
     WSID_DB_ENV_VAR, default_app_data_dir, default_attachments_dir, default_config_path, default_global_db_path, resolve_active_db_path,
     resolve_db_path, resolve_local_workspace_db_path, validate_focus_limit,
 };
