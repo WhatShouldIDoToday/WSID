@@ -116,6 +116,9 @@ mod tests {
         assert_eq!(resolve(&beta).unwrap(), Resolved::Path("/usr/local/bin/wsid-beta".to_string()));
     }
 
+    // Windows cannot make a link here without elevated rights, and hard links keep their own path,
+    // so the link case runs on Unix only.
+    #[cfg(unix)]
     #[test]
     fn a_path_link_to_the_same_file_is_kept_uncanonicalized() {
         let dir = tempfile::tempdir().unwrap();
@@ -125,12 +128,18 @@ mod tests {
         let link_dir = dir.path().join("links");
         std::fs::create_dir_all(&link_dir).unwrap();
         let link = link_dir.join("wsid");
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        #[cfg(not(unix))]
-        std::fs::hard_link(&real, &link).unwrap();
         let inputs = Inputs { current_exe: Some(real), which: Some(link.clone()), ..Inputs::default() };
         assert_eq!(resolve(&inputs).unwrap(), Resolved::Path(link.to_string_lossy().into_owned()));
+    }
+
+    #[test]
+    fn a_path_entry_for_the_running_file_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("wsid");
+        std::fs::write(&exe, "x").unwrap();
+        let inputs = Inputs { current_exe: Some(exe.clone()), which: Some(exe.clone()), ..Inputs::default() };
+        assert_eq!(resolve(&inputs).unwrap(), Resolved::Path(exe.to_string_lossy().into_owned()));
     }
 
     #[test]
