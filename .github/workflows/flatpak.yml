@@ -82,6 +82,19 @@ jobs:
           fi
           echo "path=$manifest" >> "$GITHUB_OUTPUT"
 
+      # The image ships the GNOME runtimes in /var/lib/flatpak, a lower overlayfs layer. flatpak-builder
+      # updates them in place, which renames directories. On runners whose overlayfs lacks redirect_dir
+      # that fails with EXDEV ("Invalid cross-device link"). Copy the installation into the container's
+      # writable layer first so the renames are ordinary ones. Remove the old tree before the rename:
+      # renaming the lower-layer directory itself would hit the same error.
+      - name: Move the Flatpak installation off the image layer
+        run: |
+          set -eu
+          cp -a /var/lib/flatpak /var/lib/flatpak.rw
+          rm -rf /var/lib/flatpak
+          mv /var/lib/flatpak.rw /var/lib/flatpak
+          flatpak list --system --runtime
+
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: ${{ steps.manifest.outputs.path }}
