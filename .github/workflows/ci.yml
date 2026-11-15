@@ -16,7 +16,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Key PR runs by PR number. Events on a closed PR (for example Release Please relabeling the
+  # merged Release PR) run with github.ref set to the base branch. With a ref-based key they would
+  # share the push run's group and cancel it.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -25,6 +28,7 @@ env:
 jobs:
   lint:
     name: lint
+    if: github.event.pull_request.state != 'closed'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +48,7 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
+    if: github.event.pull_request.state != 'closed'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -79,6 +84,7 @@ jobs:
 
   deny:
     name: deny (${{ matrix.checks }})
+    if: github.event.pull_request.state != 'closed'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -94,6 +100,7 @@ jobs:
 
   typos:
     name: typos
+    if: github.event.pull_request.state != 'closed'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -101,7 +108,7 @@ jobs:
 
   ci-gate:
     name: ci-gate
-    if: always()
+    if: always() && github.event.pull_request.state != 'closed'
     needs: [lint, test, deny, typos]
     runs-on: ubuntu-24.04
     steps:
@@ -120,7 +127,7 @@ jobs:
   # Installer builds run for PRs into main, or for any PR labeled `package-check`.
   package-cli:
     name: package-cli
-    if: github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
+    if: github.event_name == 'pull_request' && github.event.pull_request.state != 'closed' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
     permissions:
       contents: read
     uses: ./.github/workflows/build-cli.yml
@@ -131,7 +138,7 @@ jobs:
 
   package-gui:
     name: package-gui
-    if: github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
+    if: github.event_name == 'pull_request' && github.event.pull_request.state != 'closed' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
     permissions:
       contents: read
     uses: ./.github/workflows/build-gui.yml
@@ -142,7 +149,7 @@ jobs:
   package-flatpak:
     name: package-flatpak
     needs: package-gui
-    if: github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
+    if: github.event_name == 'pull_request' && github.event.pull_request.state != 'closed' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
     permissions:
       contents: read
     uses: ./.github/workflows/flatpak.yml
@@ -154,7 +161,7 @@ jobs:
   # Separate from ci-gate, which fails on skipped jobs. Require this check on main only.
   package-gate:
     name: package-gate
-    if: always() && github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.state != 'closed' && (github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'package-check'))
     needs: [package-cli, package-gui, package-flatpak]
     runs-on: ubuntu-24.04
     steps:
