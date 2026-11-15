@@ -5614,7 +5614,7 @@ dependencies = [
 
 [[package]]
 name = "wsid-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "clap",
@@ -5635,7 +5635,7 @@ dependencies = [
 
 [[package]]
 name = "wsid-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -5653,7 +5653,7 @@ dependencies = [
 
 [[package]]
 name = "wsid-gui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "gtk",
@@ -5670,7 +5670,7 @@ dependencies = [
 
 [[package]]
 name = "wsid-mcp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "serde",
