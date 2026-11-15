@@ -47,6 +47,8 @@
     formatDeadlineDisplay,
     formatTimestampDisplay,
     validateUserRef,
+    validateBasedOn,
+    openExternalUrl,
     parseCommentMentions,
     tokenizeCommentBody,
   } from "../lib/ipc";
@@ -115,6 +117,8 @@
   let editManualPriority = $state<number>(3);
   let editTags = $state<string[]>([]);
   let editProject = $state<string>("default");
+  let editBasedOn = $state<string>("");
+  let editBasedOnError = $derived(validateBasedOn(editBasedOn).error);
   let editAssignee = $state<string>("");
   let editEvaluator = $state<string>("");
   let editReporter = $state<string>("");
@@ -263,6 +267,7 @@
     editManualPriority = d.task.manual_priority;
     editTags = [...d.task.tags];
     editProject = d.task.project;
+    editBasedOn = d.task.based_on ?? "";
     editAssignee = d.task.assignee;
     editEvaluator = d.task.evaluator;
     editReporter = d.task.reporter;
@@ -381,6 +386,7 @@
       editEvaluator !== detail.task.evaluator ||
       editReporter !== detail.task.reporter ||
       editProject !== detail.task.project ||
+      editBasedOn.trim() !== (detail.task.based_on ?? "") ||
       editTags.join(",") !== detail.task.tags.join(",")
     );
   }
@@ -532,6 +538,13 @@
       }
     }
 
+    if (editBasedOnError) {
+      errorMsg = editBasedOnError;
+      announce(errorMsg);
+      document.getElementById("edit-based-on")?.focus();
+      return;
+    }
+
     const parsedDur = parseDurationInput(editEstimateInput);
 
     try {
@@ -548,6 +561,8 @@
         manual_priority: Number(editManualPriority),
         tags: editTags,
         project: editProject,
+        // An empty string clears the link.
+        based_on: editBasedOn.trim(),
         assignee: editAssignee,
         evaluator: editEvaluator,
         reporter: editReporter,
@@ -1229,6 +1244,64 @@
                 </div>
               {/if}
             </section>
+
+            {#if editingTask || detail.task.based_on}
+              <section
+                class="side-block"
+                aria-labelledby="drawer-based-on-heading"
+              >
+                <h3 id="drawer-based-on-heading" class="side-heading">
+                  Based on
+                </h3>
+                {#if editingTask}
+                  <div class="side-field">
+                    <label for="edit-based-on">Link (URL)</label>
+                    <input
+                      autocorrect="off"
+                      autocapitalize="off"
+                      id="edit-based-on"
+                      type="url"
+                      bind:value={editBasedOn}
+                      spellcheck="false"
+                      autocomplete="off"
+                      placeholder="https://github.com/owner/repo/issues/1"
+                      aria-invalid={editBasedOnError ? "true" : "false"}
+                      aria-describedby={editBasedOnError
+                        ? "edit-based-on-err"
+                        : undefined}
+                    />
+                    {#if editBasedOnError}
+                      <span
+                        id="edit-based-on-err"
+                        class="field-error"
+                        role="alert"
+                      >
+                        {editBasedOnError}
+                      </span>
+                    {/if}
+                  </div>
+                {:else if detail.task.based_on}
+                  <a
+                    class="based-on-link"
+                    href={detail.task.based_on}
+                    aria-label={`Open linked item in your browser: ${detail.task.based_on}`}
+                    title="Opens in your default browser"
+                    onclick={async (e) => {
+                      e.preventDefault();
+                      const url = detail?.task.based_on;
+                      if (!url) return;
+                      try {
+                        await openExternalUrl(url);
+                      } catch (err) {
+                        announce(`Could not open link: ${String(err)}`);
+                      }
+                    }}
+                  >
+                    {detail.task.based_on}
+                  </a>
+                {/if}
+              </section>
+            {/if}
           </aside>
 
           <!-- A focusable separator is the ARIA window-splitter pattern. -->

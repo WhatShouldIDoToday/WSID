@@ -48,6 +48,7 @@ export interface Task {
   manual_priority: number;
   tags: string[];
   project: string;
+  based_on?: string | null;
   reporter: string;
   assignee: string;
   evaluator: string;
@@ -263,6 +264,7 @@ export interface GuiCreateTaskPayload {
   manual_priority?: number | null;
   tags: string[];
   project?: string | null;
+  based_on?: string | null;
   reporter?: string | null;
   assignee?: string | null;
   evaluator?: string | null;
@@ -284,6 +286,8 @@ export interface GuiUpdateTaskPayload {
   manual_priority?: number;
   tags?: string[];
   project?: string;
+  /** A URL sets the link; `null` or `""` clears it; omitted leaves it unchanged. */
+  based_on?: string | null;
   reporter?: string;
   assignee?: string;
   evaluator?: string;
@@ -753,6 +757,37 @@ export function validateProject(raw: string): {
     };
   }
   return { normalized: trimmed, error: null };
+}
+
+/**
+ * Mirrors core `normalize_based_on`: trim, blank means no value, otherwise an `http` or `https`
+ * URL with a host. The trimmed text is kept as typed.
+ */
+export function validateBasedOn(raw: string): {
+  normalized: string | null;
+  error: string | null;
+} {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { normalized: null, error: null };
+  }
+  const error = `Invalid link "${trimmed}" — enter an http:// or https:// URL.`;
+  try {
+    const url = new URL(trimmed);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      !url.hostname
+    ) {
+      return { normalized: null, error };
+    }
+  } catch {
+    return { normalized: null, error };
+  }
+  return { normalized: trimmed, error: null };
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  return invoke<void>("open_external_url", { url });
 }
 
 export const TAG_REGEX = /^[a-z0-9_-]+$/;

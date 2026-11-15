@@ -17,7 +17,7 @@ use wsid_core::{
     delete_task_note, delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks,
     get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks,
     list_eisenhower_matrix, list_known_projects, list_known_users, list_task_notes, list_tasks, list_user_kinds, normalize_project,
-    normalize_user, open_file_in_os, parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment,
+    normalize_user, open_file_in_os, open_url_in_os, parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment,
     resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
     update_attachment_description, update_task_relation, update_task_with_notices, validate_focus_limit, validate_task_draft,
 };
@@ -98,6 +98,7 @@ pub struct GuiCreateTaskPayload {
     pub manual_priority: Option<i8>,
     pub tags: Vec<String>,
     pub project: Option<String>,
+    pub based_on: Option<String>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
@@ -126,9 +127,20 @@ pub struct GuiUpdateTaskPayload {
     pub manual_priority: Option<i8>,
     pub tags: Option<Vec<String>>,
     pub project: Option<String>,
+    /// A string sets the URL; `""` or `null` clears it; absent leaves it unchanged.
+    #[serde(default, deserialize_with = "double_option")]
+    pub based_on: Option<Option<String>>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
+}
+
+/// Deserializes a present-but-null field as `Some(None)` so callers can clear a value.
+fn double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, String> {
@@ -202,6 +214,7 @@ pub fn payload_to_draft(payload: GuiCreateTaskPayload) -> Result<TaskDraft, Stri
         urgent_override: payload.urgent_override.map(Scalar::Bool),
         tags: payload.tags,
         project: payload.project,
+        based_on: payload.based_on,
         relations: payload
             .initial_relations
             .into_iter()
@@ -661,6 +674,7 @@ fn update_existing_task(state: State<'_, SharedGuiState>, payload: GuiUpdateTask
             manual_priority: payload.manual_priority,
             tags: payload.tags,
             project: payload.project,
+            based_on: payload.based_on,
             reporter: payload.reporter,
             assignee: payload.assignee,
             evaluator: payload.evaluator,
@@ -912,6 +926,12 @@ fn open_attachment_native(state: State<'_, SharedGuiState>, attachment_id: Optio
     };
 
     open_file_in_os(&target_path).map_err(|e| e.to_string())
+}
+
+/// Opens a task's `based_on` link in the default browser. Only `http`/`https` URLs are accepted.
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    open_url_in_os(&url).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1203,6 +1223,7 @@ pub fn run() {
             edit_attachment_alt_description,
             delete_attachment,
             open_attachment_native,
+            open_external_url,
             read_attachment_preview_data_url,
             get_about_info,
         ])

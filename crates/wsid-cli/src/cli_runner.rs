@@ -255,6 +255,7 @@ fn run_add<W: Write>(db_path: &Path, user: &str, args: &AddArgs, mode: OutputMod
         urgent_override: if args.urgent { Some(Scalar::Bool(true)) } else { None },
         tags: args.tags.clone(),
         project: args.project.clone(),
+        based_on: args.based_on.clone(),
         relations,
         attachments,
         reporter: args.reporter.clone(),
@@ -349,6 +350,9 @@ fn run_show<W: Write>(db_path: &Path, raw_id: &str, mode: OutputMode, out: &mut 
             writeln!(out, "Project: {}.", task.project)?;
             writeln!(out, "Added on: {}.", task.created_at.format("%Y-%m-%d %H:%M UTC"))?;
             writeln!(out, "Last updated: {}.", task.updated_at.format("%Y-%m-%d %H:%M UTC"))?;
+            if let Some(url) = &task.based_on {
+                writeln!(out, "Based on: {url}")?;
+            }
             writeln!(out, "Tags: {}.", if task.tags.is_empty() { "none".to_string() } else { task.tags.join(", ") })?;
             if !task.description.trim().is_empty() {
                 writeln!(out, "Description: {}", task.description)?;
@@ -390,6 +394,9 @@ fn run_show<W: Write>(db_path: &Path, raw_id: &str, mode: OutputMode, out: &mut 
                 task.created_at.format("%Y-%m-%d %H:%M UTC"),
                 task.updated_at.format("%Y-%m-%d %H:%M UTC")
             )?;
+            if let Some(url) = &task.based_on {
+                writeln!(out, "  Based on: {url}")?;
+            }
             if !task.tags.is_empty() {
                 writeln!(out, "  Tags: {}", task.tags.join(", "))?;
             }

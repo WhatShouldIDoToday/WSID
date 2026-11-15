@@ -19,8 +19,9 @@ use crate::models::{AttachmentInput, CreateTaskInput, RelationInputKind, Task, T
 use crate::relations::{link_tasks, link_tasks_in_tx};
 use crate::search::{SearchQuery, search_tasks};
 use crate::tasks::{
-    create_task_in_tx, get_task, get_task_conn, list_known_users, normalize_project, normalize_tags, parse_deadline_datetime,
-    parse_duration_minutes, parse_user_ref, update_task_with_notices, validate_dates, validate_not_past, validate_time_estimate,
+    create_task_in_tx, get_task, get_task_conn, list_known_users, normalize_based_on, normalize_project, normalize_tags,
+    parse_deadline_datetime, parse_duration_minutes, parse_user_ref, update_task_with_notices, validate_dates, validate_not_past,
+    validate_time_estimate,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -36,6 +37,7 @@ pub enum TaskField {
     ManualPriority,
     UrgentOverride,
     Project,
+    BasedOn,
     Tags,
     Relations,
     Attachments,
@@ -147,6 +149,7 @@ pub struct TaskDraft {
     pub manual_priority: Option<Scalar>,
     pub urgent_override: Option<Scalar>,
     pub project: Option<String>,
+    pub based_on: Option<String>,
     pub tags: Vec<String>,
     pub relations: Vec<RelationDraft>,
     pub attachments: Vec<AttachmentInput>,
@@ -327,6 +330,14 @@ fn resolve(conn: &Connection, draft: &TaskDraft, default_user: &str) -> (Option<
         None => None,
     };
 
+    let based_on = match normalize_based_on(draft.based_on.as_deref().unwrap_or_default()) {
+        Ok(u) => u,
+        Err(e) => {
+            issues.push(FieldIssue::error(TaskField::BasedOn, strip_prefix(&e)));
+            None
+        }
+    };
+
     if issues.iter().any(FieldIssue::is_error) {
         return (None, issues);
     }
@@ -346,6 +357,7 @@ fn resolve(conn: &Connection, draft: &TaskDraft, default_user: &str) -> (Option<
         manual_priority: manual_priority.map(|n| n as i8),
         tags,
         project,
+        based_on,
         reporter,
         assignee,
         evaluator,
@@ -454,6 +466,8 @@ pub fn update_task_from_draft_with_notices(
         manual_priority: resolved.input.manual_priority,
         tags: Some(resolved.input.tags),
         project: resolved.input.project,
+        // A blank or cleared draft field removes the link.
+        based_on: Some(resolved.input.based_on),
         reporter: resolved.input.reporter,
         assignee: resolved.input.assignee,
         evaluator: resolved.input.evaluator,

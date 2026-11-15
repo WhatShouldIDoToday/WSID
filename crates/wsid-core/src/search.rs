@@ -406,7 +406,7 @@ fn load_filtered_tasks(conn: &Connection, search: &SearchQuery) -> Result<Vec<Ta
             t.id, t.title, t.description, t.status, t.origin_kind, t.origin_note_id,
             t.due_date, t.sgdb_date, t.time_estimate_minutes, t.difficulty, t.importance,
             t.urgent_override, t.manual_priority, t.reporter, t.assignee, t.evaluator,
-            t.created_at, t.updated_at, t.completed_at, t.project
+            t.created_at, t.updated_at, t.completed_at, t.project, t.based_on
          FROM tasks t
          WHERE 1 = 1",
     );

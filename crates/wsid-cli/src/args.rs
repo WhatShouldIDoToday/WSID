@@ -357,6 +357,10 @@ pub struct AddArgs {
     #[arg(long, short = 'p')]
     pub project: Option<String>,
 
+    /// URL of the external item this task is based on (http or https, e.g. a GitHub issue)
+    #[arg(long)]
+    pub based_on: Option<String>,
+
     /// Reporter user (defaults to active user)
     #[arg(long)]
     pub reporter: Option<String>,

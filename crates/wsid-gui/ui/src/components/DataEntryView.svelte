@@ -25,6 +25,7 @@
     saveClipboardBytesForDraft,
     fileToBase64,
     parseDurationInput,
+    validateBasedOn,
     validateDeadlines,
     validateUserRef,
   } from "../lib/ipc";
@@ -80,6 +81,8 @@
   let tags = $state<string[]>([]);
   // Draft people and project start on the active context. Untouched fields follow a switch.
   let project = $state<string>(untrack(() => activeProject));
+  let basedOn = $state<string>("");
+  let basedOnError = $derived(validateBasedOn(basedOn).error);
   let reporter = $state<string>("");
   let assignee = $state<string>("");
   let evaluator = $state<string>("");
@@ -114,6 +117,7 @@
     sgdb_date: "SGDB date",
     time_estimate: "Time estimate",
     manual_priority: "Manual priority",
+    based_on: "Based on",
     urgent_override: "Urgent override",
   };
 
@@ -139,6 +143,7 @@
       manual_priority: Number(manualPriority),
       tags: [...tags],
       project: project.trim() || "default",
+      based_on: basedOn.trim() || null,
       reporter: reporter.trim() || activeUser,
       assignee: assignee.trim() || activeUser,
       evaluator: evaluator.trim() || activeUser,
@@ -316,6 +321,7 @@
       urgentOverride ||
       tags.length > 0 ||
       tagInputText.trim().length > 0 ||
+      basedOn.trim().length > 0 ||
       stagedRelations.length > 0 ||
       relationSearchQuery.trim().length > 0 ||
       pendingAttachments.length > 0 ||
@@ -470,6 +476,7 @@
     tags = [];
     tagInputText = "";
     project = activeProject;
+    basedOn = "";
     reporter = activeUser;
     assignee = activeUser;
     evaluator = activeUser;
@@ -582,6 +589,12 @@
       }
     }
 
+    if (basedOnError) {
+      announce(basedOnError);
+      document.getElementById("entry-based-on")?.focus();
+      return;
+    }
+
     const parsedDur = parseDurationInput(estimateInput);
 
     try {
@@ -617,6 +630,7 @@
         manual_priority: Number(manualPriority),
         tags,
         project: project.trim() || "default",
+        based_on: basedOn.trim() || null,
         reporter: reporter.trim() || activeUser,
         assignee: assignee.trim() || activeUser,
         evaluator: evaluator.trim() || activeUser,
@@ -984,6 +998,31 @@
               Letters, numbers, underscores, and dashes. Defaults to
               <code>default</code>.
             </span>
+          </div>
+
+          <div class="form-field">
+            <label for="entry-based-on">Based on (URL)</label>
+            <input
+              id="entry-based-on"
+              type="url"
+              bind:value={basedOn}
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="https://github.com/owner/repo/issues/1"
+              aria-invalid={basedOnError ? "true" : "false"}
+              aria-describedby={basedOnError
+                ? "entry-based-on-hint entry-based-on-err"
+                : "entry-based-on-hint"}
+            />
+            <span id="entry-based-on-hint" class="field-hint">
+              Optional link to the item this task is based on, such as a GitHub
+              issue.
+            </span>
+            {#if basedOnError}
+              <span id="entry-based-on-err" class="field-error" role="alert">
+                {basedOnError}
+              </span>
+            {/if}
           </div>
 
           <div class="form-grid-dates">
