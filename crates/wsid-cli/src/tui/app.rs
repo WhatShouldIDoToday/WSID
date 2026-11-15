@@ -69,6 +69,8 @@ pub enum DatabaseSortColumn {
     Importance,
     Difficulty,
     Assignee,
+    Created,
+    Updated,
 }
 
 impl DatabaseSortColumn {
@@ -85,7 +87,9 @@ impl DatabaseSortColumn {
             Self::Importance => Self::Difficulty,
             Self::Difficulty => Self::SgdbDate,
             Self::SgdbDate => Self::DueDate,
-            Self::DueDate => Self::Relevance,
+            Self::DueDate => Self::Created,
+            Self::Created => Self::Updated,
+            Self::Updated => Self::Relevance,
         }
     }
 
@@ -102,6 +106,7 @@ impl DatabaseSortColumn {
             Self::Difficulty => Some("diff"),
             Self::SgdbDate => Some("sgdb"),
             Self::DueDate => Some("due"),
+            Self::Created | Self::Updated => None,
         }
     }
 
@@ -117,6 +122,8 @@ impl DatabaseSortColumn {
             Self::Importance => "Importance",
             Self::Difficulty => "Difficulty",
             Self::Assignee => "Assignee",
+            Self::Created => "Created",
+            Self::Updated => "Updated",
         }
     }
 }
@@ -614,6 +621,8 @@ impl TuiApp {
                 DatabaseSortColumn::Importance => b.task.importance.cmp(&a.task.importance),
                 DatabaseSortColumn::Difficulty => b.task.difficulty.cmp(&a.task.difficulty),
                 DatabaseSortColumn::Assignee => a.task.assignee.cmp(&b.task.assignee),
+                DatabaseSortColumn::Created => a.task.created_at.cmp(&b.task.created_at),
+                DatabaseSortColumn::Updated => a.task.updated_at.cmp(&b.task.updated_at),
             };
             if self.search_sort_asc { ord } else { ord.reverse() }
         });
@@ -1911,7 +1920,7 @@ impl TuiApp {
                     .due_date
                     .as_deref()
                     .map(wsid_core::format_deadline_date),
-                DatabaseSortColumn::Relevance => None,
+                DatabaseSortColumn::Relevance | DatabaseSortColumn::Created | DatabaseSortColumn::Updated => None,
             });
         match value {
             Some(value) if !value.trim().is_empty() => {
@@ -3862,12 +3871,12 @@ mod tests {
     fn database_sort_columns_cycle_in_table_order() {
         let mut column = DatabaseSortColumn::Relevance;
         let mut seen = vec![column];
-        for _ in 0..10 {
+        for _ in 0..12 {
             column = column.next();
             seen.push(column);
         }
         assert_eq!(
-            seen[1..10],
+            seen[1..12],
             [
                 DatabaseSortColumn::Id,
                 DatabaseSortColumn::Title,
@@ -3878,8 +3887,10 @@ mod tests {
                 DatabaseSortColumn::Difficulty,
                 DatabaseSortColumn::SgdbDate,
                 DatabaseSortColumn::DueDate,
+                DatabaseSortColumn::Created,
+                DatabaseSortColumn::Updated,
             ]
         );
-        assert_eq!(seen[10], DatabaseSortColumn::Relevance);
+        assert_eq!(seen[12], DatabaseSortColumn::Relevance);
     }
 }

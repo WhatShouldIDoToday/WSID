@@ -611,6 +611,17 @@ export function validateDeadlineOrder(
   return res.orderError;
 }
 
+/// Locale-aware display for read-only UTC timestamps such as `created_at` and `updated_at`.
+export function formatTimestampDisplay(raw: string | null | undefined): string {
+  if (!raw) return "—";
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return raw;
+  return dt.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 export function formatDeadlineDisplay(raw: string | null | undefined): string {
   if (!raw) return "—";
   const s = raw.trim();

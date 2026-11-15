@@ -1112,6 +1112,13 @@ pub(crate) fn format_utc(dt: DateTime<Utc>) -> String {
     dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+/// Bumps `tasks.updated_at` for a task whose notes, relations, or attachments changed.
+/// Call it inside the same transaction as the write so both commit or roll back together.
+pub(crate) fn touch_task_updated_at(conn: &Connection, task_id: &str) -> Result<()> {
+    conn.execute("UPDATE tasks SET updated_at = ?1 WHERE id = ?2", params![format_utc(Utc::now()), task_id])?;
+    Ok(())
+}
+
 pub(crate) fn parse_utc(raw: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(raw)
         .map(|dt| dt.with_timezone(&Utc))
@@ -1138,6 +1145,66 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
         )
+    }
+
+    fn updated_at_of(db: &Database, task_id: &str) -> String {
+        db.conn
+            .query_row("SELECT updated_at FROM tasks WHERE id = ?1", [task_id], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Rewinds `updated_at` so a later bump is observable at second precision.
+    fn backdate_updated_at(db: &Database, task_ids: &[&str]) {
+        for id in task_ids {
+            db.conn
+                .execute("UPDATE tasks SET updated_at = '2000-01-01T00:00:00Z' WHERE id = ?1", [id])
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn note_relation_and_attachment_activity_bumps_updated_at() {
+        use crate::attachments::{attach_existing_file_with_dir, remove_attachment_with_dir, save_clipboard_attachment_with_dir};
+        use crate::models::RelationInputKind;
+        use crate::notes::add_task_note;
+        use crate::relations::{link_tasks, unlink_tasks};
+        use std::fs;
+        use tempfile::tempdir;
+
+        let attachments_dir = tempdir().unwrap();
+        let mut db = open_in_memory_db().unwrap();
+        let task = create_task(&mut db, CreateTaskInput { title: "Main".to_string(), ..Default::default() }, "alice").unwrap();
+        let other = create_task(&mut db, CreateTaskInput { title: "Other".to_string(), ..Default::default() }, "alice").unwrap();
+        let (a, b) = (task.id.as_str(), other.id.as_str());
+
+        backdate_updated_at(&db, &[a, b]);
+        add_task_note(&mut db, a, "alice", "A progress note", false).unwrap();
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "adding a note should bump updated_at");
+        assert_eq!(updated_at_of(&db, b), "2000-01-01T00:00:00Z", "a note on one task must not touch another");
+
+        backdate_updated_at(&db, &[a, b]);
+        link_tasks(&mut db, a, RelationInputKind::Related, b).unwrap();
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "adding a relation should bump the source");
+        assert_ne!(updated_at_of(&db, b), "2000-01-01T00:00:00Z", "adding a relation should bump the target");
+
+        backdate_updated_at(&db, &[a, b]);
+        assert!(unlink_tasks(&mut db, a, RelationInputKind::Related, b).unwrap());
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "removing a relation should bump the source");
+        assert_ne!(updated_at_of(&db, b), "2000-01-01T00:00:00Z", "removing a relation should bump the target");
+
+        let file = attachments_dir.path().join("notes.txt");
+        fs::write(&file, b"hello").unwrap();
+        backdate_updated_at(&db, &[a]);
+        let att = attach_existing_file_with_dir(&mut db, a, None, &file, None, Some(attachments_dir.path())).unwrap();
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "attaching a file should bump updated_at");
+
+        backdate_updated_at(&db, &[a]);
+        save_clipboard_attachment_with_dir(&mut db, a, None, b"\x89PNG", Some("png"), None, Some(attachments_dir.path())).unwrap();
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "saving a clipboard attachment should bump updated_at");
+
+        backdate_updated_at(&db, &[a]);
+        assert!(remove_attachment_with_dir(&mut db, att.id, Some(attachments_dir.path())).unwrap());
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "removing an attachment should bump updated_at");
     }
 
     #[test]
