@@ -5438,6 +5438,7 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs 6.0.0",
+ "dunce",
  "jsonc-parser",
  "ratatui",
  "serde",
@@ -5456,6 +5457,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
+ "dunce",
  "nucleo-matcher",
  "rand 0.9.5",
  "rusqlite",

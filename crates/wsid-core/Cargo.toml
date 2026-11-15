@@ -11,6 +11,7 @@ description = "WSID core library: SQLite storage, task scoring, search, and conf
 [dependencies]
 chrono.workspace = true
 dirs.workspace = true
+dunce.workspace = true
 nucleo-matcher.workspace = true
 rand.workspace = true
 rusqlite.workspace = true
