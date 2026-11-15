@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/WhatShouldIDoToday/WSID/compare/v0.2.0...v0.2.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **packaging:** drop disabled depends_on macos from Homebrew casks ([#44](https://github.com/WhatShouldIDoToday/WSID/issues/44)) ([84d426c](https://github.com/WhatShouldIDoToday/WSID/commit/84d426c2d23555705571fe826eb793aff946c26b))
+
 ## [0.2.0](https://github.com/WhatShouldIDoToday/WSID/compare/v0.1.0...v0.2.0) (2026-11-15)
 
 
