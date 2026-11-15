@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ManualPathEntry from "./ManualPathEntry.svelte";
   import Select from "./ui/Select.svelte";
   import { untrack } from "svelte";
   import ConfirmModal from "./ConfirmModal.svelte";
@@ -383,25 +384,36 @@
     );
   }
 
+  /** Set when the native picker is unavailable; shows manual path entry. */
+  let attachPickError = $state<string | null>(null);
+
+  function stageAttachmentPath(path: string) {
+    const fileName = basenameOfPath(path);
+    pendingAttachments = [
+      ...pendingAttachments,
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        path,
+        suggestedName: fileName,
+        description: nextAttachmentDesc.trim() || null,
+      },
+    ];
+    nextAttachmentDesc = "";
+    attachPickError = null;
+    announce(`Staged attachment ${fileName}`);
+  }
+
   async function handlePickAttachment() {
+    let path: string | null;
     try {
-      const path = await pickAttachmentFileDialog();
-      if (!path) return;
-      const fileName = basenameOfPath(path);
-      pendingAttachments = [
-        ...pendingAttachments,
-        {
-          id: `${Date.now()}-${Math.random()}`,
-          path,
-          suggestedName: fileName,
-          description: nextAttachmentDesc.trim() || null,
-        },
-      ];
-      nextAttachmentDesc = "";
-      announce(`Staged attachment ${fileName}`);
+      path = await pickAttachmentFileDialog();
     } catch (err) {
-      formError = String(err);
+      attachPickError = String(err);
+      announce(`Could not open file picker: ${attachPickError}`);
+      return;
     }
+    if (!path) return;
+    stageAttachmentPath(path);
   }
 
   function handleDroppedPaths(paths: string[]) {
@@ -819,6 +831,15 @@
                     Or drag-and-drop / paste (Cmd/Ctrl+V) an image
                   </span>
                 </div>
+                {#if attachPickError}
+                  <ManualPathEntry
+                    label="File path"
+                    reason={attachPickError}
+                    submitLabel="Attach"
+                    onSubmit={stageAttachmentPath}
+                    onCancel={() => (attachPickError = null)}
+                  />
+                {/if}
               </div>
             </div>
 

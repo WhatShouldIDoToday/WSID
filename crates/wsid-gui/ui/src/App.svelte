@@ -220,17 +220,34 @@
     viewEpoch += 1;
   }
 
-  async function handlePickWorkspaceDb() {
+  /** Set when the native picker is unavailable; Settings then shows manual path entry. */
+  let dbPickError = $state<string | null>(null);
+
+  async function openWorkspaceDbAtPath(path: string) {
     try {
-      const picked = await pickWorkspaceDatabaseDialog();
-      if (!picked) return;
-      session = await switchDatabase(picked, false);
+      session = await switchDatabase(path, false);
+      dbPickError = null;
       resetViewScopeAfterDatabaseSwitch();
       announce(`Switched active database to ${session.db_path}.`);
       await refreshAllData();
     } catch (err) {
       announce(`Failed to switch database: ${String(err)}`);
     }
+  }
+
+  async function handlePickWorkspaceDb() {
+    let picked: string | null;
+    try {
+      picked = await pickWorkspaceDatabaseDialog();
+    } catch (err) {
+      dbPickError = String(err);
+      announce(`Could not open file picker: ${dbPickError}`);
+      switchTab("settings");
+      return;
+    }
+    if (!picked) return;
+    dbPickError = null;
+    await openWorkspaceDbAtPath(picked);
   }
 
   async function handleSwitchToGlobalDb() {
@@ -540,6 +557,9 @@
         onPresetChange={handlePresetChange}
         onFocusLimitChange={handleFocusLimitChange}
         onPickWorkspaceDb={handlePickWorkspaceDb}
+        {dbPickError}
+        onSubmitManualDb={openWorkspaceDbAtPath}
+        onCancelManualDb={() => (dbPickError = null)}
         onSwitchGlobalDb={handleSwitchToGlobalDb}
         onSwitchRecentDb={handleSwitchRecentDb}
         onOpenAbout={() => {

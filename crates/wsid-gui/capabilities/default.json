@@ -4,6 +4,8 @@
   "description": "Default capability for the main WSID desktop window",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save"
   ]
 }

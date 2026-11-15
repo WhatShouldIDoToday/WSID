@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ManualPathEntry from "./ManualPathEntry.svelte";
   import { Dialog } from "bits-ui";
   import Select from "./ui/Select.svelte";
   import UserPill from "./UserPill.svelte";
@@ -602,16 +603,18 @@
     }
   }
 
-  async function handlePickTaskAttachment() {
+  /** Set when the native picker is unavailable; shows manual path entry. */
+  let taskAttachPickError = $state<string | null>(null);
+
+  async function attachTaskFileAtPath(path: string) {
     if (!detail) return;
     try {
-      const path = await pickAttachmentFileDialog();
-      if (!path) return;
       await attachFileFromDisk({
         taskId: detail.task.id,
         filePath: path,
         description: newTaskAttachmentDesc.trim() || null,
       });
+      taskAttachPickError = null;
       newTaskAttachmentDesc = "";
       announce(`Attached file to task ${detail.task.id}`);
       await refreshDetail(detail.task.id);
@@ -620,6 +623,20 @@
       errorMsg = String(err);
       announce(`Attachment error: ${String(err)}`);
     }
+  }
+
+  async function handlePickTaskAttachment() {
+    if (!detail) return;
+    let path: string | null;
+    try {
+      path = await pickAttachmentFileDialog();
+    } catch (err) {
+      taskAttachPickError = String(err);
+      announce(`Could not open file picker: ${taskAttachPickError}`);
+      return;
+    }
+    if (!path) return;
+    await attachTaskFileAtPath(path);
   }
 
   async function handleTaskDropPaths(paths: string[]) {
@@ -741,25 +758,36 @@
     }
   }
 
+  /** Set when the native picker is unavailable; shows manual path entry. */
+  let commentAttachPickError = $state<string | null>(null);
+
+  function stageCommentAttachmentPath(path: string) {
+    const fileName = basenameOfPath(path);
+    pendingCommentAttachments = [
+      ...pendingCommentAttachments,
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        path,
+        suggestedName: fileName,
+        description: pendingCommentDesc.trim() || null,
+      },
+    ];
+    pendingCommentDesc = "";
+    commentAttachPickError = null;
+    announce(`Added file ${fileName} to pending comment`);
+  }
+
   async function handlePickCommentAttachment() {
+    let path: string | null;
     try {
-      const path = await pickAttachmentFileDialog();
-      if (!path) return;
-      const fileName = basenameOfPath(path);
-      pendingCommentAttachments = [
-        ...pendingCommentAttachments,
-        {
-          id: `${Date.now()}-${Math.random()}`,
-          path,
-          suggestedName: fileName,
-          description: pendingCommentDesc.trim() || null,
-        },
-      ];
-      pendingCommentDesc = "";
-      announce(`Added file ${fileName} to pending comment`);
+      path = await pickAttachmentFileDialog();
     } catch (err) {
-      errorMsg = String(err);
+      commentAttachPickError = String(err);
+      announce(`Could not open file picker: ${commentAttachPickError}`);
+      return;
     }
+    if (!path) return;
+    stageCommentAttachmentPath(path);
   }
 
   async function handleCommentPasteFiles(files: FileList) {
@@ -1430,6 +1458,15 @@
                           Or drag-and-drop / paste (Cmd/Ctrl+V) a file here
                         </span>
                       </div>
+                      {#if taskAttachPickError}
+                        <ManualPathEntry
+                          label="File path"
+                          reason={taskAttachPickError}
+                          submitLabel="Attach"
+                          onSubmit={attachTaskFileAtPath}
+                          onCancel={() => (taskAttachPickError = null)}
+                        />
+                      {/if}
                     </div>
                   </div>
                 {/if}
@@ -1847,6 +1884,16 @@
                       </li>
                     {/each}
                   </ul>
+                {/if}
+
+                {#if commentAttachPickError}
+                  <ManualPathEntry
+                    label="File path"
+                    reason={commentAttachPickError}
+                    submitLabel="Attach"
+                    onSubmit={stageCommentAttachmentPath}
+                    onCancel={() => (commentAttachPickError = null)}
+                  />
                 {/if}
 
                 <div class="comment-actions">
