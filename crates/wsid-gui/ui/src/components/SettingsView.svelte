@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ManualPathEntry from "./ManualPathEntry.svelte";
   import { tick } from "svelte";
   import Select from "./ui/Select.svelte";
   import UserPill from "./UserPill.svelte";
@@ -22,6 +23,10 @@
     onOpenUserModal: () => void;
     onOpenProjectModal: () => void;
     onPickWorkspaceDb: () => void | Promise<void>;
+    /** Non-null when the native picker failed; shows manual path entry. */
+    dbPickError?: string | null;
+    onSubmitManualDb: (path: string) => void | Promise<void>;
+    onCancelManualDb: () => void;
     onSwitchGlobalDb: () => void | Promise<void>;
     onSwitchRecentDb: (path: string) => void | Promise<void>;
     onPresetChange: (preset: FocusPreset) => void | Promise<void>;
@@ -40,6 +45,9 @@
     onOpenUserModal,
     onOpenProjectModal,
     onPickWorkspaceDb,
+    dbPickError = null,
+    onSubmitManualDb,
+    onCancelManualDb,
     onSwitchGlobalDb,
     onSwitchRecentDb,
     onPresetChange,
@@ -393,6 +401,16 @@
           </button>
         {/if}
       </div>
+
+      {#if dbPickError}
+        <ManualPathEntry
+          label="Workspace database path"
+          reason={dbPickError}
+          submitLabel="Open database"
+          onSubmit={onSubmitManualDb}
+          onCancel={onCancelManualDb}
+        />
+      {/if}
 
       {#if session.recent_workspaces.length > 0}
         <div class="form-field">

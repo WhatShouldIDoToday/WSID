@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,6 +9,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tauri::menu::{HELP_SUBMENU_ID, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_dialog::DialogExt;
 use wsid_core::{
     AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, BulkEditOutcome, BulkTaskPatch, Database,
     DbChangeDetector, EisenhowerClassification, FieldIssue, FocusPreset, FocusQueueResponse, RelationDraft, RelationInputKind, Scalar,
@@ -464,50 +466,85 @@ fn switch_database(
     Ok(snapshot)
 }
 
-#[tauri::command]
-fn pick_workspace_database_dialog() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let script = r#"POSIX path of (choose file name with prompt "Select or create a WSID workspace database (.wsid.db)" default name ".wsid.db")"#;
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()
-            .map_err(|e| e.to_string())?;
-        if output.status.success() {
-            let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !chosen.is_empty() {
-                return Ok(Some(chosen));
-            }
-        }
-        Ok(None)
+/// Counts error records emitted by the native dialog backend (`rfd`).
+///
+/// The dialog plugin returns `None` both when the user cancels and when no
+/// picker could be shown (for example no XDG desktop portal on Linux); the
+/// backend only reports the latter through `log::error!`. Counting those
+/// records lets the commands tell the two cases apart.
+struct DialogErrorCounter;
+
+static DIALOG_BACKEND_ERRORS: AtomicUsize = AtomicUsize::new(0);
+static DIALOG_PICK_LOCK: Mutex<()> = Mutex::new(());
+static DIALOG_ERROR_COUNTER: DialogErrorCounter = DialogErrorCounter;
+
+impl log::Log for DialogErrorCounter {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() == log::Level::Error && metadata.target().starts_with("rfd")
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(None)
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            DIALOG_BACKEND_ERRORS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn install_dialog_error_counter() {
+    // If another logger is already installed, backend failure detection
+    // degrades to treating `None` as a cancel.
+    if log::set_logger(&DIALOG_ERROR_COUNTER).is_ok() {
+        log::set_max_level(log::LevelFilter::Error);
     }
 }
 
-#[tauri::command]
-fn pick_attachment_file_dialog() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let script = r#"POSIX path of (choose file with prompt "Select a file or image to attach")"#;
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()
-            .map_err(|e| e.to_string())?;
-        if output.status.success() {
-            let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !chosen.is_empty() {
-                return Ok(Some(chosen));
+const DIALOG_UNAVAILABLE_MESSAGE: &str = "No file picker could be opened. On Linux this usually means no XDG desktop portal is running (install xdg-desktop-portal with the GTK, GNOME, or KDE backend).";
+
+/// Runs `show` on a blocking thread: a path is `Ok(Some)`, a cancel is
+/// `Ok(None)`, and a backend failure is `Err`.
+async fn run_file_dialog<F>(show: F) -> Result<Option<String>, String>
+where
+    F: FnOnce() -> Option<tauri_plugin_dialog::FilePath> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
+        let _serial = DIALOG_PICK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = DIALOG_BACKEND_ERRORS.load(Ordering::SeqCst);
+        match show() {
+            Some(picked) => {
+                let path = picked.into_path().map_err(|e| e.to_string())?;
+                Ok(Some(path.to_string_lossy().into_owned()))
             }
+            None if DIALOG_BACKEND_ERRORS.load(Ordering::SeqCst) != before => Err(DIALOG_UNAVAILABLE_MESSAGE.to_string()),
+            None => Ok(None),
         }
-        Ok(None)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(None)
-    }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn pick_workspace_database_dialog(app: AppHandle) -> Result<Option<String>, String> {
+    run_file_dialog(move || {
+        app.dialog()
+            .file()
+            .set_title("Select or create a WSID workspace database (.wsid.db)")
+            .set_file_name(".wsid.db")
+            .blocking_save_file()
+    })
+    .await
+}
+
+#[tauri::command]
+async fn pick_attachment_file_dialog(app: AppHandle) -> Result<Option<String>, String> {
+    run_file_dialog(move || {
+        app.dialog()
+            .file()
+            .set_title("Select a file or image to attach")
+            .blocking_pick_file()
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1130,7 +1167,10 @@ pub fn run() {
     let shared_state: SharedGuiState = Arc::new(Mutex::new(GuiAppState::initialize()));
     let menu_state = shared_state.clone();
 
+    install_dialog_error_counter();
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(shared_state.clone())
         .setup(move |app| {
             if let Ok(menu) = build_app_menu(app.handle(), &shared_state) {
