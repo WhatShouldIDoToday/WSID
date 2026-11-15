@@ -45,6 +45,7 @@
     formatDurationMinutes,
     validateDeadlines,
     formatDeadlineDisplay,
+    formatTimestampDisplay,
     validateUserRef,
     parseCommentMentions,
     tokenizeCommentBody,
@@ -1213,6 +1214,18 @@
                     </div>
                   {/if}
                   <p class="side-muted">Origin: {detail.task.origin_kind}</p>
+                  <p class="side-muted">
+                    Added on:
+                    <time datetime={detail.task.created_at}
+                      >{formatTimestampDisplay(detail.task.created_at)}</time
+                    >
+                  </p>
+                  <p class="side-muted">
+                    Last updated:
+                    <time datetime={detail.task.updated_at}
+                      >{formatTimestampDisplay(detail.task.updated_at)}</time
+                    >
+                  </p>
                 </div>
               {/if}
             </section>

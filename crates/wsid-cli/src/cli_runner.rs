@@ -347,6 +347,8 @@ fn run_show<W: Write>(db_path: &Path, raw_id: &str, mode: OutputMode, out: &mut 
                 format_duration_estimate(task.time_estimate_minutes)
             )?;
             writeln!(out, "Project: {}.", task.project)?;
+            writeln!(out, "Added on: {}.", task.created_at.format("%Y-%m-%d %H:%M UTC"))?;
+            writeln!(out, "Last updated: {}.", task.updated_at.format("%Y-%m-%d %H:%M UTC"))?;
             writeln!(out, "Tags: {}.", if task.tags.is_empty() { "none".to_string() } else { task.tags.join(", ") })?;
             if !task.description.trim().is_empty() {
                 writeln!(out, "Description: {}", task.description)?;
@@ -381,6 +383,12 @@ fn run_show<W: Write>(db_path: &Path, raw_id: &str, mode: OutputMode, out: &mut 
                 task.sgdb_date
                     .map_or_else(|| "-".to_string(), |d| format_deadline_display(&d)),
                 format_duration_estimate(task.time_estimate_minutes)
+            )?;
+            writeln!(
+                out,
+                "  Added on: {} | Last updated: {}",
+                task.created_at.format("%Y-%m-%d %H:%M UTC"),
+                task.updated_at.format("%Y-%m-%d %H:%M UTC")
             )?;
             if !task.tags.is_empty() {
                 writeln!(out, "  Tags: {}", task.tags.join(", "))?;

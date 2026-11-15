@@ -12,7 +12,7 @@ use crate::error::{Result, WsidError};
 use crate::id::normalize_task_id;
 use crate::models::TaskAttachment;
 use crate::relations::ensure_task_exists;
-use crate::tasks::{format_utc, parse_utc};
+use crate::tasks::{format_utc, parse_utc, touch_task_updated_at};
 
 /// Infers a MIME media type from a file extension.
 pub fn infer_media_type(path: &Path) -> &'static str {
@@ -116,8 +116,10 @@ pub(crate) fn attach_existing_file_in_tx(
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![task_id, note_id, stored_path, file_name, media_type, effective_desc, i64::from(is_managed), now_str,],
     )?;
+    let id = conn.last_insert_rowid();
+    touch_task_updated_at(conn, &task_id)?;
 
-    Ok(conn.last_insert_rowid())
+    Ok(id)
 }
 
 /// Saves raw bytes (such as a pasted clipboard image) into the OS app-data attachments folder
@@ -179,13 +181,16 @@ pub fn save_clipboard_attachment_with_dir(
     let now_str = format_utc(now);
     let stored_path = canonical_dest.to_string_lossy().to_string();
 
-    db.conn.execute(
+    let tx = db.conn.transaction()?;
+    tx.execute(
         "INSERT INTO task_attachments (
             task_id, note_id, file_path, file_name, media_type, description, is_managed, created_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7)",
         params![task_id, note_id, stored_path, file_name, media_type, effective_desc, now_str,],
     )?;
-    let id = db.conn.last_insert_rowid();
+    let id = tx.last_insert_rowid();
+    touch_task_updated_at(&tx, &task_id)?;
+    tx.commit()?;
     get_attachment(db, id)
 }
 
@@ -239,9 +244,12 @@ pub fn remove_attachment_with_dir(db: &mut Database, attachment_id: i64, managed
         Err(_) => return Ok(false),
     };
 
-    let affected = db
-        .conn
-        .execute("DELETE FROM task_attachments WHERE id = ?1", [attachment_id])?;
+    let tx = db.conn.transaction()?;
+    let affected = tx.execute("DELETE FROM task_attachments WHERE id = ?1", [attachment_id])?;
+    if affected > 0 {
+        touch_task_updated_at(&tx, &existing.task_id)?;
+    }
+    tx.commit()?;
     if affected > 0 {
         cleanup_managed_files_after_delete(&db.conn, &[existing], managed_dir_override);
         Ok(true)

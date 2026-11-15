@@ -9,6 +9,7 @@
     searchTasksData,
     formatDurationMinutes,
     formatDeadlineDisplay,
+    formatTimestampDisplay,
   } from "../lib/ipc";
   import { Selection } from "../lib/selection.svelte";
   import BulkActions from "./BulkActions.svelte";
@@ -48,6 +49,8 @@
     | "importance"
     | "difficulty"
     | "due_date"
+    | "created"
+    | "updated"
     | "urgent";
 
   let query = $state<string>("");
@@ -134,6 +137,12 @@
           break;
         case "urgent":
           cmp = Number(a.task.urgent_override) - Number(b.task.urgent_override);
+          break;
+        case "created":
+          cmp = a.task.created_at.localeCompare(b.task.created_at);
+          break;
+        case "updated":
+          cmp = a.task.updated_at.localeCompare(b.task.updated_at);
           break;
         case "due_date": {
           const da = a.task.sgdb_date ?? a.task.due_date ?? "9999-99-99";
@@ -350,6 +359,24 @@
               SGDB / Due {sortCol === "due_date" ? (sortAsc ? "▲" : "▼") : ""}
             </button>
           </th>
+          <th scope="col" aria-sort={ariaSortFor("created")}>
+            <button
+              type="button"
+              class="sort-btn"
+              onclick={() => toggleSort("created")}
+            >
+              Added {sortCol === "created" ? (sortAsc ? "▲" : "▼") : ""}
+            </button>
+          </th>
+          <th scope="col" aria-sort={ariaSortFor("updated")}>
+            <button
+              type="button"
+              class="sort-btn"
+              onclick={() => toggleSort("updated")}
+            >
+              Updated {sortCol === "updated" ? (sortAsc ? "▲" : "▼") : ""}
+            </button>
+          </th>
           <th scope="col">Tags</th>
           <th scope="col" aria-sort={ariaSortFor("urgent")}>
             <button
@@ -366,7 +393,7 @@
         {#if sortedHits.length === 0}
           <tr>
             <td
-              colspan="12"
+              colspan="14"
               style="text-align: center; padding: 1.5rem; color: var(--text-muted);"
             >
               No tasks match the current search and filters.
@@ -429,6 +456,16 @@
                 {#if !hit.task.sgdb_date && !hit.task.due_date}
                   —
                 {/if}
+              </td>
+              <td>
+                <time datetime={hit.task.created_at}
+                  >{formatTimestampDisplay(hit.task.created_at)}</time
+                >
+              </td>
+              <td>
+                <time datetime={hit.task.updated_at}
+                  >{formatTimestampDisplay(hit.task.updated_at)}</time
+                >
               </td>
               <td>
                 {#each hit.task.tags as tag}
