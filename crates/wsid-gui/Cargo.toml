@@ -31,3 +31,6 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"

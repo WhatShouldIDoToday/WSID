@@ -80,33 +80,71 @@ describe("filedrop hit-testing and event routing", () => {
     expect(hitTestPhysicalPoint({ x: 300, y: 500 }, rect, 1)).toBe(false);
   });
 
-  test("does not re-scale macOS logical points on a Retina display", () => {
-    // wry/WKWebView already reports logical points; halving them broke every drop.
-    const logical = toCssPoint({ x: 250, y: 350 }, 2, { macLike: true });
-    expect(logical).toEqual({ x: 250, y: 350 });
-    expect(
-      isPointInElement({ x: 250, y: 350 }, fakeElement(rect), 2, {
-        macLike: true,
-      }),
-    ).toBe(true);
-    expect(
-      isPointInElement({ x: 50, y: 50 }, fakeElement(rect), 2, {
-        macLike: true,
-      }),
-    ).toBe(false);
+  test("does not re-scale logical points on macOS or Linux", () => {
+    // wry reports logical points on macOS (WKWebView) and Linux (GTK3), so
+    // halving them broke every drop.
+    for (const dpr of [1.25, 2]) {
+      const logical = toCssPoint({ x: 250, y: 350 }, dpr, {
+        reportsLogicalPoints: true,
+      });
+      expect(logical).toEqual({ x: 250, y: 350 });
+      expect(
+        isPointInElement({ x: 250, y: 350 }, fakeElement(rect), dpr, {
+          reportsLogicalPoints: true,
+        }),
+      ).toBe(true);
+      expect(
+        isPointInElement({ x: 50, y: 50 }, fakeElement(rect), dpr, {
+          reportsLogicalPoints: true,
+        }),
+      ).toBe(false);
+    }
+  });
 
-    // A macOS point outside the viewport can only be physical, so it is scaled.
+  test("scales logical-point platforms only when outside the viewport", () => {
     const scaled = toCssPoint({ x: 3000, y: 5000 }, 2, {
-      macLike: true,
+      reportsLogicalPoints: true,
       viewport: { width: 1440, height: 900 },
     });
     expect(scaled).toEqual({ x: 1500, y: 2500 });
+  });
 
-    // Non-macOS platforms keep the physical -> CSS conversion.
-    expect(toCssPoint({ x: 300, y: 500 }, 2, { macLike: false })).toEqual({
-      x: 150,
-      y: 250,
-    });
+  test("keeps the physical -> CSS conversion on Windows", () => {
+    expect(
+      toCssPoint({ x: 300, y: 500 }, 2, { reportsLogicalPoints: false }),
+    ).toEqual({ x: 150, y: 250 });
+    expect(
+      toCssPoint({ x: 375, y: 625 }, 1.25, { reportsLogicalPoints: false }),
+    ).toEqual({ x: 300, y: 500 });
+  });
+
+  test("sniffs the platform from the user agent by default", () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    const withUa = (ua: string) =>
+      Object.defineProperty(globalThis, "navigator", {
+        value: { userAgent: ua },
+        configurable: true,
+      });
+    const viewport = { width: 2000, height: 2000 };
+    try {
+      withUa("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15");
+      expect(toCssPoint({ x: 250, y: 350 }, 1.25, { viewport })).toEqual({
+        x: 250,
+        y: 350,
+      });
+      withUa("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
+      expect(toCssPoint({ x: 250, y: 350 }, 2, { viewport })).toEqual({
+        x: 250,
+        y: 350,
+      });
+      withUa("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/120.0");
+      expect(toCssPoint({ x: 250, y: 350 }, 2, { viewport })).toEqual({
+        x: 125,
+        y: 175,
+      });
+    } finally {
+      if (original) Object.defineProperty(globalThis, "navigator", original);
+    }
   });
 
   test("routes over, leave, and drop events to dropzone callbacks", () => {
