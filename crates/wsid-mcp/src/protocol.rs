@@ -4,11 +4,55 @@ use serde_json::{Value, json};
 pub const JSONRPC_VERSION: &str = "2.0";
 pub const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// Initialize-handshake revisions this server speaks, newest first. It only serves tools, so the
+/// differences between them do not affect it.
+pub const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Modern (per-request `_meta`, no handshake) revisions this server speaks, newest first.
+pub const MODERN_MCP_PROTOCOL_VERSIONS: &[&str] = &["2026-07-28"];
+
+/// `_meta` key carrying the protocol version on every modern request.
+pub const META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+/// `_meta` key carrying the client capabilities on every modern request (required).
+pub const META_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+/// `_meta` key carrying the server name and version in modern results.
+pub const META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
+
+/// Every version this server accepts, modern first. Reported by `server/discover` and by
+/// `UnsupportedProtocolVersionError`.
+pub fn all_supported_versions() -> Vec<&'static str> {
+    MODERN_MCP_PROTOCOL_VERSIONS
+        .iter()
+        .chain(SUPPORTED_MCP_PROTOCOL_VERSIONS.iter())
+        .copied()
+        .collect()
+}
+
+/// Returns the protocol version a request declares in `params._meta`, if it is a modern request.
+pub fn modern_request_version(params: Option<&Value>) -> Option<&str> {
+    params?.get("_meta")?.get(META_PROTOCOL_VERSION)?.as_str()
+}
+
+/// Echo the requested version when supported. Otherwise answer with the newest supported one,
+/// and let the client decide whether it can use it, as the lifecycle spec describes.
+pub fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
+    match requested {
+        None => DEFAULT_MCP_PROTOCOL_VERSION,
+        Some(version) => SUPPORTED_MCP_PROTOCOL_VERSIONS
+            .iter()
+            .copied()
+            .find(|v| *v == version)
+            .unwrap_or(SUPPORTED_MCP_PROTOCOL_VERSIONS[0]),
+    }
+}
+
 pub const PARSE_ERROR_CODE: i64 = -32700;
 pub const INVALID_REQUEST_CODE: i64 = -32600;
 pub const METHOD_NOT_FOUND_CODE: i64 = -32601;
 pub const INVALID_PARAMS_CODE: i64 = -32602;
 pub const INTERNAL_ERROR_CODE: i64 = -32603;
+/// `UnsupportedProtocolVersionError` (2026-07-28).
+pub const UNSUPPORTED_PROTOCOL_VERSION_CODE: i64 = -32022;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -107,20 +151,40 @@ impl CallToolResult {
     }
 }
 
+/// Capabilities, `serverInfo` and instructions shared by `initialize` and `server/discover`.
+fn server_identity() -> (Value, Value, &'static str) {
+    (
+        json!({ "tools": { "listChanged": false } }),
+        json!({ "name": "wsid-mcp", "version": env!("CARGO_PKG_VERSION") }),
+        "WSID ('What Should I Do?') MCP server. Use `get_focus_queue` to see top prioritized actionable tasks and a summary of blocked tasks for a user; use `get_blocked_tasks` to inspect blockers in detail; use `add_task_note` with `@user`, `@takenote:<user>`, or `#AB1234` to collaborate across human and AI users.",
+    )
+}
+
+/// `serverInfo` as reported in `initialize` and in modern results' `_meta`.
+pub fn server_info() -> Value {
+    server_identity().1
+}
+
+/// Result of `server/discover` (2026-07-28).
+pub fn build_discover_result() -> Value {
+    let (capabilities, server_info, instructions) = server_identity();
+    json!({
+        "resultType": "complete",
+        "supportedVersions": all_supported_versions(),
+        "capabilities": capabilities,
+        "_meta": { META_SERVER_INFO: server_info },
+        "instructions": instructions
+    })
+}
+
 pub fn build_initialize_result(requested_protocol_version: Option<&str>) -> Value {
-    let protocol_version = requested_protocol_version.unwrap_or(DEFAULT_MCP_PROTOCOL_VERSION);
+    let protocol_version = negotiate_protocol_version(requested_protocol_version);
+    let (capabilities, server_info, instructions) = server_identity();
     json!({
         "protocolVersion": protocol_version,
-        "capabilities": {
-            "tools": {
-                "listChanged": false
-            }
-        },
-        "serverInfo": {
-            "name": "wsid-mcp",
-            "version": env!("CARGO_PKG_VERSION")
-        },
-        "instructions": "WSID ('What Should I Do?') MCP server. Use `get_focus_queue` to see top prioritized actionable tasks and a summary of blocked tasks for a user; use `get_blocked_tasks` to inspect blockers in detail; use `add_task_note` with `@user`, `@takenote:<user>`, or `#AB1234` to collaborate across human and AI users."
+        "capabilities": capabilities,
+        "serverInfo": server_info,
+        "instructions": instructions
     })
 }
 
@@ -310,6 +374,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                         "items": { "type": "string" }
                     },
                     "project": { "type": "string", "description": "Project name (letters, digits, '_' or '-'). Defaults to 'default'." },
+                    "based_on": { "type": "string", "description": "Optional http(s) URL of the external item (e.g. a GitHub issue) this task is based on." },
                     "reporter": { "type": "string" },
                     "assignee": { "type": "string" },
                     "evaluator": { "type": "string" },
@@ -364,6 +429,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                         "items": { "type": "string" }
                     },
                     "project": { "type": "string", "description": "Move the task into this project." },
+                    "based_on": { "type": ["string", "null"], "description": "Set the http(s) URL this task is based on; null or an empty string clears it." },
                     "reporter": { "type": "string" },
                     "assignee": { "type": "string" },
                     "evaluator": { "type": "string" }

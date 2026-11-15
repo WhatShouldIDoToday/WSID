@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+publish.workspace = true
+description = "WSID desktop application built with Tauri"
 build = "build.rs"
 
 [[bin]]
@@ -13,9 +15,11 @@ path = "src/main.rs"
 
 [dependencies]
 chrono.workspace = true
+log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
+tauri-plugin-dialog.workspace = true
 thiserror.workspace = true
 wsid-core.workspace = true
 
@@ -27,3 +31,6 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"

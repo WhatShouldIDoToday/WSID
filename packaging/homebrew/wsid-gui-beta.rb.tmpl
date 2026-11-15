@@ -1,0 +1,22 @@
+cask "wsid-gui@beta" do
+  version "@@VERSION@@"
+  sha256 "@@SHA_DMG@@"
+
+  url "https://github.com/WhatShouldIDoToday/WSID/releases/download/@@TAG@@/@@DMG@@"
+  name "WSID Beta"
+  desc "Beta channel of the WSID task manager (separate data)"
+  homepage "https://github.com/WhatShouldIDoToday/WSID"
+
+  depends_on macos: ">= :high_sierra"
+
+  app "WSID Beta.app"
+
+  # User data stays unless the user runs `brew uninstall --zap`.
+  zap trash: [
+    "~/Library/Application Support/io.github.whatshouldidotoday.wsid.beta",
+    "~/Library/Application Support/wsid-beta",
+    "~/Library/Caches/io.github.whatshouldidotoday.wsid.beta",
+    "~/Library/Saved Application State/io.github.whatshouldidotoday.wsid.beta.savedState",
+    "~/Library/WebKit/io.github.whatshouldidotoday.wsid.beta",
+  ]
+end

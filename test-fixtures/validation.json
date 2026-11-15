@@ -24,6 +24,20 @@
     { "input": "café", "normalized": null },
     { "input": "no!", "normalized": null }
   ],
+  "based_on": [
+    { "input": "https://github.com/dmbeta/WSID/issues/15", "valid": true, "normalized": "https://github.com/dmbeta/WSID/issues/15" },
+    { "input": "  http://example.com  ", "valid": true, "normalized": "http://example.com" },
+    { "input": "HTTPS://Example.com/a?b=1#c", "valid": true, "normalized": "HTTPS://Example.com/a?b=1#c" },
+    { "input": "", "valid": true, "normalized": null },
+    { "input": "   ", "valid": true, "normalized": null },
+    { "input": "example.com", "valid": false },
+    { "input": "not a url", "valid": false },
+    { "input": "ftp://example.com/file", "valid": false },
+    { "input": "javascript:alert(1)", "valid": false },
+    { "input": "file:///etc/passwd", "valid": false },
+    { "input": "mailto:a@b.com", "valid": false },
+    { "input": "https://", "valid": false }
+  ],
   "durations": [
     { "input": "45", "minutes": 45 },
     { "input": "15m", "minutes": 15 },

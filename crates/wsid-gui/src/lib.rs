@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,6 +9,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tauri::menu::{HELP_SUBMENU_ID, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_dialog::DialogExt;
 use wsid_core::{
     AboutMetadata, AddTaskNoteOutcome, AppConfig, AttachmentInput, BlockedTaskEntry, BulkEditOutcome, BulkTaskPatch, Database,
     DbChangeDetector, EisenhowerClassification, FieldIssue, FocusPreset, FocusQueueResponse, RelationDraft, RelationInputKind, Scalar,
@@ -17,7 +19,7 @@ use wsid_core::{
     delete_task_note, delete_user_from_db, get_about_metadata, get_attachment, get_blocked_tasks, get_direct_blocked_tasks,
     get_direct_blockers, get_direct_parents, get_direct_subtasks, get_parallel_peers, get_related_tasks, get_task, link_tasks,
     list_eisenhower_matrix, list_known_projects, list_known_users, list_task_notes, list_tasks, list_user_kinds, normalize_project,
-    normalize_user, open_file_in_os, parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment,
+    normalize_user, open_file_in_os, open_url_in_os, parse_deadline_datetime, preview_user_deletion, register_user, remove_attachment,
     resolve_active_db_path, save_clipboard_attachment, search_tasks, transition_task_status, unblock_or_dismiss_subtask, unlink_tasks,
     update_attachment_description, update_task_relation, update_task_with_notices, validate_focus_limit, validate_task_draft,
 };
@@ -98,6 +100,7 @@ pub struct GuiCreateTaskPayload {
     pub manual_priority: Option<i8>,
     pub tags: Vec<String>,
     pub project: Option<String>,
+    pub based_on: Option<String>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
@@ -126,9 +129,20 @@ pub struct GuiUpdateTaskPayload {
     pub manual_priority: Option<i8>,
     pub tags: Option<Vec<String>>,
     pub project: Option<String>,
+    /// A string sets the URL; `""` or `null` clears it; absent leaves it unchanged.
+    #[serde(default, deserialize_with = "double_option")]
+    pub based_on: Option<Option<String>>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
+}
+
+/// Deserializes a present-but-null field as `Some(None)` so callers can clear a value.
+fn double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 fn build_session_snapshot(state: &GuiAppState) -> Result<AppSessionSnapshot, String> {
@@ -202,6 +216,7 @@ pub fn payload_to_draft(payload: GuiCreateTaskPayload) -> Result<TaskDraft, Stri
         urgent_override: payload.urgent_override.map(Scalar::Bool),
         tags: payload.tags,
         project: payload.project,
+        based_on: payload.based_on,
         relations: payload
             .initial_relations
             .into_iter()
@@ -451,50 +466,85 @@ fn switch_database(
     Ok(snapshot)
 }
 
-#[tauri::command]
-fn pick_workspace_database_dialog() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let script = r#"POSIX path of (choose file name with prompt "Select or create a WSID workspace database (.wsid.db)" default name ".wsid.db")"#;
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()
-            .map_err(|e| e.to_string())?;
-        if output.status.success() {
-            let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !chosen.is_empty() {
-                return Ok(Some(chosen));
-            }
-        }
-        Ok(None)
+/// Counts error records emitted by the native dialog backend (`rfd`).
+///
+/// The dialog plugin returns `None` both when the user cancels and when no
+/// picker could be shown (for example no XDG desktop portal on Linux); the
+/// backend only reports the latter through `log::error!`. Counting those
+/// records lets the commands tell the two cases apart.
+struct DialogErrorCounter;
+
+static DIALOG_BACKEND_ERRORS: AtomicUsize = AtomicUsize::new(0);
+static DIALOG_PICK_LOCK: Mutex<()> = Mutex::new(());
+static DIALOG_ERROR_COUNTER: DialogErrorCounter = DialogErrorCounter;
+
+impl log::Log for DialogErrorCounter {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() == log::Level::Error && metadata.target().starts_with("rfd")
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(None)
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            DIALOG_BACKEND_ERRORS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn install_dialog_error_counter() {
+    // If another logger is already installed, backend failure detection
+    // degrades to treating `None` as a cancel.
+    if log::set_logger(&DIALOG_ERROR_COUNTER).is_ok() {
+        log::set_max_level(log::LevelFilter::Error);
     }
 }
 
-#[tauri::command]
-fn pick_attachment_file_dialog() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let script = r#"POSIX path of (choose file with prompt "Select a file or image to attach")"#;
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()
-            .map_err(|e| e.to_string())?;
-        if output.status.success() {
-            let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !chosen.is_empty() {
-                return Ok(Some(chosen));
+const DIALOG_UNAVAILABLE_MESSAGE: &str = "No file picker could be opened. On Linux this usually means no XDG desktop portal is running (install xdg-desktop-portal with the GTK, GNOME, or KDE backend).";
+
+/// Runs `show` on a blocking thread: a path is `Ok(Some)`, a cancel is
+/// `Ok(None)`, and a backend failure is `Err`.
+async fn run_file_dialog<F>(show: F) -> Result<Option<String>, String>
+where
+    F: FnOnce() -> Option<tauri_plugin_dialog::FilePath> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
+        let _serial = DIALOG_PICK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = DIALOG_BACKEND_ERRORS.load(Ordering::SeqCst);
+        match show() {
+            Some(picked) => {
+                let path = picked.into_path().map_err(|e| e.to_string())?;
+                Ok(Some(path.to_string_lossy().into_owned()))
             }
+            None if DIALOG_BACKEND_ERRORS.load(Ordering::SeqCst) != before => Err(DIALOG_UNAVAILABLE_MESSAGE.to_string()),
+            None => Ok(None),
         }
-        Ok(None)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(None)
-    }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn pick_workspace_database_dialog(app: AppHandle) -> Result<Option<String>, String> {
+    run_file_dialog(move || {
+        app.dialog()
+            .file()
+            .set_title("Select or create a WSID workspace database (.wsid.db)")
+            .set_file_name(".wsid.db")
+            .blocking_save_file()
+    })
+    .await
+}
+
+#[tauri::command]
+async fn pick_attachment_file_dialog(app: AppHandle) -> Result<Option<String>, String> {
+    run_file_dialog(move || {
+        app.dialog()
+            .file()
+            .set_title("Select a file or image to attach")
+            .blocking_pick_file()
+    })
+    .await
 }
 
 #[tauri::command]
@@ -661,6 +711,7 @@ fn update_existing_task(state: State<'_, SharedGuiState>, payload: GuiUpdateTask
             manual_priority: payload.manual_priority,
             tags: payload.tags,
             project: payload.project,
+            based_on: payload.based_on,
             reporter: payload.reporter,
             assignee: payload.assignee,
             evaluator: payload.evaluator,
@@ -874,6 +925,47 @@ fn save_clipboard_bytes_for_draft(base64_data: String, suggested_name: Option<St
     Ok(dest.to_string_lossy().to_string())
 }
 
+/// Reads an image from the system clipboard as a `data:image/png;base64,` URL.
+///
+/// WebKitGTK often exposes nothing through `ClipboardEvent` for screenshots, and
+/// GNOME Mutter lacks `wlr-data-control`, so generic clipboard crates cannot see
+/// the Wayland clipboard. GTK's own clipboard works for both X11 and Wayland, but
+/// must be touched from the main thread. Returns `None` when no image is present
+/// or on platforms without a native implementation.
+#[tauri::command]
+async fn read_clipboard_image_native(app: AppHandle) -> Result<Option<String>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(read_gtk_clipboard_png());
+        })
+        .map_err(|e| e.to_string())?;
+        let png = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(5)))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("clipboard read timed out: {e}"))??;
+        Ok(png.map(|bytes| format!("data:image/png;base64,{}", base64_encode(&bytes))))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_gtk_clipboard_png() -> Result<Option<Vec<u8>>, String> {
+    let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+    let Some(pixbuf) = clipboard.wait_for_image() else {
+        return Ok(None);
+    };
+    pixbuf
+        .save_to_bufferv("png", &[])
+        .map(Some)
+        .map_err(|e| format!("failed to encode clipboard image: {e}"))
+}
+
 #[tauri::command]
 fn edit_attachment_alt_description(
     state: State<'_, SharedGuiState>,
@@ -912,6 +1004,12 @@ fn open_attachment_native(state: State<'_, SharedGuiState>, attachment_id: Optio
     };
 
     open_file_in_os(&target_path).map_err(|e| e.to_string())
+}
+
+/// Opens a task's `based_on` link in the default browser. Only `http`/`https` URLs are accepted.
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    open_url_in_os(&url).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1110,7 +1208,10 @@ pub fn run() {
     let shared_state: SharedGuiState = Arc::new(Mutex::new(GuiAppState::initialize()));
     let menu_state = shared_state.clone();
 
+    install_dialog_error_counter();
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(shared_state.clone())
         .setup(move |app| {
             if let Ok(menu) = build_app_menu(app.handle(), &shared_state) {
@@ -1200,9 +1301,11 @@ pub fn run() {
             attach_file_from_disk,
             attach_clipboard_bytes,
             save_clipboard_bytes_for_draft,
+            read_clipboard_image_native,
             edit_attachment_alt_description,
             delete_attachment,
             open_attachment_native,
+            open_external_url,
             read_attachment_preview_data_url,
             get_about_info,
         ])
@@ -1283,11 +1386,12 @@ mod tests {
         // Verify About and third-party license metadata endpoint
         let about = get_about_info().unwrap();
         assert_eq!(about.license_spdx, "Apache-2.0");
-        assert_eq!(about.repository_url, "https://github.com/dmbeta/WSID");
+        assert_eq!(about.repository_url, "https://github.com/WhatShouldIDoToday/WSID");
         assert!(!about.rust_licenses.licenses.is_empty());
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "on Windows the window icon comes from the executable resource, which unit-test binaries do not embed")]
     fn tauri_context_embeds_valid_window_icon_and_frontend_assets() {
         let context = tauri_context();
 

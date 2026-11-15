@@ -12,7 +12,7 @@ use crate::error::{Result, WsidError};
 use crate::id::normalize_task_id;
 use crate::models::TaskAttachment;
 use crate::relations::ensure_task_exists;
-use crate::tasks::{format_utc, parse_utc};
+use crate::tasks::{format_utc, parse_utc, touch_task_updated_at};
 
 /// Infers a MIME media type from a file extension.
 pub fn infer_media_type(path: &Path) -> &'static str {
@@ -88,7 +88,7 @@ pub(crate) fn attach_existing_file_in_tx(
         return Err(WsidError::Validation("attachment file_path cannot be empty".to_string()));
     }
 
-    let resolved_path = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
+    let resolved_path = dunce::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
     let file_name = resolved_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -116,8 +116,10 @@ pub(crate) fn attach_existing_file_in_tx(
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![task_id, note_id, stored_path, file_name, media_type, effective_desc, i64::from(is_managed), now_str,],
     )?;
+    let id = conn.last_insert_rowid();
+    touch_task_updated_at(conn, &task_id)?;
 
-    Ok(conn.last_insert_rowid())
+    Ok(id)
 }
 
 /// Saves raw bytes (such as a pasted clipboard image) into the OS app-data attachments folder
@@ -169,7 +171,7 @@ pub fn save_clipboard_attachment_with_dir(
     let dest_path = managed_root.join(&file_name);
 
     fs::write(&dest_path, bytes)?;
-    let canonical_dest = fs::canonicalize(&dest_path).unwrap_or(dest_path);
+    let canonical_dest = dunce::canonicalize(&dest_path).unwrap_or(dest_path);
 
     let media_type = infer_media_type(&canonical_dest);
     let effective_desc = match description.map(str::trim) {
@@ -179,13 +181,16 @@ pub fn save_clipboard_attachment_with_dir(
     let now_str = format_utc(now);
     let stored_path = canonical_dest.to_string_lossy().to_string();
 
-    db.conn.execute(
+    let tx = db.conn.transaction()?;
+    tx.execute(
         "INSERT INTO task_attachments (
             task_id, note_id, file_path, file_name, media_type, description, is_managed, created_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7)",
         params![task_id, note_id, stored_path, file_name, media_type, effective_desc, now_str,],
     )?;
-    let id = db.conn.last_insert_rowid();
+    let id = tx.last_insert_rowid();
+    touch_task_updated_at(&tx, &task_id)?;
+    tx.commit()?;
     get_attachment(db, id)
 }
 
@@ -239,9 +244,12 @@ pub fn remove_attachment_with_dir(db: &mut Database, attachment_id: i64, managed
         Err(_) => return Ok(false),
     };
 
-    let affected = db
-        .conn
-        .execute("DELETE FROM task_attachments WHERE id = ?1", [attachment_id])?;
+    let tx = db.conn.transaction()?;
+    let affected = tx.execute("DELETE FROM task_attachments WHERE id = ?1", [attachment_id])?;
+    if affected > 0 {
+        touch_task_updated_at(&tx, &existing.task_id)?;
+    }
+    tx.commit()?;
     if affected > 0 {
         cleanup_managed_files_after_delete(&db.conn, &[existing], managed_dir_override);
         Ok(true)
@@ -277,6 +285,34 @@ pub fn open_file_in_os(path: impl AsRef<Path>) -> Result<()> {
         )));
     }
 
+    Ok(())
+}
+
+/// Opens an `http`/`https` URL in the operating system's default browser.
+///
+/// The URL is re-validated with [`crate::tasks::normalize_based_on`] so no other scheme (or local
+/// path) can be launched. Windows uses `rundll32` rather than `cmd /C start` so `&` and other shell
+/// metacharacters in the URL are never interpreted.
+pub fn open_url_in_os(url: &str) -> Result<()> {
+    let Some(url) = crate::tasks::normalize_based_on(url)? else {
+        return Err(WsidError::Validation("a URL is required".to_string()));
+    };
+
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg(&url).status()?;
+
+    #[cfg(target_os = "windows")]
+    let status = Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler"])
+        .arg(&url)
+        .status()?;
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let status = Command::new("xdg-open").arg(&url).status()?;
+
+    if !status.success() {
+        return Err(WsidError::Validation(format!("native OS URL opener exited with non-zero status ({status}) for '{url}'")));
+    }
     Ok(())
 }
 
@@ -358,8 +394,8 @@ pub(crate) fn cleanup_managed_files_after_delete(
 }
 
 fn is_path_inside_managed_dir(file_path: &Path, managed_root: &Path) -> bool {
-    let canon_root = fs::canonicalize(managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
-    let canon_file = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
+    let canon_root = dunce::canonicalize(managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
+    let canon_file = dunce::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
     canon_file.starts_with(&canon_root)
 }
 
@@ -507,5 +543,66 @@ mod tests {
         delete_task_with_attachments_dir(&mut db, &task.id, Some(app_attachments_dir.path())).unwrap();
         assert!(!task_clip_path.exists(), "managed clipboard file for deleted task should be removed from disk");
         assert!(external_img.exists(), "external file in user folder must never be deleted");
+    }
+
+    #[test]
+    fn migration_0006_strips_verbatim_prefix_from_legacy_rows() {
+        let mut db = open_in_memory_db().unwrap();
+        let task = create_task(&mut db, CreateTaskInput { title: "Legacy".to_string(), ..Default::default() }, "alice").unwrap();
+        let paths = [
+            (r"\\?\C:\Users\a\pic.png", r"C:\Users\a\pic.png"),
+            (r"\\?\UNC\srv\share\pic.png", r"\\srv\share\pic.png"),
+            (r"\\?\Volume{1234}\pic.png", r"\\?\Volume{1234}\pic.png"),
+            (r"C:\plain\pic.png", r"C:\plain\pic.png"),
+            ("/unix/pic.png", "/unix/pic.png"),
+        ];
+        for (old, _) in paths {
+            db.conn
+                .execute(
+                    "INSERT INTO task_attachments (task_id, file_path, file_name, media_type, description, is_managed, created_at)
+                     VALUES (?1, ?2, 'pic.png', 'image/png', 'pic', 0, '2026-01-01T00:00:00Z')",
+                    params![task.id, old],
+                )
+                .unwrap();
+        }
+        db.conn
+            .execute_batch(include_str!("migrations/0006_attachment_paths_strip_verbatim.sql"))
+            .unwrap();
+        for (old, expected) in paths {
+            let stored = db
+                .conn
+                .query_row("SELECT file_path FROM task_attachments WHERE file_path IN (?1, ?2)", params![old, expected], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap();
+            assert_eq!(stored, expected);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stored_paths_have_no_verbatim_prefix() {
+        let mut db = open_in_memory_db().unwrap();
+        let dir = tempdir().unwrap();
+        let attachments = tempdir().unwrap();
+        let file = dir.path().join("a.png");
+        fs::write(&file, b"x").unwrap();
+        let task = create_task(&mut db, CreateTaskInput { title: "Win".to_string(), ..Default::default() }, "alice").unwrap();
+        let ext = attach_existing_file_with_dir(&mut db, &task.id, None, &file, None, Some(attachments.path())).unwrap();
+        assert!(!ext.file_path.starts_with(r"\\?\"), "{}", ext.file_path);
+        let clip = save_clipboard_attachment_with_dir(&mut db, &task.id, None, b"x", Some("png"), None, Some(attachments.path())).unwrap();
+        assert!(!clip.file_path.starts_with(r"\\?\"), "{}", clip.file_path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_dir_check_handles_differently_spelled_paths() {
+        let root = tempdir().unwrap();
+        let file = root.path().join("m.png");
+        fs::write(&file, b"x").unwrap();
+        let verbatim_root = fs::canonicalize(root.path()).unwrap();
+        assert!(is_path_inside_managed_dir(&file, &verbatim_root));
+        let verbatim_file = fs::canonicalize(&file).unwrap();
+        assert!(is_path_inside_managed_dir(&verbatim_file, root.path()));
     }
 }

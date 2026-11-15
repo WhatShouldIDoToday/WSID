@@ -3,7 +3,9 @@
     tokenizeCommentBody,
     searchTasksData,
     USERNAME_REGEX,
+    readNativeClipboardImage,
   } from "../lib/ipc";
+  import { handleClipboardPaste } from "../lib/clipboard";
 
   interface Props {
     value?: string;
@@ -16,7 +18,9 @@
     rows?: number;
     placeholder?: string;
     describedBy?: string;
-    onPasteFiles?: (files: FileList) => void;
+    onPasteFiles?: (files: File[]) => void;
+    /** Called with local paths when copied files (not bytes) are pasted. */
+    onPastePaths?: (paths: string[]) => void;
   }
 
   let {
@@ -29,6 +33,7 @@
     placeholder = "",
     describedBy,
     onPasteFiles,
+    onPastePaths,
   }: Props = $props();
 
   type Trigger = "mention" | "takenote" | "task";
@@ -201,9 +206,12 @@
     onkeydown={handleKeydown}
     onblur={() => setTimeout(close, 120)}
     onpaste={(e) => {
-      if (e.clipboardData?.files?.length && onPasteFiles) {
-        onPasteFiles(e.clipboardData.files);
-      }
+      if (!onPasteFiles && !onPastePaths) return;
+      handleClipboardPaste(e, {
+        onFiles: (files) => onPasteFiles?.(files),
+        onPaths: (paths) => onPastePaths?.(paths),
+        readNativeImage: onPasteFiles ? readNativeClipboardImage : undefined,
+      });
     }}></textarea>
 
   {#if trigger && suggestions.length > 0}

@@ -181,12 +181,13 @@
               Repository:{" "}
               <a
                 href={aboutData?.repository_url ??
-                  "https://github.com/dmbeta/WSID"}
+                  "https://github.com/WhatShouldIDoToday/WSID"}
                 target="_blank"
                 rel="noopener noreferrer"
                 style="color: var(--accent); font-family: var(--font-mono);"
               >
-                {aboutData?.repository_url ?? "https://github.com/dmbeta/WSID"}
+                {aboutData?.repository_url ??
+                  "https://github.com/WhatShouldIDoToday/WSID"}
               </a>
             </p>
           </div>

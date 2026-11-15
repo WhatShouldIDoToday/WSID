@@ -11,27 +11,42 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/dmbeta/WSID"
-homepage = "https://github.com/dmbeta/WSID"
+repository = "https://github.com/WhatShouldIDoToday/WSID"
+homepage = "https://github.com/WhatShouldIDoToday/WSID"
+publish = false
 
 [workspace.dependencies]
 wsid-core = { path = "crates/wsid-core" }
 wsid-mcp = { path = "crates/wsid-mcp" }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
-crossterm = "0.28"
+crossterm = "0.29"
 dirs = "6.0"
+dunce = "1.0"
+jsonc-parser = { version = "0.34", features = ["cst", "serde_json"] }
 nucleo-matcher = "0.3"
 rand = "0.9"
-ratatui = "0.29"
-rusqlite = { version = "0.34", features = ["bundled", "chrono"] }
+ratatui = "0.30"
+rusqlite = { version = "0.42", features = ["bundled", "chrono"] }
+log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
+tauri-plugin-dialog = { version = "2", default-features = false, features = [
+  "xdg-portal",
+] }
 tempfile = "3.17"
 thiserror = "2.0"
 toml = "0.8"
+url = "2"
+toml_edit = "0.25"
+which = "8.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

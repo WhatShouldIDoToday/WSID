@@ -73,6 +73,21 @@ pub fn normalize_project(raw: &str) -> Result<String> {
     Ok(trimmed)
 }
 
+/// Validates an optional `based_on` link. Blank input means no value; otherwise the trimmed text must
+/// be an `http` or `https` URL with a host.
+pub fn normalize_based_on(raw: &str) -> Result<Option<String>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let invalid = || WsidError::Validation(format!("invalid based_on '{raw}': must be an http or https URL with a host"));
+    let parsed = url::Url::parse(trimmed).map_err(|_| invalid())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none_or(str::is_empty) {
+        return Err(invalid());
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
 /// Lists the projects that currently hold tasks, with [`DEFAULT_PROJECT`] always first.
 pub fn list_known_projects(db: &Database) -> Result<Vec<String>> {
     let mut projects = vec![DEFAULT_PROJECT.to_string()];
@@ -772,6 +787,7 @@ pub(crate) fn create_task_in_tx(
 
     let tags = normalize_tags(&input.tags)?;
     let project = normalize_project(input.project.as_deref().unwrap_or_default())?;
+    let based_on = normalize_based_on(input.based_on.as_deref().unwrap_or_default())?;
 
     let now_dt = Utc::now();
     let now_str = format_utc(now_dt);
@@ -784,12 +800,12 @@ pub(crate) fn create_task_in_tx(
             id, title, description, status, origin_kind, origin_note_id,
             due_date, sgdb_date, time_estimate_minutes, difficulty, importance,
             urgent_override, manual_priority, reporter, assignee, evaluator,
-            created_at, updated_at, completed_at, project
+            created_at, updated_at, completed_at, project, based_on
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6,
             ?7, ?8, ?9, ?10, ?11,
             ?12, ?13, ?14, ?15, ?16,
-            ?17, ?18, ?19, ?20
+            ?17, ?18, ?19, ?20, ?21
         )",
         params![
             id,
@@ -812,6 +828,7 @@ pub(crate) fn create_task_in_tx(
             now_str,
             completed_at_str,
             project,
+            based_on,
         ],
     )?;
 
@@ -833,7 +850,7 @@ pub(crate) fn get_task_conn(conn: &Connection, raw_id: &str) -> Result<Task> {
                 id, title, description, status, origin_kind, origin_note_id,
                 due_date, sgdb_date, time_estimate_minutes, difficulty, importance,
                 urgent_override, manual_priority, reporter, assignee, evaluator,
-                created_at, updated_at, completed_at, project
+                created_at, updated_at, completed_at, project, based_on
              FROM tasks
              WHERE id = ?1",
             [&id],
@@ -857,7 +874,7 @@ pub(crate) fn list_tasks_conn(conn: &Connection) -> Result<Vec<Task>> {
             id, title, description, status, origin_kind, origin_note_id,
             due_date, sgdb_date, time_estimate_minutes, difficulty, importance,
             urgent_override, manual_priority, reporter, assignee, evaluator,
-            created_at, updated_at, completed_at, project
+            created_at, updated_at, completed_at, project, based_on
          FROM tasks
          ORDER BY created_at ASC, rowid ASC",
     )?;
@@ -914,6 +931,11 @@ pub fn update_task_with_notices(db: &mut Database, raw_id: &str, input: UpdateTa
     let project = match input.project {
         Some(p) => normalize_project(&p)?,
         None => current.project.clone(),
+    };
+    let based_on = match input.based_on {
+        Some(Some(ref u)) => normalize_based_on(u)?,
+        Some(None) => None,
+        None => current.based_on.clone(),
     };
 
     validate_dates(sgdb_str.as_deref(), due_str.as_deref())?;
@@ -984,8 +1006,9 @@ pub fn update_task_with_notices(db: &mut Database, raw_id: &str, input: UpdateTa
             evaluator = ?13,
             updated_at = ?14,
             completed_at = ?15,
-            project = ?16
-         WHERE id = ?17",
+            project = ?16,
+            based_on = ?17
+         WHERE id = ?18",
         params![
             title,
             description,
@@ -1003,6 +1026,7 @@ pub fn update_task_with_notices(db: &mut Database, raw_id: &str, input: UpdateTa
             now_str,
             completed_at_str,
             project,
+            based_on,
             current.id,
         ],
     )?;
@@ -1105,11 +1129,19 @@ pub(crate) fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         created_at: parse_utc(&created_str),
         updated_at: parse_utc(&updated_str),
         completed_at: completed_str.as_deref().map(parse_utc),
+        based_on: row.get(20)?,
     })
 }
 
 pub(crate) fn format_utc(dt: DateTime<Utc>) -> String {
     dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// Bumps `tasks.updated_at` for a task whose notes, relations, or attachments changed.
+/// Call it inside the same transaction as the write so both commit or roll back together.
+pub(crate) fn touch_task_updated_at(conn: &Connection, task_id: &str) -> Result<()> {
+    conn.execute("UPDATE tasks SET updated_at = ?1 WHERE id = ?2", params![format_utc(Utc::now()), task_id])?;
+    Ok(())
 }
 
 pub(crate) fn parse_utc(raw: &str) -> DateTime<Utc> {
@@ -1138,6 +1170,66 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
         )
+    }
+
+    fn updated_at_of(db: &Database, task_id: &str) -> String {
+        db.conn
+            .query_row("SELECT updated_at FROM tasks WHERE id = ?1", [task_id], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Rewinds `updated_at` so a later bump is observable at second precision.
+    fn backdate_updated_at(db: &Database, task_ids: &[&str]) {
+        for id in task_ids {
+            db.conn
+                .execute("UPDATE tasks SET updated_at = '2000-01-01T00:00:00Z' WHERE id = ?1", [id])
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn note_relation_and_attachment_activity_bumps_updated_at() {
+        use crate::attachments::{attach_existing_file_with_dir, remove_attachment_with_dir, save_clipboard_attachment_with_dir};
+        use crate::models::RelationInputKind;
+        use crate::notes::add_task_note;
+        use crate::relations::{link_tasks, unlink_tasks};
+        use std::fs;
+        use tempfile::tempdir;
+
+        let attachments_dir = tempdir().unwrap();
+        let mut db = open_in_memory_db().unwrap();
+        let task = create_task(&mut db, CreateTaskInput { title: "Main".to_string(), ..Default::default() }, "alice").unwrap();
+        let other = create_task(&mut db, CreateTaskInput { title: "Other".to_string(), ..Default::default() }, "alice").unwrap();
+        let (a, b) = (task.id.as_str(), other.id.as_str());
+
+        backdate_updated_at(&db, &[a, b]);
+        add_task_note(&mut db, a, "alice", "A progress note", false).unwrap();
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "adding a note should bump updated_at");
+        assert_eq!(updated_at_of(&db, b), "2000-01-01T00:00:00Z", "a note on one task must not touch another");
+
+        backdate_updated_at(&db, &[a, b]);
+        link_tasks(&mut db, a, RelationInputKind::Related, b).unwrap();
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "adding a relation should bump the source");
+        assert_ne!(updated_at_of(&db, b), "2000-01-01T00:00:00Z", "adding a relation should bump the target");
+
+        backdate_updated_at(&db, &[a, b]);
+        assert!(unlink_tasks(&mut db, a, RelationInputKind::Related, b).unwrap());
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "removing a relation should bump the source");
+        assert_ne!(updated_at_of(&db, b), "2000-01-01T00:00:00Z", "removing a relation should bump the target");
+
+        let file = attachments_dir.path().join("notes.txt");
+        fs::write(&file, b"hello").unwrap();
+        backdate_updated_at(&db, &[a]);
+        let att = attach_existing_file_with_dir(&mut db, a, None, &file, None, Some(attachments_dir.path())).unwrap();
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "attaching a file should bump updated_at");
+
+        backdate_updated_at(&db, &[a]);
+        save_clipboard_attachment_with_dir(&mut db, a, None, b"\x89PNG", Some("png"), None, Some(attachments_dir.path())).unwrap();
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "saving a clipboard attachment should bump updated_at");
+
+        backdate_updated_at(&db, &[a]);
+        assert!(remove_attachment_with_dir(&mut db, att.id, Some(attachments_dir.path())).unwrap());
+        assert_ne!(updated_at_of(&db, a), "2000-01-01T00:00:00Z", "removing an attachment should bump updated_at");
     }
 
     #[test]
@@ -1585,6 +1677,15 @@ mod tests {
             let input = c["input"].as_str().unwrap();
             assert_eq!(normalize_tag(input).ok().as_deref(), c["normalized"].as_str(), "tag {input:?}");
         }
+        for c in v["based_on"].as_array().unwrap() {
+            let input = c["input"].as_str().unwrap();
+            let expected = c["normalized"].as_str();
+            let got = normalize_based_on(input);
+            assert_eq!(got.is_ok(), c["valid"].as_bool().unwrap(), "based_on {input:?}");
+            if let Ok(value) = got {
+                assert_eq!(value.as_deref(), expected, "based_on {input:?}");
+            }
+        }
         for c in v["durations"].as_array().unwrap() {
             let input = c["input"].as_str().unwrap();
             let expected = c["minutes"].as_u64().map(|m| m as u32);
@@ -1615,6 +1716,64 @@ mod project_tests {
         assert!(normalize_project("two words").is_err());
         assert!(normalize_project("all").is_err(), "'all' is the filter sentinel");
         assert!(normalize_project("ALL").is_err());
+    }
+
+    #[test]
+    fn based_on_validates_creates_updates_and_clears() {
+        assert_eq!(normalize_based_on("").unwrap(), None);
+        assert_eq!(normalize_based_on("  ").unwrap(), None);
+        assert_eq!(
+            normalize_based_on(" https://github.com/o/r/issues/1 ")
+                .unwrap()
+                .as_deref(),
+            Some("https://github.com/o/r/issues/1")
+        );
+        for bad in ["not a url", "ftp://example.com/x", "javascript:alert(1)", "file:///etc/passwd", "https://", "example.com"] {
+            assert!(normalize_based_on(bad).is_err(), "{bad:?} should be rejected");
+        }
+
+        let mut db = open_in_memory_db().unwrap();
+        let none = create_task(&mut db, CreateTaskInput { title: "A".to_string(), ..Default::default() }, "alice").unwrap();
+        assert_eq!(none.based_on, None);
+        assert!(
+            create_task(
+                &mut db,
+                CreateTaskInput { title: "Bad".to_string(), based_on: Some("nope".to_string()), ..Default::default() },
+                "alice"
+            )
+            .is_err()
+        );
+
+        let url = "https://github.com/dmbeta/WSID/issues/15";
+        let task = create_task(
+            &mut db,
+            CreateTaskInput { title: "B".to_string(), based_on: Some(url.to_string()), ..Default::default() },
+            "alice",
+        )
+        .unwrap();
+        assert_eq!(task.based_on.as_deref(), Some(url));
+        assert_eq!(get_task(&db, &task.id).unwrap().based_on.as_deref(), Some(url));
+        assert_eq!(
+            list_tasks(&db)
+                .unwrap()
+                .iter()
+                .filter(|t| t.based_on.is_some())
+                .count(),
+            1
+        );
+
+        let kept = update_task(&mut db, &task.id, UpdateTaskInput { title: Some("B2".to_string()), ..Default::default() }).unwrap();
+        assert_eq!(kept.based_on.as_deref(), Some(url));
+        assert!(update_task(&mut db, &task.id, UpdateTaskInput { based_on: Some(Some("bad".to_string())), ..Default::default() }).is_err());
+        let changed = update_task(
+            &mut db,
+            &task.id,
+            UpdateTaskInput { based_on: Some(Some("http://example.com/x".to_string())), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(changed.based_on.as_deref(), Some("http://example.com/x"));
+        let cleared = update_task(&mut db, &task.id, UpdateTaskInput { based_on: Some(None), ..Default::default() }).unwrap();
+        assert_eq!(cleared.based_on, None);
     }
 
     #[test]

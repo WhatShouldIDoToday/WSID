@@ -398,6 +398,9 @@ pub struct Task {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+    /// Optional http(s) URL of the external item this task is based on.
+    #[serde(default)]
+    pub based_on: Option<String>,
 }
 
 impl Task {
@@ -430,6 +433,7 @@ pub struct CreateTaskInput {
     pub manual_priority: Option<i8>,
     pub tags: Vec<String>,
     pub project: Option<String>,
+    pub based_on: Option<String>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
@@ -452,6 +456,8 @@ pub struct UpdateTaskInput {
     pub manual_priority: Option<i8>,
     pub tags: Option<Vec<String>>,
     pub project: Option<String>,
+    /// `Some(Some(u))` sets the URL, `Some(None)` clears it, `None` leaves unchanged.
+    pub based_on: Option<Option<String>>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,

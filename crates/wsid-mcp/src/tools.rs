@@ -131,6 +131,7 @@ struct CreateTaskArgs {
     #[serde(default)]
     pub tags: Vec<String>,
     pub project: Option<String>,
+    pub based_on: Option<String>,
     pub reporter: Option<String>,
     pub assignee: Option<String>,
     pub evaluator: Option<String>,
@@ -402,6 +403,7 @@ fn handle_create_task(db: &mut Database, config: &AppConfig, args: CreateTaskArg
         urgent_override: args.urgent_override.map(Scalar::Bool),
         tags: args.tags,
         project: args.project,
+        based_on: args.based_on,
         relations: args
             .relations
             .iter()
@@ -451,6 +453,7 @@ fn handle_update_task(db: &mut Database, args_val: Value) -> Result<CallToolResu
     let manual_priority = parse_optional_i8(obj, "manual_priority")?;
     let tags = parse_optional_string_vec(obj, "tags")?;
     let project = parse_optional_string(obj, "project")?;
+    let based_on = parse_nullable_string(obj, "based_on")?;
     let reporter = parse_optional_string(obj, "reporter")?;
     let assignee = parse_optional_string(obj, "assignee")?;
     let evaluator = parse_optional_string(obj, "evaluator")?;
@@ -471,6 +474,7 @@ fn handle_update_task(db: &mut Database, args_val: Value) -> Result<CallToolResu
             manual_priority,
             tags,
             project,
+            based_on,
             reporter,
             assignee,
             evaluator,
@@ -488,6 +492,17 @@ fn parse_optional_string(obj: &Map<String, Value>, key: &str) -> Result<Option<S
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(_) => Err(WsidError::Validation(format!("field '{key}' must be a string"))),
+    }
+}
+
+/// `None` leaves the field unchanged; `null` or a blank string clears it.
+fn parse_nullable_string(obj: &Map<String, Value>, key: &str) -> Result<Option<Option<String>>, WsidError> {
+    match obj.get(key) {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(Some(None)),
+        Some(Value::String(s)) => Ok(Some(Some(s.clone()))),
+        Some(_) => Err(WsidError::Validation(format!("field '{key}' must be a string or null"))),
     }
 }
 

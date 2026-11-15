@@ -4,7 +4,7 @@ pub const APP_NAME: &str = "WSID";
 pub const APP_FULL_NAME: &str = "What Should I Do? (WSID)";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_LICENSE_SPDX: &str = "Apache-2.0";
-pub const APP_REPOSITORY_URL: &str = "https://github.com/dmbeta/WSID";
+pub const APP_REPOSITORY_URL: &str = "https://github.com/WhatShouldIDoToday/WSID";
 pub const APP_LICENSE_TEXT: &str = include_str!("../../../LICENSE");
 pub const THIRD_PARTY_NOTICES_TEXT: &str = include_str!("licenses/THIRD_PARTY_NOTICES.txt");
 pub const RUST_LICENSES_JSON: &str = include_str!("licenses/rust_licenses.json");
@@ -126,7 +126,7 @@ mod tests {
         let meta = get_about_metadata();
         assert_eq!(meta.app_name, "WSID");
         assert_eq!(meta.license_spdx, "Apache-2.0");
-        assert_eq!(meta.repository_url, "https://github.com/dmbeta/WSID");
+        assert_eq!(meta.repository_url, "https://github.com/WhatShouldIDoToday/WSID");
         assert!(meta.license_text.contains("Apache License"));
         assert!(!meta.rust_licenses.overview.is_empty());
         assert!(!meta.rust_licenses.licenses.is_empty());

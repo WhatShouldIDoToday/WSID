@@ -14,7 +14,7 @@ use crate::models::{
 use crate::relations::{ensure_task_exists, link_tasks_in_tx};
 use crate::tasks::{
     create_task_in_tx, format_utc, get_task, get_task_conn, normalize_user, parse_user_ref, parse_utc, register_user_conn,
-    resolve_persona_conn, resolve_user_ref_conn,
+    resolve_persona_conn, resolve_user_ref_conn, touch_task_updated_at,
 };
 
 /// Parsed tokens extracted from a task note body.
@@ -232,6 +232,7 @@ pub fn add_task_note(
     )?;
     let _ = register_user_conn(&tx, &author);
     let note_id = tx.last_insert_rowid();
+    touch_task_updated_at(&tx, &commented_task.id)?;
 
     let note = TaskNote {
         id: note_id,

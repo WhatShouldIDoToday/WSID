@@ -8,7 +8,7 @@ use crate::db::Database;
 use crate::error::{Result, WsidError};
 use crate::id::normalize_task_id;
 use crate::models::{RelationInputKind, RelationType, Task, TaskRelation};
-use crate::tasks::{format_utc, get_task_conn, parse_utc};
+use crate::tasks::{format_utc, get_task_conn, parse_utc, touch_task_updated_at};
 
 /// Links `source_id` and `target_id` using any [`RelationInputKind`], normalizing
 /// inverse/symmetric relations and enforcing DAG cycle prevention for `blocks` and `parent_of`.
@@ -54,6 +54,10 @@ pub(crate) fn link_tasks_in_tx(
          VALUES (?1, ?2, ?3, ?4)",
         params![canon_src, canon_dst, rel_type.as_str(), now_str],
     )?;
+    if conn.changes() > 0 {
+        touch_task_updated_at(conn, canon_src)?;
+        touch_task_updated_at(conn, canon_dst)?;
+    }
 
     let created_str: String = conn.query_row(
         "SELECT created_at FROM task_relations WHERE source_id = ?1 AND target_id = ?2 AND relation_type = ?3",
@@ -94,6 +98,10 @@ fn unlink_tasks_conn(conn: &Connection, raw_source_id: &str, input_kind: Relatio
         )?
     };
 
+    if affected > 0 {
+        touch_task_updated_at(conn, canon_src)?;
+        touch_task_updated_at(conn, canon_dst)?;
+    }
     Ok(affected > 0)
 }
 

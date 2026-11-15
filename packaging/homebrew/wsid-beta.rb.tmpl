@@ -1,0 +1,36 @@
+class WsidBeta < Formula
+  desc "Offline task manager that ranks what to do next (beta channel, separate data)"
+  homepage "https://github.com/WhatShouldIDoToday/WSID"
+  version "@@VERSION@@"
+  license "Apache-2.0"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/WhatShouldIDoToday/WSID/releases/download/@@TAG@@/wsid-aarch64-apple-darwin-v@@VERSION@@.tar.gz"
+      sha256 "@@SHA_AARCH64_APPLE_DARWIN@@"
+    end
+    on_intel do
+      url "https://github.com/WhatShouldIDoToday/WSID/releases/download/@@TAG@@/wsid-x86_64-apple-darwin-v@@VERSION@@.tar.gz"
+      sha256 "@@SHA_X86_64_APPLE_DARWIN@@"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/WhatShouldIDoToday/WSID/releases/download/@@TAG@@/wsid-aarch64-unknown-linux-musl-v@@VERSION@@.tar.gz"
+      sha256 "@@SHA_AARCH64_UNKNOWN_LINUX_MUSL@@"
+    end
+    on_intel do
+      url "https://github.com/WhatShouldIDoToday/WSID/releases/download/@@TAG@@/wsid-x86_64-unknown-linux-musl-v@@VERSION@@.tar.gz"
+      sha256 "@@SHA_X86_64_UNKNOWN_LINUX_MUSL@@"
+    end
+  end
+
+  def install
+    bin.install "wsid" => "wsid-beta"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/wsid-beta --version")
+  end
+end

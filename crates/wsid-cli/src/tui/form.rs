@@ -228,9 +228,10 @@ pub struct FieldSpec {
     pub field: TaskField,
 }
 
-pub const FIELD_COUNT: usize = 16;
+pub const FIELD_COUNT: usize = 17;
 
 const PROJECT: usize = 15;
+const BASED_ON: usize = 16;
 
 pub static FIELDS: [FieldSpec; FIELD_COUNT] = [
     FieldSpec { label: "1. Title *", mask: Mask::None, field: TaskField::Title },
@@ -249,6 +250,7 @@ pub static FIELDS: [FieldSpec; FIELD_COUNT] = [
     FieldSpec { label: "14. Assignee", mask: Mask::None, field: TaskField::Assignee },
     FieldSpec { label: "15. Evaluator", mask: Mask::None, field: TaskField::Evaluator },
     FieldSpec { label: "16. Project (default)", mask: Mask::None, field: TaskField::Project },
+    FieldSpec { label: "17. Based On (http/https URL)", mask: Mask::None, field: TaskField::BasedOn },
 ];
 
 /// Row of the form that displays issues for `field`.
@@ -317,7 +319,14 @@ pub fn parse_pasted_paths(raw: &str) -> Vec<String> {
     }
     out.into_iter()
         .map(|p| match p.strip_prefix("file://") {
-            Some(rest) => rest.replace("%20", " "),
+            Some(rest) => {
+                let decoded = rest.replace("%20", " ");
+                // `file:///C:/Users/me/a.txt` carries a leading slash before the drive letter.
+                match decoded.as_bytes() {
+                    [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => decoded[1..].to_string(),
+                    _ => decoded,
+                }
+            }
             None => p,
         })
         .collect()
@@ -522,6 +531,7 @@ impl DataEntryForm {
         form.fields[13] = task.assignee.clone();
         form.fields[14] = task.evaluator.clone();
         form.fields[15] = task.project.clone();
+        form.fields[BASED_ON] = task.based_on.clone().unwrap_or_default();
         form
     }
 
@@ -546,6 +556,7 @@ impl DataEntryForm {
             assignee: opt(&f[13]),
             evaluator: opt(&f[14]),
             project: opt(&f[15]),
+            based_on: opt(&f[BASED_ON]),
             ..Default::default()
         }
     }
@@ -1325,6 +1336,7 @@ mod tests {
         assert_eq!(parse_pasted_paths("\"/tmp/x y.txt\"\n/tmp/z.txt"), ["/tmp/x y.txt", "/tmp/z.txt"]);
         assert_eq!(parse_pasted_paths("file:///tmp/a%20b.png"), ["/tmp/a b.png"]);
         assert_eq!(parse_pasted_paths(r"C:\Users\me\a.txt"), [r"C:\Users\me\a.txt"]);
+        assert_eq!(parse_pasted_paths("file:///C:/Users/me/a%20b.txt"), ["C:/Users/me/a b.txt"]);
         assert!(parse_pasted_paths("   ").is_empty());
     }
 

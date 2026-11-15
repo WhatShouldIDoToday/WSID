@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ManualPathEntry from "./ManualPathEntry.svelte";
   import Select from "./ui/Select.svelte";
   import { untrack } from "svelte";
   import ConfirmModal from "./ConfirmModal.svelte";
@@ -25,10 +26,13 @@
     saveClipboardBytesForDraft,
     fileToBase64,
     parseDurationInput,
+    validateBasedOn,
     validateDeadlines,
     validateUserRef,
+    readNativeClipboardImage,
   } from "../lib/ipc";
   import { subscribeDropzone } from "../lib/filedrop";
+  import { handleClipboardPaste } from "../lib/clipboard";
   import UserRefInput from "./UserRefInput.svelte";
 
   interface DraftAttachmentItem {
@@ -80,6 +84,8 @@
   let tags = $state<string[]>([]);
   // Draft people and project start on the active context. Untouched fields follow a switch.
   let project = $state<string>(untrack(() => activeProject));
+  let basedOn = $state<string>("");
+  let basedOnError = $derived(validateBasedOn(basedOn).error);
   let reporter = $state<string>("");
   let assignee = $state<string>("");
   let evaluator = $state<string>("");
@@ -114,6 +120,7 @@
     sgdb_date: "SGDB date",
     time_estimate: "Time estimate",
     manual_priority: "Manual priority",
+    based_on: "Based on",
     urgent_override: "Urgent override",
   };
 
@@ -139,6 +146,7 @@
       manual_priority: Number(manualPriority),
       tags: [...tags],
       project: project.trim() || "default",
+      based_on: basedOn.trim() || null,
       reporter: reporter.trim() || activeUser,
       assignee: assignee.trim() || activeUser,
       evaluator: evaluator.trim() || activeUser,
@@ -316,6 +324,7 @@
       urgentOverride ||
       tags.length > 0 ||
       tagInputText.trim().length > 0 ||
+      basedOn.trim().length > 0 ||
       stagedRelations.length > 0 ||
       relationSearchQuery.trim().length > 0 ||
       pendingAttachments.length > 0 ||
@@ -377,25 +386,36 @@
     );
   }
 
+  /** Set when the native picker is unavailable; shows manual path entry. */
+  let attachPickError = $state<string | null>(null);
+
+  function stageAttachmentPath(path: string) {
+    const fileName = basenameOfPath(path);
+    pendingAttachments = [
+      ...pendingAttachments,
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        path,
+        suggestedName: fileName,
+        description: nextAttachmentDesc.trim() || null,
+      },
+    ];
+    nextAttachmentDesc = "";
+    attachPickError = null;
+    announce(`Staged attachment ${fileName}`);
+  }
+
   async function handlePickAttachment() {
+    let path: string | null;
     try {
-      const path = await pickAttachmentFileDialog();
-      if (!path) return;
-      const fileName = basenameOfPath(path);
-      pendingAttachments = [
-        ...pendingAttachments,
-        {
-          id: `${Date.now()}-${Math.random()}`,
-          path,
-          suggestedName: fileName,
-          description: nextAttachmentDesc.trim() || null,
-        },
-      ];
-      nextAttachmentDesc = "";
-      announce(`Staged attachment ${fileName}`);
+      path = await pickAttachmentFileDialog();
     } catch (err) {
-      formError = String(err);
+      attachPickError = String(err);
+      announce(`Could not open file picker: ${attachPickError}`);
+      return;
     }
+    if (!path) return;
+    stageAttachmentPath(path);
   }
 
   function handleDroppedPaths(paths: string[]) {
@@ -415,7 +435,7 @@
     nextAttachmentDesc = "";
   }
 
-  async function handlePasteFiles(files: FileList | File[]) {
+  async function handlePasteFiles(files: File[]) {
     for (const file of Array.from(files)) {
       try {
         const friendlyName =
@@ -470,6 +490,7 @@
     tags = [];
     tagInputText = "";
     project = activeProject;
+    basedOn = "";
     reporter = activeUser;
     assignee = activeUser;
     evaluator = activeUser;
@@ -582,6 +603,12 @@
       }
     }
 
+    if (basedOnError) {
+      announce(basedOnError);
+      document.getElementById("entry-based-on")?.focus();
+      return;
+    }
+
     const parsedDur = parseDurationInput(estimateInput);
 
     try {
@@ -617,6 +644,7 @@
         manual_priority: Number(manualPriority),
         tags,
         project: project.trim() || "default",
+        based_on: basedOn.trim() || null,
         reporter: reporter.trim() || activeUser,
         assignee: assignee.trim() || activeUser,
         evaluator: evaluator.trim() || activeUser,
@@ -719,6 +747,7 @@
               {userKinds}
               mode="description"
               onPasteFiles={handlePasteFiles}
+              onPastePaths={handleDroppedPaths}
               placeholder="Detailed acceptance criteria, notes, or context. Paste images directly with Cmd/Ctrl+V."
             />
           </div>
@@ -772,11 +801,12 @@
               class={`dropzone ${isDragging ? "dragging" : ""}`}
               role="region"
               aria-label="Drop or paste files to attach to this new task"
-              onpaste={(e) => {
-                if (e.clipboardData?.files?.length) {
-                  void handlePasteFiles(e.clipboardData.files);
-                }
-              }}
+              onpaste={(e) =>
+                handleClipboardPaste(e, {
+                  onFiles: handlePasteFiles,
+                  onPaths: handleDroppedPaths,
+                  readNativeImage: readNativeClipboardImage,
+                })}
             >
               <div
                 class="form-grid"
@@ -805,6 +835,15 @@
                     Or drag-and-drop / paste (Cmd/Ctrl+V) an image
                   </span>
                 </div>
+                {#if attachPickError}
+                  <ManualPathEntry
+                    label="File path"
+                    reason={attachPickError}
+                    submitLabel="Attach"
+                    onSubmit={stageAttachmentPath}
+                    onCancel={() => (attachPickError = null)}
+                  />
+                {/if}
               </div>
             </div>
 
@@ -984,6 +1023,31 @@
               Letters, numbers, underscores, and dashes. Defaults to
               <code>default</code>.
             </span>
+          </div>
+
+          <div class="form-field">
+            <label for="entry-based-on">Based on (URL)</label>
+            <input
+              id="entry-based-on"
+              type="url"
+              bind:value={basedOn}
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="https://github.com/owner/repo/issues/1"
+              aria-invalid={basedOnError ? "true" : "false"}
+              aria-describedby={basedOnError
+                ? "entry-based-on-hint entry-based-on-err"
+                : "entry-based-on-hint"}
+            />
+            <span id="entry-based-on-hint" class="field-hint">
+              Optional link to the item this task is based on, such as a GitHub
+              issue.
+            </span>
+            {#if basedOnError}
+              <span id="entry-based-on-err" class="field-error" role="alert">
+                {basedOnError}
+              </span>
+            {/if}
           </div>
 
           <div class="form-grid-dates">

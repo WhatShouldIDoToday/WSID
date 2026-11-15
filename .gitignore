@@ -31,3 +31,4 @@ crates/wsid-gui/gen/
 
 
 .planning/
+.DS_Store

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ManualPathEntry from "./ManualPathEntry.svelte";
   import { Dialog } from "bits-ui";
   import Select from "./ui/Select.svelte";
   import UserPill from "./UserPill.svelte";
@@ -45,11 +46,16 @@
     formatDurationMinutes,
     validateDeadlines,
     formatDeadlineDisplay,
+    formatTimestampDisplay,
     validateUserRef,
+    validateBasedOn,
+    openExternalUrl,
     parseCommentMentions,
     tokenizeCommentBody,
+    readNativeClipboardImage,
   } from "../lib/ipc";
   import { subscribeDropzone } from "../lib/filedrop";
+  import { handleClipboardPaste } from "../lib/clipboard";
   import UserRefInput from "./UserRefInput.svelte";
 
   interface DraftCommentAttachment {
@@ -114,6 +120,8 @@
   let editManualPriority = $state<number>(3);
   let editTags = $state<string[]>([]);
   let editProject = $state<string>("default");
+  let editBasedOn = $state<string>("");
+  let editBasedOnError = $derived(validateBasedOn(editBasedOn).error);
   let editAssignee = $state<string>("");
   let editEvaluator = $state<string>("");
   let editReporter = $state<string>("");
@@ -262,6 +270,7 @@
     editManualPriority = d.task.manual_priority;
     editTags = [...d.task.tags];
     editProject = d.task.project;
+    editBasedOn = d.task.based_on ?? "";
     editAssignee = d.task.assignee;
     editEvaluator = d.task.evaluator;
     editReporter = d.task.reporter;
@@ -380,6 +389,7 @@
       editEvaluator !== detail.task.evaluator ||
       editReporter !== detail.task.reporter ||
       editProject !== detail.task.project ||
+      editBasedOn.trim() !== (detail.task.based_on ?? "") ||
       editTags.join(",") !== detail.task.tags.join(",")
     );
   }
@@ -531,6 +541,13 @@
       }
     }
 
+    if (editBasedOnError) {
+      errorMsg = editBasedOnError;
+      announce(errorMsg);
+      document.getElementById("edit-based-on")?.focus();
+      return;
+    }
+
     const parsedDur = parseDurationInput(editEstimateInput);
 
     try {
@@ -547,6 +564,8 @@
         manual_priority: Number(editManualPriority),
         tags: editTags,
         project: editProject,
+        // An empty string clears the link.
+        based_on: editBasedOn.trim(),
         assignee: editAssignee,
         evaluator: editEvaluator,
         reporter: editReporter,
@@ -586,16 +605,18 @@
     }
   }
 
-  async function handlePickTaskAttachment() {
+  /** Set when the native picker is unavailable; shows manual path entry. */
+  let taskAttachPickError = $state<string | null>(null);
+
+  async function attachTaskFileAtPath(path: string) {
     if (!detail) return;
     try {
-      const path = await pickAttachmentFileDialog();
-      if (!path) return;
       await attachFileFromDisk({
         taskId: detail.task.id,
         filePath: path,
         description: newTaskAttachmentDesc.trim() || null,
       });
+      taskAttachPickError = null;
       newTaskAttachmentDesc = "";
       announce(`Attached file to task ${detail.task.id}`);
       await refreshDetail(detail.task.id);
@@ -604,6 +625,20 @@
       errorMsg = String(err);
       announce(`Attachment error: ${String(err)}`);
     }
+  }
+
+  async function handlePickTaskAttachment() {
+    if (!detail) return;
+    let path: string | null;
+    try {
+      path = await pickAttachmentFileDialog();
+    } catch (err) {
+      taskAttachPickError = String(err);
+      announce(`Could not open file picker: ${taskAttachPickError}`);
+      return;
+    }
+    if (!path) return;
+    await attachTaskFileAtPath(path);
   }
 
   async function handleTaskDropPaths(paths: string[]) {
@@ -725,10 +760,40 @@
     }
   }
 
+  /** Set when the native picker is unavailable; shows manual path entry. */
+  let commentAttachPickError = $state<string | null>(null);
+
+  function stageCommentAttachmentPath(path: string) {
+    const fileName = basenameOfPath(path);
+    pendingCommentAttachments = [
+      ...pendingCommentAttachments,
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        path,
+        suggestedName: fileName,
+        description: pendingCommentDesc.trim() || null,
+      },
+    ];
+    pendingCommentDesc = "";
+    commentAttachPickError = null;
+    announce(`Added file ${fileName} to pending comment`);
+  }
+
   async function handlePickCommentAttachment() {
+    let path: string | null;
     try {
-      const path = await pickAttachmentFileDialog();
-      if (!path) return;
+      path = await pickAttachmentFileDialog();
+    } catch (err) {
+      commentAttachPickError = String(err);
+      announce(`Could not open file picker: ${commentAttachPickError}`);
+      return;
+    }
+    if (!path) return;
+    stageCommentAttachmentPath(path);
+  }
+
+  function handleCommentPastePaths(paths: string[]) {
+    for (const path of paths) {
       const fileName = basenameOfPath(path);
       pendingCommentAttachments = [
         ...pendingCommentAttachments,
@@ -739,14 +804,12 @@
           description: pendingCommentDesc.trim() || null,
         },
       ];
-      pendingCommentDesc = "";
       announce(`Added file ${fileName} to pending comment`);
-    } catch (err) {
-      errorMsg = String(err);
     }
+    pendingCommentDesc = "";
   }
 
-  async function handleCommentPasteFiles(files: FileList) {
+  async function handleCommentPasteFiles(files: File[]) {
     const items = files;
     if (items.length === 0) return;
     for (const file of Array.from(items)) {
@@ -1213,9 +1276,79 @@
                     </div>
                   {/if}
                   <p class="side-muted">Origin: {detail.task.origin_kind}</p>
+                  <p class="side-muted">
+                    Added on:
+                    <time datetime={detail.task.created_at}
+                      >{formatTimestampDisplay(detail.task.created_at)}</time
+                    >
+                  </p>
+                  <p class="side-muted">
+                    Last updated:
+                    <time datetime={detail.task.updated_at}
+                      >{formatTimestampDisplay(detail.task.updated_at)}</time
+                    >
+                  </p>
                 </div>
               {/if}
             </section>
+
+            {#if editingTask || detail.task.based_on}
+              <section
+                class="side-block"
+                aria-labelledby="drawer-based-on-heading"
+              >
+                <h3 id="drawer-based-on-heading" class="side-heading">
+                  Based on
+                </h3>
+                {#if editingTask}
+                  <div class="side-field">
+                    <label for="edit-based-on">Link (URL)</label>
+                    <input
+                      autocorrect="off"
+                      autocapitalize="off"
+                      id="edit-based-on"
+                      type="url"
+                      bind:value={editBasedOn}
+                      spellcheck="false"
+                      autocomplete="off"
+                      placeholder="https://github.com/owner/repo/issues/1"
+                      aria-invalid={editBasedOnError ? "true" : "false"}
+                      aria-describedby={editBasedOnError
+                        ? "edit-based-on-err"
+                        : undefined}
+                    />
+                    {#if editBasedOnError}
+                      <span
+                        id="edit-based-on-err"
+                        class="field-error"
+                        role="alert"
+                      >
+                        {editBasedOnError}
+                      </span>
+                    {/if}
+                  </div>
+                {:else if detail.task.based_on}
+                  <a
+                    class="based-on-link"
+                    href={detail.task.based_on}
+                    aria-label={`Open linked item in your browser: ${detail.task.based_on}`}
+                    title="Opens in your default browser"
+                    onclick={async (e) => {
+                      e.preventDefault();
+                      const url = detail?.task.based_on;
+                      if (!url) return;
+                      try {
+                        await openExternalUrl(url);
+                      } catch (err) {
+                        announce(`Could not open link: ${String(err)}`);
+                      }
+                    }}
+                  >
+                    {detail.task.based_on}
+                  </a>
+                {/if}
+              </section>
+            {/if}
           </aside>
 
           <!-- A focusable separator is the ARIA window-splitter pattern. -->
@@ -1311,11 +1444,12 @@
                     style="margin-top: 0.75rem;"
                     role="region"
                     aria-label="Attach files to task by drag-and-drop, clipboard paste, or file picker"
-                    onpaste={(e) => {
-                      if (e.clipboardData?.files?.length) {
-                        void handleTaskPasteFiles(e.clipboardData.files);
-                      }
-                    }}
+                    onpaste={(e) =>
+                      handleClipboardPaste(e, {
+                        onFiles: handleTaskPasteFiles,
+                        onPaths: handleTaskDropPaths,
+                        readNativeImage: readNativeClipboardImage,
+                      })}
                   >
                     <div
                       class="form-grid"
@@ -1344,6 +1478,15 @@
                           Or drag-and-drop / paste (Cmd/Ctrl+V) a file here
                         </span>
                       </div>
+                      {#if taskAttachPickError}
+                        <ManualPathEntry
+                          label="File path"
+                          reason={taskAttachPickError}
+                          submitLabel="Attach"
+                          onSubmit={attachTaskFileAtPath}
+                          onCancel={() => (taskAttachPickError = null)}
+                        />
+                      {/if}
                     </div>
                   </div>
                 {/if}
@@ -1684,6 +1827,7 @@
                     {userKinds}
                     mode="comment"
                     onPasteFiles={handleCommentPasteFiles}
+                    onPastePaths={handleCommentPastePaths}
                     placeholder="Write a comment... Use @user for blocking subtasks, @takenote:user for non-blocking heads-up, or #AB1234 to link tasks. Paste images directly with Cmd/Ctrl+V."
                   />
 
@@ -1761,6 +1905,16 @@
                       </li>
                     {/each}
                   </ul>
+                {/if}
+
+                {#if commentAttachPickError}
+                  <ManualPathEntry
+                    label="File path"
+                    reason={commentAttachPickError}
+                    submitLabel="Attach"
+                    onSubmit={stageCommentAttachmentPath}
+                    onCancel={() => (commentAttachPickError = null)}
+                  />
                 {/if}
 
                 <div class="comment-actions">

@@ -666,6 +666,8 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         col_header(DatabaseSortColumn::Difficulty, "Diff"),
         col_header(DatabaseSortColumn::SgdbDate, "SGDB"),
         col_header(DatabaseSortColumn::DueDate, "Due"),
+        col_header(DatabaseSortColumn::Created, "Created"),
+        col_header(DatabaseSortColumn::Updated, "Updated"),
         Cell::from("Tags").style(
             Style::default()
                 .fg(Color::Cyan)
@@ -690,6 +692,16 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 .map(format_deadline_date)
                 .unwrap_or_else(|| "-".to_string());
             let tags = if t.tags.is_empty() { "-".to_string() } else { t.tags.join(",") };
+            let created = t
+                .created_at
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string();
+            let updated = t
+                .updated_at
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string();
             Row::new(vec![
                 Cell::from(format!("{}{}", app.mark(&t.id), t.id)),
                 Cell::from(t.title.clone()),
@@ -700,6 +712,8 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
                 Cell::from(format!("{}/5", t.difficulty)),
                 Cell::from(sgdb.to_string()),
                 Cell::from(due.to_string()),
+                Cell::from(created),
+                Cell::from(updated),
                 Cell::from(tags),
             ])
         })
@@ -713,6 +727,8 @@ fn render_database_view(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         Constraint::Length(12),
         Constraint::Length(5),
         Constraint::Length(5),
+        Constraint::Length(11),
+        Constraint::Length(11),
         Constraint::Length(11),
         Constraint::Length(11),
         Constraint::Fill(1),
@@ -1221,6 +1237,18 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
         user_label(&app.user_kinds, &t.evaluator)
     )));
     lines.push(Line::from(format!("Project: {}", t.project)));
+    lines.push(Line::from(format!(
+        "Added on: {} | Last updated: {}",
+        t.created_at
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M"),
+        t.updated_at
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+    )));
+    if let Some(url) = &t.based_on {
+        lines.push(Line::from(format!("Based on: {url}")));
+    }
 
     let est = t
         .time_estimate_minutes

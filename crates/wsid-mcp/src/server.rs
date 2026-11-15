@@ -6,7 +6,9 @@ use wsid_core::{AppConfig, Database};
 
 use crate::protocol::{
     CallToolParams, INVALID_PARAMS_CODE, INVALID_REQUEST_CODE, InitializeParams, JSONRPC_VERSION, JsonRpcRequest, JsonRpcResponse,
-    METHOD_NOT_FOUND_CODE, PARSE_ERROR_CODE, build_initialize_result, list_mcp_tools,
+    META_CLIENT_CAPABILITIES, META_PROTOCOL_VERSION, META_SERVER_INFO, METHOD_NOT_FOUND_CODE, MODERN_MCP_PROTOCOL_VERSIONS,
+    PARSE_ERROR_CODE, UNSUPPORTED_PROTOCOL_VERSION_CODE, all_supported_versions, build_discover_result, build_initialize_result,
+    list_mcp_tools, modern_request_version, server_info,
 };
 use crate::tools::dispatch_tool;
 
@@ -115,7 +117,7 @@ impl McpServer {
         }
 
         // Notifications do not have an `id` and must not produce a response on stdout.
-        let id = match request.id {
+        let id = match request.id.clone() {
             Some(id) => id,
             None => {
                 self.log_stderr(&format!("MCP notification: {}", request.method));
@@ -125,6 +127,69 @@ impl McpServer {
 
         self.log_stderr(&format!("MCP request: {}", request.method));
 
+        // `initialize` selects legacy semantics. Any other request whose `_meta` carries the
+        // modern protocol version is served statelessly under the 2026-07-28 rules.
+        if request.method != "initialize"
+            && let Some(version) = modern_request_version(request.params.as_ref()).map(str::to_owned)
+        {
+            return self.handle_modern_request(id, &version, request);
+        }
+
+        if request.method == "server/discover" {
+            // A probe without modern `_meta` is malformed; probing clients then fall back.
+            return Some(JsonRpcResponse::error(
+                id,
+                INVALID_PARAMS_CODE,
+                format!("server/discover requires params._meta with '{META_PROTOCOL_VERSION}' and '{META_CLIENT_CAPABILITIES}'"),
+                None,
+            ));
+        }
+
+        self.dispatch_method(id, request)
+    }
+
+    /// Serves one stateless 2026-07-28 request: validates `_meta`, then dispatches and decorates
+    /// a successful result with `resultType` and `serverInfo`.
+    fn handle_modern_request(&mut self, id: Value, version: &str, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
+        if !MODERN_MCP_PROTOCOL_VERSIONS.contains(&version) {
+            return Some(JsonRpcResponse::error(
+                id,
+                UNSUPPORTED_PROTOCOL_VERSION_CODE,
+                "Unsupported protocol version",
+                Some(json!({ "supported": all_supported_versions(), "requested": version })),
+            ));
+        }
+        let has_capabilities = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get(META_CLIENT_CAPABILITIES))
+            .is_some_and(Value::is_object);
+        if !has_capabilities {
+            return Some(JsonRpcResponse::error(
+                id,
+                INVALID_PARAMS_CODE,
+                format!("Missing required _meta field '{META_CLIENT_CAPABILITIES}'"),
+                None,
+            ));
+        }
+        if request.method == "server/discover" {
+            return Some(JsonRpcResponse::success(id, build_discover_result()));
+        }
+
+        let mut response = self.dispatch_method(id, request)?;
+        if let Some(Value::Object(result)) = response.result.as_mut() {
+            result
+                .entry("resultType")
+                .or_insert_with(|| json!("complete"));
+            if let Value::Object(meta) = result.entry("_meta").or_insert_with(|| json!({})) {
+                meta.insert(META_SERVER_INFO.to_string(), server_info());
+            }
+        }
+        Some(response)
+    }
+
+    fn dispatch_method(&mut self, id: Value, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         match request.method.as_str() {
             "initialize" => {
                 let init_params: Option<InitializeParams> = request.params.and_then(|p| serde_json::from_value(p).ok());

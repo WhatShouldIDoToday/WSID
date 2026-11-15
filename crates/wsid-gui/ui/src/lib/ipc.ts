@@ -48,6 +48,7 @@ export interface Task {
   manual_priority: number;
   tags: string[];
   project: string;
+  based_on?: string | null;
   reporter: string;
   assignee: string;
   evaluator: string;
@@ -263,6 +264,7 @@ export interface GuiCreateTaskPayload {
   manual_priority?: number | null;
   tags: string[];
   project?: string | null;
+  based_on?: string | null;
   reporter?: string | null;
   assignee?: string | null;
   evaluator?: string | null;
@@ -284,6 +286,8 @@ export interface GuiUpdateTaskPayload {
   manual_priority?: number;
   tags?: string[];
   project?: string;
+  /** A URL sets the link; `null` or `""` clears it; omitted leaves it unchanged. */
+  based_on?: string | null;
   reporter?: string;
   assignee?: string;
   evaluator?: string;
@@ -611,6 +615,17 @@ export function validateDeadlineOrder(
   return res.orderError;
 }
 
+/// Locale-aware display for read-only UTC timestamps such as `created_at` and `updated_at`.
+export function formatTimestampDisplay(raw: string | null | undefined): string {
+  if (!raw) return "—";
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return raw;
+  return dt.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 export function formatDeadlineDisplay(raw: string | null | undefined): string {
   if (!raw) return "—";
   const s = raw.trim();
@@ -742,6 +757,37 @@ export function validateProject(raw: string): {
     };
   }
   return { normalized: trimmed, error: null };
+}
+
+/**
+ * Mirrors core `normalize_based_on`: trim, blank means no value, otherwise an `http` or `https`
+ * URL with a host. The trimmed text is kept as typed.
+ */
+export function validateBasedOn(raw: string): {
+  normalized: string | null;
+  error: string | null;
+} {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { normalized: null, error: null };
+  }
+  const error = `Invalid link "${trimmed}" — enter an http:// or https:// URL.`;
+  try {
+    const url = new URL(trimmed);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      !url.hostname
+    ) {
+      return { normalized: null, error };
+    }
+  } catch {
+    return { normalized: null, error };
+  }
+  return { normalized: trimmed, error: null };
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  return invoke<void>("open_external_url", { url });
 }
 
 export const TAG_REGEX = /^[a-z0-9_-]+$/;
@@ -1512,6 +1558,21 @@ export function applyUiPreferencesToDom(prefs: UiPreferences): void {
   }
   const scale = Math.max(85, Math.min(150, prefs.fontScalePercent)) / 100;
   root.style.setProperty("--ui-font-scale", String(scale));
+}
+
+/**
+ * Reads an image from the system clipboard through the native backend. Used as
+ * a fallback when the webview exposes no clipboard data (WebKitGTK/Wayland
+ * screenshots). Resolves to `null` when there is no image or no native support.
+ */
+export async function readNativeClipboardImage(): Promise<File | null> {
+  const dataUrl = await invoke<string | null>("read_clipboard_image_native");
+  if (!dataUrl) return null;
+  const blob = await (await fetch(dataUrl)).blob();
+  const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, "");
+  return new File([blob], `clipboard-${stamp}.png`, {
+    type: blob.type || "image/png",
+  });
 }
 
 export function fileToBase64(file: Blob): Promise<string> {
