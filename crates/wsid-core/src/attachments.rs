@@ -88,7 +88,7 @@ pub(crate) fn attach_existing_file_in_tx(
         return Err(WsidError::Validation("attachment file_path cannot be empty".to_string()));
     }
 
-    let resolved_path = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
+    let resolved_path = dunce::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
     let file_name = resolved_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -171,7 +171,7 @@ pub fn save_clipboard_attachment_with_dir(
     let dest_path = managed_root.join(&file_name);
 
     fs::write(&dest_path, bytes)?;
-    let canonical_dest = fs::canonicalize(&dest_path).unwrap_or(dest_path);
+    let canonical_dest = dunce::canonicalize(&dest_path).unwrap_or(dest_path);
 
     let media_type = infer_media_type(&canonical_dest);
     let effective_desc = match description.map(str::trim) {
@@ -366,8 +366,8 @@ pub(crate) fn cleanup_managed_files_after_delete(
 }
 
 fn is_path_inside_managed_dir(file_path: &Path, managed_root: &Path) -> bool {
-    let canon_root = fs::canonicalize(managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
-    let canon_file = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
+    let canon_root = dunce::canonicalize(managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
+    let canon_file = dunce::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
     canon_file.starts_with(&canon_root)
 }
 
@@ -515,5 +515,66 @@ mod tests {
         delete_task_with_attachments_dir(&mut db, &task.id, Some(app_attachments_dir.path())).unwrap();
         assert!(!task_clip_path.exists(), "managed clipboard file for deleted task should be removed from disk");
         assert!(external_img.exists(), "external file in user folder must never be deleted");
+    }
+
+    #[test]
+    fn migration_0006_strips_verbatim_prefix_from_legacy_rows() {
+        let mut db = open_in_memory_db().unwrap();
+        let task = create_task(&mut db, CreateTaskInput { title: "Legacy".to_string(), ..Default::default() }, "alice").unwrap();
+        let paths = [
+            (r"\\?\C:\Users\a\pic.png", r"C:\Users\a\pic.png"),
+            (r"\\?\UNC\srv\share\pic.png", r"\\srv\share\pic.png"),
+            (r"\\?\Volume{1234}\pic.png", r"\\?\Volume{1234}\pic.png"),
+            (r"C:\plain\pic.png", r"C:\plain\pic.png"),
+            ("/unix/pic.png", "/unix/pic.png"),
+        ];
+        for (old, _) in paths {
+            db.conn
+                .execute(
+                    "INSERT INTO task_attachments (task_id, file_path, file_name, media_type, description, is_managed, created_at)
+                     VALUES (?1, ?2, 'pic.png', 'image/png', 'pic', 0, '2026-01-01T00:00:00Z')",
+                    params![task.id, old],
+                )
+                .unwrap();
+        }
+        db.conn
+            .execute_batch(include_str!("migrations/0006_attachment_paths_strip_verbatim.sql"))
+            .unwrap();
+        for (old, expected) in paths {
+            let stored = db
+                .conn
+                .query_row("SELECT file_path FROM task_attachments WHERE file_path IN (?1, ?2)", params![old, expected], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap();
+            assert_eq!(stored, expected);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stored_paths_have_no_verbatim_prefix() {
+        let mut db = open_in_memory_db().unwrap();
+        let dir = tempdir().unwrap();
+        let attachments = tempdir().unwrap();
+        let file = dir.path().join("a.png");
+        fs::write(&file, b"x").unwrap();
+        let task = create_task(&mut db, CreateTaskInput { title: "Win".to_string(), ..Default::default() }, "alice").unwrap();
+        let ext = attach_existing_file_with_dir(&mut db, &task.id, None, &file, None, Some(attachments.path())).unwrap();
+        assert!(!ext.file_path.starts_with(r"\\?\"), "{}", ext.file_path);
+        let clip = save_clipboard_attachment_with_dir(&mut db, &task.id, None, b"x", Some("png"), None, Some(attachments.path())).unwrap();
+        assert!(!clip.file_path.starts_with(r"\\?\"), "{}", clip.file_path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_dir_check_handles_differently_spelled_paths() {
+        let root = tempdir().unwrap();
+        let file = root.path().join("m.png");
+        fs::write(&file, b"x").unwrap();
+        let verbatim_root = fs::canonicalize(root.path()).unwrap();
+        assert!(is_path_inside_managed_dir(&file, &verbatim_root));
+        let verbatim_file = fs::canonicalize(&file).unwrap();
+        assert!(is_path_inside_managed_dir(&verbatim_file, root.path()));
     }
 }

@@ -28,6 +28,7 @@ wsid-core.workspace = true
 wsid-mcp.workspace = true
 
 [dev-dependencies]
+dunce.workspace = true
 tempfile.workspace = true
 
 [lints]
