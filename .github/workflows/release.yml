@@ -190,16 +190,18 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
-      - name: Open a PR from main into dev
+      - name: Open a PR from main into dev and merge it
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          open="$(gh pr list --base dev --head main --state open --json number --jq 'length')"
-          if [ "$open" != "0" ]; then
-            echo "A main into dev PR is already open."
-            exit 0
+          pr="$(gh pr list --base dev --head main --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            url="$(gh pr create --base dev --head main \
+              --title "chore: sync main into dev" \
+              --body "Brings the release commit from main back into dev. Merged with a merge commit, not a squash.")"
+            pr="${url##*/}"
           fi
-          gh pr create --base dev --head main \
-            --title "chore: sync main into dev" \
-            --body "Brings the release commit from main back into dev. Merge with a merge commit, not a squash."
+          # The dev merge queue squashes every PR. The release app is a bypass actor on the dev ruleset so
+          # this sync can land as a merge commit, which keeps main's history reachable from dev.
+          gh pr merge "$pr" --merge --admin
