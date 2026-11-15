@@ -83,6 +83,29 @@ For any client, the server is the command `wsid` with the argument `mcp`:
   Install the command line tool on your system and run the command there.
 - **Windows:** after a winget install, check that the registered path is the
   link winget created and not a versioned folder.
-- **Protocol versions:** WSID answers the `initialize` handshake of revisions
-  2024-11-05 through 2025-11-25. Clients that only speak 2026-07-28 or later
-  are not supported yet.
+- **Protocol versions:** WSID speaks both eras. It answers the `initialize`
+  handshake of revisions 2024-11-05 through 2025-11-25. It also serves
+  2026-07-28 statelessly: any request whose `params._meta` carries
+  `io.modelcontextprotocol/protocolVersion` and
+  `io.modelcontextprotocol/clientCapabilities` is handled without a handshake,
+  and `server/discover` reports the supported versions, capabilities and
+  server info. A request with an unknown modern version gets error `-32022`
+  with the `supported` list.
+
+## Client support for 2026-07-28
+
+Checked on 2026-11-14 against public pages. Most sources are secondary, so
+verify against the client's own release notes. Until a client speaks
+2026-07-28, WSID serves it through `initialize`, so this does not block
+anyone.
+
+| Client | 2026-07-28 status | Source |
+|--------|-------------------|--------|
+| Claude Code | Stdio servers are probed for 2026-07-28 by default from v2.1.292 per its release notes (`MCP_PROTOCOL_NEGOTIATION=legacy` opts out). The MCP docs describe a staged rollout, so the two disagree. | [release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.292), [docs](https://code.claude.com/docs/en/mcp.md), as quoted by [Mixed-News](https://mixed-news.com/en/claude-code-2-1-292-stdio-mcp-protocol-2026-07-28-docs-contradict/) |
+| Claude Desktop | Unverified. Anthropic only says support is rolling out across Claude products. | [announcement](https://claude.com/blog/bringing-mcp-2026-07-28-to-claude) |
+| Codex CLI | Opt-in behind the `mcp_2026_07_28` feature flag, off by default. Third-party posts say v0.147.0 added opt-in support. | [PR #34747](https://github.com/openai/codex/pull/34747), [issue #33952](https://github.com/openai/codex/issues/33952), [changelog](https://developers.openai.com/codex/changelog) |
+| Cursor | Not supported. A Cursor staff member said it uses 2025-11-25 and earlier, with no timeline. | [forum thread](https://forum.cursor.com/t/mcp-client-cannot-connect-to-modern-only-2026-07-28-streamable-http-servers-legacy-initialize-rejected/172536) |
+| VS Code | Unverified. A third-party tracker listed 2025-11-25 as of 2026-07-31. | [Zuplo tracker](https://zuplo.com/learn/mcp/compatibility) |
+| Zed | Unverified. The same tracker listed 2025-11-25. | [Zuplo tracker](https://zuplo.com/learn/mcp/compatibility) |
+| Gemini CLI | Unverified. The same tracker listed 2025-06-18. | [Zuplo tracker](https://zuplo.com/learn/mcp/compatibility) |
+| Devin / Windsurf, OpenCode, Cline | Unverified. No public statement found. | none |

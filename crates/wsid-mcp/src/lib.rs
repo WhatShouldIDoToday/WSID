@@ -6,8 +6,9 @@ pub mod tools;
 
 pub use protocol::{
     CallToolParams, CallToolResult, DEFAULT_MCP_PROTOCOL_VERSION, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE, INVALID_REQUEST_CODE,
-    InitializeParams, JSONRPC_VERSION, JsonRpcError, JsonRpcRequest, JsonRpcResponse, METHOD_NOT_FOUND_CODE, PARSE_ERROR_CODE,
-    SUPPORTED_MCP_PROTOCOL_VERSIONS, ToolDefinition, ToolTextContent, build_initialize_result, list_mcp_tools, negotiate_protocol_version,
+    InitializeParams, JSONRPC_VERSION, JsonRpcError, JsonRpcRequest, JsonRpcResponse, METHOD_NOT_FOUND_CODE, MODERN_MCP_PROTOCOL_VERSIONS,
+    PARSE_ERROR_CODE, SUPPORTED_MCP_PROTOCOL_VERSIONS, ToolDefinition, ToolTextContent, UNSUPPORTED_PROTOCOL_VERSION_CODE,
+    all_supported_versions, build_discover_result, build_initialize_result, list_mcp_tools, negotiate_protocol_version,
 };
 pub use server::McpServer;
 pub use tools::{TaskDetailResponse, build_task_detail, dispatch_tool};
@@ -379,5 +380,137 @@ mod tests {
         // A revision this server does not know gets the newest supported one back, never an echo.
         assert_eq!(negotiate_protocol_version(Some("2026-07-28")), SUPPORTED_MCP_PROTOCOL_VERSIONS[0]);
         assert_eq!(build_initialize_result(Some("1900-01-01"))["protocolVersion"], SUPPORTED_MCP_PROTOCOL_VERSIONS[0]);
+    }
+
+    fn run_lines(server: &mut McpServer, lines: &[Value]) -> Vec<Value> {
+        let input = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let mut output = Vec::new();
+        server
+            .run_io(Cursor::new(input.into_bytes()), &mut output)
+            .unwrap();
+        String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("stdout line must be JSON"))
+            .collect()
+    }
+
+    fn modern_meta(version: &str) -> Value {
+        json!({
+            "io.modelcontextprotocol/protocolVersion": version,
+            "io.modelcontextprotocol/clientInfo": { "name": "test", "version": "1" },
+            "io.modelcontextprotocol/clientCapabilities": {}
+        })
+    }
+
+    #[test]
+    fn modern_client_is_served_statelessly_without_initialize() {
+        let mut server = test_server();
+        let meta = modern_meta("2026-07-28");
+        let out = run_lines(
+            &mut server,
+            &[
+                json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": { "_meta": meta } }),
+                json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                        "params": { "name": "list_users", "arguments": {}, "_meta": meta } }),
+            ],
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["result"]["resultType"], "complete");
+        assert_eq!(out[0]["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"], "wsid-mcp");
+        assert!(out[0]["result"]["tools"].as_array().unwrap().len() > 5);
+        assert_eq!(out[1]["result"]["resultType"], "complete");
+        assert_eq!(out[1]["result"]["isError"], false);
+    }
+
+    #[test]
+    fn modern_request_missing_client_capabilities_is_invalid_params() {
+        let mut server = test_server();
+        let out = run_lines(
+            &mut server,
+            &[json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+                      "params": { "_meta": { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } } })],
+        );
+        assert_eq!(out[0]["error"]["code"], INVALID_PARAMS_CODE);
+    }
+
+    #[test]
+    fn legacy_client_still_uses_initialize_and_gets_no_modern_fields() {
+        let mut server = test_server();
+        let out = run_lines(
+            &mut server,
+            &[
+                json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                        "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "old", "version": "1" } } }),
+                json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+                json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+            ],
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(out[0]["result"]["serverInfo"]["name"], "wsid-mcp");
+        assert!(out[1]["result"].get("resultType").is_none());
+        assert!(out[1]["result"].get("_meta").is_none());
+    }
+
+    #[test]
+    fn client_probing_with_discover_first_learns_versions_then_proceeds() {
+        let mut server = test_server();
+        let meta = modern_meta("2026-07-28");
+        let out = run_lines(
+            &mut server,
+            &[
+                json!({ "jsonrpc": "2.0", "id": "discover-1", "method": "server/discover", "params": { "_meta": meta } }),
+                json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": { "_meta": meta } }),
+            ],
+        );
+        let discover = &out[0]["result"];
+        assert_eq!(out[0]["id"], "discover-1");
+        assert_eq!(discover["resultType"], "complete");
+        let versions: Vec<&str> = discover["supportedVersions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(versions, all_supported_versions());
+        assert!(versions.contains(&"2026-07-28") && versions.contains(&"2025-11-25"));
+        let init = build_initialize_result(None);
+        assert_eq!(discover["capabilities"], init["capabilities"]);
+        assert_eq!(discover["instructions"], init["instructions"]);
+        assert_eq!(discover["_meta"]["io.modelcontextprotocol/serverInfo"], init["serverInfo"]);
+        assert!(out[1]["result"]["tools"].is_array());
+    }
+
+    #[test]
+    fn discover_without_modern_meta_is_a_non_modern_error_so_probes_fall_back() {
+        let mut server = test_server();
+        let out = run_lines(&mut server, &[json!({ "jsonrpc": "2.0", "id": 1, "method": "server/discover" })]);
+        assert_eq!(out[0]["error"]["code"], INVALID_PARAMS_CODE);
+    }
+
+    #[test]
+    fn unsupported_modern_version_returns_32022_with_supported_list() {
+        let mut server = test_server();
+        let out = run_lines(
+            &mut server,
+            &[
+                json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": { "_meta": modern_meta("2099-01-01") } }),
+                json!({ "jsonrpc": "2.0", "id": 2, "method": "server/discover", "params": { "_meta": modern_meta("1900-01-01") } }),
+            ],
+        );
+        for (resp, requested) in out.iter().zip(["2099-01-01", "1900-01-01"]) {
+            assert_eq!(resp["error"]["code"], UNSUPPORTED_PROTOCOL_VERSION_CODE);
+            assert_eq!(resp["error"]["code"], -32022);
+            assert_eq!(resp["error"]["data"]["requested"], requested);
+            let supported = resp["error"]["data"]["supported"].as_array().unwrap();
+            assert!(supported.iter().any(|v| v == "2026-07-28"));
+            assert!(supported.iter().any(|v| v == "2025-11-25"));
+        }
     }
 }
