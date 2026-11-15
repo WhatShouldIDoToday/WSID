@@ -1560,6 +1560,21 @@ export function applyUiPreferencesToDom(prefs: UiPreferences): void {
   root.style.setProperty("--ui-font-scale", String(scale));
 }
 
+/**
+ * Reads an image from the system clipboard through the native backend. Used as
+ * a fallback when the webview exposes no clipboard data (WebKitGTK/Wayland
+ * screenshots). Resolves to `null` when there is no image or no native support.
+ */
+export async function readNativeClipboardImage(): Promise<File | null> {
+  const dataUrl = await invoke<string | null>("read_clipboard_image_native");
+  if (!dataUrl) return null;
+  const blob = await (await fetch(dataUrl)).blob();
+  const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, "");
+  return new File([blob], `clipboard-${stamp}.png`, {
+    type: blob.type || "image/png",
+  });
+}
+
 export function fileToBase64(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

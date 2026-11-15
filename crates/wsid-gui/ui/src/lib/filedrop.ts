@@ -24,24 +24,31 @@ export interface CoordinateOptions {
   viewport?: { width: number; height: number };
   /**
    * Whether the webview reports drag positions in logical (CSS) points, as
-   * `wry`/WKWebView does on macOS. Defaults to sniffing the user agent.
+   * `wry` does on macOS (WKWebView) and Linux (WebKitGTK). Defaults to sniffing
+   * the user agent; only Windows (WebView2) reports physical pixels.
    */
-  macLike?: boolean;
+  reportsLogicalPoints?: boolean;
 }
 
-function defaultsToMacLike(): boolean {
-  return typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+function defaultsToLogicalPoints(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    /Mac|Linux|X11/i.test(navigator.userAgent) &&
+    !/Android|Windows/i.test(navigator.userAgent)
+  );
 }
 
 /**
  * Normalizes a drag-drop position to CSS pixels.
  *
  * `wry` on macOS reports `draggingLocation()` in WKWebView logical points (CSS
- * pixels) even though Tauri types the position as `PhysicalPosition`. Dividing
- * by `devicePixelRatio` there halves every coordinate on Retina and no drop
- * ever hits its zone — the original bug. On other platforms the position really
- * is physical, so it is scaled. A macOS-reported point that falls outside the
- * viewport can only be physical, so it is scaled too.
+ * pixels), and on Linux the GTK `drag-motion`/`drag-drop` signals report widget
+ * coordinates that GTK3 also expresses in logical pixels. Tauri types both as
+ * `PhysicalPosition` without scaling them. Dividing by `devicePixelRatio` there
+ * shrinks every coordinate on scaled displays and no drop ever hits its zone.
+ * On Windows (WebView2, `ScreenToClient`) the position really is physical, so
+ * it is scaled. A point that falls outside the viewport can only be physical,
+ * so it is scaled too.
  */
 export function toCssPoint(
   position: PointLike,
@@ -49,7 +56,7 @@ export function toCssPoint(
   options: CoordinateOptions = {},
 ): PointLike {
   const dpr = devicePixelRatio > 0 ? devicePixelRatio : 1;
-  const macLike = options.macLike ?? defaultsToMacLike();
+  const logical = options.reportsLogicalPoints ?? defaultsToLogicalPoints();
   const viewport =
     options.viewport ??
     (typeof window !== "undefined"
@@ -59,7 +66,7 @@ export function toCssPoint(
   const outsideViewport =
     position.x > viewport.width || position.y > viewport.height;
 
-  if (!macLike || outsideViewport) {
+  if (!logical || outsideViewport) {
     return { x: position.x / dpr, y: position.y / dpr };
   }
   return { x: position.x, y: position.y };

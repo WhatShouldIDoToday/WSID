@@ -29,8 +29,10 @@
     validateBasedOn,
     validateDeadlines,
     validateUserRef,
+    readNativeClipboardImage,
   } from "../lib/ipc";
   import { subscribeDropzone } from "../lib/filedrop";
+  import { handleClipboardPaste } from "../lib/clipboard";
   import UserRefInput from "./UserRefInput.svelte";
 
   interface DraftAttachmentItem {
@@ -433,7 +435,7 @@
     nextAttachmentDesc = "";
   }
 
-  async function handlePasteFiles(files: FileList | File[]) {
+  async function handlePasteFiles(files: File[]) {
     for (const file of Array.from(files)) {
       try {
         const friendlyName =
@@ -745,6 +747,7 @@
               {userKinds}
               mode="description"
               onPasteFiles={handlePasteFiles}
+              onPastePaths={handleDroppedPaths}
               placeholder="Detailed acceptance criteria, notes, or context. Paste images directly with Cmd/Ctrl+V."
             />
           </div>
@@ -798,11 +801,12 @@
               class={`dropzone ${isDragging ? "dragging" : ""}`}
               role="region"
               aria-label="Drop or paste files to attach to this new task"
-              onpaste={(e) => {
-                if (e.clipboardData?.files?.length) {
-                  void handlePasteFiles(e.clipboardData.files);
-                }
-              }}
+              onpaste={(e) =>
+                handleClipboardPaste(e, {
+                  onFiles: handlePasteFiles,
+                  onPaths: handleDroppedPaths,
+                  readNativeImage: readNativeClipboardImage,
+                })}
             >
               <div
                 class="form-grid"

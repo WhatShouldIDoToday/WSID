@@ -925,6 +925,47 @@ fn save_clipboard_bytes_for_draft(base64_data: String, suggested_name: Option<St
     Ok(dest.to_string_lossy().to_string())
 }
 
+/// Reads an image from the system clipboard as a `data:image/png;base64,` URL.
+///
+/// WebKitGTK often exposes nothing through `ClipboardEvent` for screenshots, and
+/// GNOME Mutter lacks `wlr-data-control`, so generic clipboard crates cannot see
+/// the Wayland clipboard. GTK's own clipboard works for both X11 and Wayland, but
+/// must be touched from the main thread. Returns `None` when no image is present
+/// or on platforms without a native implementation.
+#[tauri::command]
+async fn read_clipboard_image_native(app: AppHandle) -> Result<Option<String>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(read_gtk_clipboard_png());
+        })
+        .map_err(|e| e.to_string())?;
+        let png = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(5)))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("clipboard read timed out: {e}"))??;
+        Ok(png.map(|bytes| format!("data:image/png;base64,{}", base64_encode(&bytes))))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_gtk_clipboard_png() -> Result<Option<Vec<u8>>, String> {
+    let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+    let Some(pixbuf) = clipboard.wait_for_image() else {
+        return Ok(None);
+    };
+    pixbuf
+        .save_to_bufferv("png", &[])
+        .map(Some)
+        .map_err(|e| format!("failed to encode clipboard image: {e}"))
+}
+
 #[tauri::command]
 fn edit_attachment_alt_description(
     state: State<'_, SharedGuiState>,
@@ -1260,6 +1301,7 @@ pub fn run() {
             attach_file_from_disk,
             attach_clipboard_bytes,
             save_clipboard_bytes_for_draft,
+            read_clipboard_image_native,
             edit_attachment_alt_description,
             delete_attachment,
             open_attachment_native,

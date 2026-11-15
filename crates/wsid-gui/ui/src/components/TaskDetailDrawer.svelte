@@ -52,8 +52,10 @@
     openExternalUrl,
     parseCommentMentions,
     tokenizeCommentBody,
+    readNativeClipboardImage,
   } from "../lib/ipc";
   import { subscribeDropzone } from "../lib/filedrop";
+  import { handleClipboardPaste } from "../lib/clipboard";
   import UserRefInput from "./UserRefInput.svelte";
 
   interface DraftCommentAttachment {
@@ -790,7 +792,24 @@
     stageCommentAttachmentPath(path);
   }
 
-  async function handleCommentPasteFiles(files: FileList) {
+  function handleCommentPastePaths(paths: string[]) {
+    for (const path of paths) {
+      const fileName = basenameOfPath(path);
+      pendingCommentAttachments = [
+        ...pendingCommentAttachments,
+        {
+          id: `${Date.now()}-${Math.random()}`,
+          path,
+          suggestedName: fileName,
+          description: pendingCommentDesc.trim() || null,
+        },
+      ];
+      announce(`Added file ${fileName} to pending comment`);
+    }
+    pendingCommentDesc = "";
+  }
+
+  async function handleCommentPasteFiles(files: File[]) {
     const items = files;
     if (items.length === 0) return;
     for (const file of Array.from(items)) {
@@ -1425,11 +1444,12 @@
                     style="margin-top: 0.75rem;"
                     role="region"
                     aria-label="Attach files to task by drag-and-drop, clipboard paste, or file picker"
-                    onpaste={(e) => {
-                      if (e.clipboardData?.files?.length) {
-                        void handleTaskPasteFiles(e.clipboardData.files);
-                      }
-                    }}
+                    onpaste={(e) =>
+                      handleClipboardPaste(e, {
+                        onFiles: handleTaskPasteFiles,
+                        onPaths: handleTaskDropPaths,
+                        readNativeImage: readNativeClipboardImage,
+                      })}
                   >
                     <div
                       class="form-grid"
@@ -1807,6 +1827,7 @@
                     {userKinds}
                     mode="comment"
                     onPasteFiles={handleCommentPasteFiles}
+                    onPastePaths={handleCommentPastePaths}
                     placeholder="Write a comment... Use @user for blocking subtasks, @takenote:user for non-blocking heads-up, or #AB1234 to link tasks. Paste images directly with Cmd/Ctrl+V."
                   />
 
