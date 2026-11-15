@@ -1,6 +1,8 @@
 [global]
 flavor = "gfm"
 respect-gitignore = true
+# Release Please generates CHANGELOG.md and rewrites it on every release.
+exclude = ["CHANGELOG.md"]
 disable = [
   "MD033", # inline HTML: README.md is built out of banner and badge tags
 ]
