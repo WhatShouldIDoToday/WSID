@@ -234,6 +234,34 @@ mod tests {
     }
 
     #[test]
+    fn based_on_can_be_set_updated_cleared_and_is_validated() {
+        let mut server = test_server();
+        let url = "https://github.com/dmbeta/WSID/issues/15";
+
+        let created = call_tool(&mut server, 1, "create_task", json!({ "title": "From GH", "based_on": url }));
+        assert_eq!(created["task"]["based_on"], url);
+        let id = created["task"]["id"].as_str().unwrap().to_string();
+
+        let kept = call_tool(&mut server, 2, "update_task", json!({ "id": id, "title": "Renamed" }));
+        assert_eq!(kept["based_on"], url);
+
+        let moved = call_tool(&mut server, 3, "update_task", json!({ "id": id, "based_on": "http://example.com/a" }));
+        assert_eq!(moved["based_on"], "http://example.com/a");
+
+        let cleared = call_tool(&mut server, 4, "update_task", json!({ "id": id, "based_on": null }));
+        assert!(cleared["based_on"].is_null());
+
+        let bad = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(5)),
+            method: "tools/call".to_string(),
+            params: Some(json!({ "name": "update_task", "arguments": { "id": id, "based_on": "ftp://example.com" } })),
+        };
+        let res = server.handle_request(bad).unwrap().result.unwrap();
+        assert_eq!(res["isError"], true);
+    }
+
+    #[test]
     fn update_task_clears_nullable_dates_and_link_tasks_rejects_cycles() {
         let mut server = test_server();
 

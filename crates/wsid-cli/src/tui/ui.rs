@@ -1246,6 +1246,9 @@ fn render_detail_modal(frame: &mut Frame, area: Rect, app: &mut TuiApp) {
             .with_timezone(&chrono::Local)
             .format("%Y-%m-%d %H:%M")
     )));
+    if let Some(url) = &t.based_on {
+        lines.push(Line::from(format!("Based on: {url}")));
+    }
 
     let est = t
         .time_estimate_minutes

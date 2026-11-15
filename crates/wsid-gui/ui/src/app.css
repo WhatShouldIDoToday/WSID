@@ -2696,6 +2696,25 @@ input[type="text"].tag-compact-input {
   white-space: nowrap;
 }
 
+/* External link a task is based on; long URLs wrap instead of widening the sidebar. */
+.based-on-link {
+  color: var(--accent, LinkText);
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  font-size: 0.85rem;
+}
+
+.based-on-link:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  .based-on-link {
+    color: LinkText;
+  }
+}
+
 /* Rich text rendering shared by descriptions and comments. */
 .rich-text {
   white-space: pre-wrap;

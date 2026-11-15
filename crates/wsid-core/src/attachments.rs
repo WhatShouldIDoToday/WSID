@@ -288,6 +288,34 @@ pub fn open_file_in_os(path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+/// Opens an `http`/`https` URL in the operating system's default browser.
+///
+/// The URL is re-validated with [`crate::tasks::normalize_based_on`] so no other scheme (or local
+/// path) can be launched. Windows uses `rundll32` rather than `cmd /C start` so `&` and other shell
+/// metacharacters in the URL are never interpreted.
+pub fn open_url_in_os(url: &str) -> Result<()> {
+    let Some(url) = crate::tasks::normalize_based_on(url)? else {
+        return Err(WsidError::Validation("a URL is required".to_string()));
+    };
+
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg(&url).status()?;
+
+    #[cfg(target_os = "windows")]
+    let status = Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler"])
+        .arg(&url)
+        .status()?;
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let status = Command::new("xdg-open").arg(&url).status()?;
+
+    if !status.success() {
+        return Err(WsidError::Validation(format!("native OS URL opener exited with non-zero status ({status}) for '{url}'")));
+    }
+    Ok(())
+}
+
 pub(crate) fn load_task_description_attachments(conn: &Connection, task_id: &str) -> Result<Vec<TaskAttachment>> {
     let mut stmt = conn.prepare_cached(
         "SELECT id, task_id, note_id, file_path, file_name, media_type, description, is_managed, created_at

@@ -374,6 +374,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                         "items": { "type": "string" }
                     },
                     "project": { "type": "string", "description": "Project name (letters, digits, '_' or '-'). Defaults to 'default'." },
+                    "based_on": { "type": "string", "description": "Optional http(s) URL of the external item (e.g. a GitHub issue) this task is based on." },
                     "reporter": { "type": "string" },
                     "assignee": { "type": "string" },
                     "evaluator": { "type": "string" },
@@ -428,6 +429,7 @@ pub fn list_mcp_tools() -> Vec<ToolDefinition> {
                         "items": { "type": "string" }
                     },
                     "project": { "type": "string", "description": "Move the task into this project." },
+                    "based_on": { "type": ["string", "null"], "description": "Set the http(s) URL this task is based on; null or an empty string clears it." },
                     "reporter": { "type": "string" },
                     "assignee": { "type": "string" },
                     "evaluator": { "type": "string" }

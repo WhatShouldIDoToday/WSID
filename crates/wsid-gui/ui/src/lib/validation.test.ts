@@ -3,6 +3,7 @@ import vectors from "../../../../../test-fixtures/validation.json";
 import {
   isPastDeadline,
   parseDurationInput,
+  validateBasedOn,
   validateDeadlineOrder,
   validateTag,
   userKindMismatch,
@@ -28,6 +29,14 @@ describe("shared validation vectors", () => {
   for (const c of vectors.tags) {
     test(`tag ${JSON.stringify(c.input)}`, () => {
       expect(validateTag(c.input).normalized).toBe(c.normalized);
+    });
+  }
+
+  for (const c of vectors.based_on) {
+    test(`based_on ${JSON.stringify(c.input)}`, () => {
+      const result = validateBasedOn(c.input);
+      expect(result.error === null).toBe(c.valid);
+      if (c.valid) expect(result.normalized).toBe(c.normalized);
     });
   }
 

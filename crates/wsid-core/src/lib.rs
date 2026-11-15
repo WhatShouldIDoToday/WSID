@@ -20,7 +20,7 @@ pub use about::{
 };
 pub use attachments::{
     attach_existing_file, attach_existing_file_with_dir, get_attachment, infer_media_type, list_task_attachments, open_file_in_os,
-    remove_attachment, remove_attachment_with_dir, save_clipboard_attachment, save_clipboard_attachment_with_dir,
+    open_url_in_os, remove_attachment, remove_attachment_with_dir, save_clipboard_attachment, save_clipboard_attachment_with_dir,
     update_attachment_description,
 };
 pub use bulk::{BulkEditOutcome, BulkTaskFailure, BulkTaskPatch, bulk_delete_tasks, bulk_update_tasks};
@@ -61,8 +61,8 @@ pub use search::{SearchHit, SearchQuery, query_fts_trigram_ids, search_tasks};
 pub use tasks::{
     ALL_PROJECTS, ALL_USERS, DEFAULT_PROJECT, DEFAULT_USER_KIND, UserRef, create_task, create_task_with_notices, delete_task,
     delete_task_with_attachments_dir, delete_user_from_db, format_deadline_date, format_deadline_display, format_duration_minutes,
-    get_task, list_known_projects, list_known_users, list_tasks, list_user_kinds, local_tz_abbr, normalize_project, normalize_tag,
-    normalize_tags, normalize_user, normalize_user_kind, parse_deadline_datetime, parse_deadline_naive_date, parse_duration_minutes,
-    parse_user_ref, preview_user_deletion, register_user, set_user_kind, update_task, update_task_with_notices, validate_dates,
-    validate_difficulty, validate_importance, validate_manual_priority, validate_not_past, validate_time_estimate,
+    get_task, list_known_projects, list_known_users, list_tasks, list_user_kinds, local_tz_abbr, normalize_based_on, normalize_project,
+    normalize_tag, normalize_tags, normalize_user, normalize_user_kind, parse_deadline_datetime, parse_deadline_naive_date,
+    parse_duration_minutes, parse_user_ref, preview_user_deletion, register_user, set_user_kind, update_task, update_task_with_notices,
+    validate_dates, validate_difficulty, validate_importance, validate_manual_priority, validate_not_past, validate_time_estimate,
 };
