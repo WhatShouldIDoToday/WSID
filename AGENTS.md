@@ -69,6 +69,8 @@ managed, in [`mise.toml`](mise.toml):
 - Run `mise run pc` before pushing. CI (`.github/workflows/ci.yml`) runs the
   same checks plus `cargo deny`, `typos`, and tests on Linux, macOS, and
   Windows. The `ci-gate` job summarizes them and is the check to require.
+- PRs into `dev` merge through the merge queue (`gh pr merge --squash --auto`).
+  The queue re-runs CI with the PR merged on top of everything queued ahead of it.
 - Add the `package-check` label to a PR to build unsigned installers for every
   platform. PRs into `main` always build them.
 - Never edit `Cargo.lock` versions or release versions by hand. Release Please
