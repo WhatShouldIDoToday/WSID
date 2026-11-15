@@ -5,12 +5,15 @@ name: PR checks
 on:
   pull_request_target:
     types: [opened, reopened, edited, synchronize]
+  # `pr-title` is a required check on `dev`, so it must also report on merge-queue runs.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-checks-${{ github.event.pull_request.number }}
+  group: pr-checks-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -20,9 +23,13 @@ jobs:
     permissions:
       pull-requests: read
     steps:
-      - uses: amannn/action-semantic-pull-request@v6
+      - if: github.event_name == 'pull_request_target'
+        uses: amannn/action-semantic-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # A queued PR had its title checked before it was queued, so the merge-queue run only reports success.
+      - if: github.event_name == 'merge_group'
+        run: echo "PR titles were checked before the PRs entered the merge queue."
 
   source-branch:
     name: source-branch
