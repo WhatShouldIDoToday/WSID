@@ -7,6 +7,10 @@ on:
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [dev, main]
+  # The `dev` merge queue runs CI on each queued PR merged with everything ahead of it.
+  # The package-* jobs are skipped here because they only run on `pull_request`.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
