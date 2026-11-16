@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/WhatShouldIDoToday/WSID/compare/v0.2.1...v0.2.2) (2026-11-16)
+
+
+### Bug Fixes
+
+* fix Homebrew ([a98996d](https://github.com/WhatShouldIDoToday/WSID/commit/a98996db6ec5a7de128106a62cf4a75d95afa5f8))
+* **packaging:** add depends_on :macos to Homebrew casks ([#48](https://github.com/WhatShouldIDoToday/WSID/issues/48)) ([0316c7e](https://github.com/WhatShouldIDoToday/WSID/commit/0316c7ed04f6e1051bc8b7e1fa37560505f7b056))
+
 ## [0.2.1](https://github.com/WhatShouldIDoToday/WSID/compare/v0.2.0...v0.2.1) (2026-11-15)
 
 
