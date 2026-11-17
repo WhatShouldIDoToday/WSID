@@ -63,10 +63,15 @@ fi
 
 mkdir -p "$out/Formula" "$out/Casks"
 
+# brew audit treats a cask URL as unversioned unless it interpolates #{version}.
+cask_tag="${tag//"$version"/'#{version}'}"
+cask_dmg="${dmg//"$version"/'#{version}'}"
+
 render() {
   local tmpl="$1" dest="$2" target var
   cp "$templates/$tmpl" "$dest"
-  sed -i.bak -e "s|@@VERSION@@|$version|g" -e "s|@@TAG@@|$tag|g" -e "s|@@DMG@@|$dmg|g" "$dest"
+  sed -i.bak -e "s|@@VERSION@@|$version|g" -e "s|@@TAG@@|$tag|g" -e "s|@@DMG@@|$dmg|g" \
+    -e "s|@@CASK_TAG@@|$cask_tag|g" -e "s|@@CASK_DMG@@|$cask_dmg|g" "$dest"
   rm -f "$dest.bak"
   for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
     if grep -q "@@SHA_$(echo "$target" | tr 'a-z-' 'A-Z_')@@" "$dest"; then
